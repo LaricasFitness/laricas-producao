@@ -17,6 +17,45 @@ function periodoAnterior(ini, fim) {
   return [novaIni.toISOString().slice(0,10), novaFim.toISOString().slice(0,10)]
 }
 
+function periodoMesAnterior(ini, fim) {
+  const a = new Date(ini + 'T00:00:00')
+  const b = new Date(fim + 'T00:00:00')
+  const novaIni = new Date(a); novaIni.setMonth(a.getMonth() - 1)
+  const novaFim = new Date(b); novaFim.setMonth(b.getMonth() - 1)
+  return [novaIni.toISOString().slice(0,10), novaFim.toISOString().slice(0,10)]
+}
+
+function periodoAnoAnterior(ini, fim) {
+  const a = new Date(ini + 'T00:00:00')
+  const b = new Date(fim + 'T00:00:00')
+  const novaIni = new Date(a); novaIni.setFullYear(a.getFullYear() - 1)
+  const novaFim = new Date(b); novaFim.setFullYear(b.getFullYear() - 1)
+  return [novaIni.toISOString().slice(0,10), novaFim.toISOString().slice(0,10)]
+}
+
+function resolveCompPeriod(mode, ini, fim, iniComp, fimComp) {
+  if (mode === 'anterior') return periodoAnterior(ini, fim)
+  if (mode === 'mes_ant')  return periodoMesAnterior(ini, fim)
+  if (mode === 'ano_ant')  return periodoAnoAnterior(ini, fim)
+  return [iniComp, fimComp]
+}
+
+function compModeLabel(mode, ini, fim, iniComp, fimComp) {
+  const [a, b] = resolveCompPeriod(mode, ini, fim, iniComp, fimComp)
+  if (!a || !b) return ''
+  const fmt2 = d => new Date(d+'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  return `${fmt2(a)} a ${fmt2(b)}`
+}
+
+function getTrimestres(ano) {
+  return [
+    { label: `Q1 ${ano}`, ini: `${ano}-01-01`, fim: `${ano}-03-31` },
+    { label: `Q2 ${ano}`, ini: `${ano}-04-01`, fim: `${ano}-06-30` },
+    { label: `Q3 ${ano}`, ini: `${ano}-07-01`, fim: `${ano}-09-30` },
+    { label: `Q4 ${ano}`, ini: `${ano}-10-01`, fim: `${ano}-12-31` },
+  ]
+}
+
 function variacao(atual, anterior) {
   if (!anterior) return null
   return ((atual - anterior) / anterior) * 100
@@ -41,28 +80,29 @@ function KPI({ label, value, sub, prev, unit = '' }) {
   )
 }
 
-function BarChart({ dados, cor = 'var(--purple)', label = 'total', height = 140 }) {
+function BarChart({ dados, cor = 'var(--purple)', label = 'total', height = 180 }) {
   if (!dados?.length) return <div className="empty"><div className="empty-sub">Sem dados no período</div></div>
   const max = Math.max(...dados.map(d => d[label] || 0), 1)
+  const barHeight = height - 44 // reserva 20px topo (label valor) + 24px base (label semana)
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height, paddingBottom: 20, overflowX: 'auto' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height, paddingBottom: 24, paddingTop: 20, overflowX: 'auto' }}>
       {dados.map((d, i) => (
-        <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flex: '0 0 auto', minWidth: 28 }}>
-          <span style={{ fontSize: 9, color: 'var(--gray-400)', fontWeight: 700 }}>
+        <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, flex: '0 0 auto', minWidth: 32 }}>
+          <span style={{ fontSize: 9, color: 'var(--gray-600)', fontWeight: 700, marginBottom: 2 }}>
             {d[label] > 0 ? fmt(d[label]) : ''}
           </span>
           <div
-            title={`${d.label || d.semana || d.dia}: ${fmt(d[label])}`}
+            title={`Sem ${i + 1}: ${fmt(d[label])}`}
             style={{
-              width: 20, minHeight: 3, borderRadius: '3px 3px 0 0',
+              width: 22, minHeight: 3, borderRadius: '3px 3px 0 0',
               background: cor, opacity: 0.85,
-              height: `${Math.max(3, ((d[label] || 0) / max) * (height - 24))}px`,
+              height: `${Math.max(3, ((d[label] || 0) / max) * barHeight)}px`,
               transition: 'height .3s',
               cursor: 'default',
             }}
           />
-          <span style={{ fontSize: 9, color: 'var(--gray-400)', transform: 'rotate(-35deg)', transformOrigin: 'top left', whiteSpace: 'nowrap', marginTop: 4 }}>
-            {d.label || fmtDate(d.semana || d.dia)}
+          <span style={{ fontSize: 9, color: 'var(--gray-500)', fontWeight: 600, marginTop: 4 }}>
+            {`Sem ${i + 1}`}
           </span>
         </div>
       ))}
@@ -129,10 +169,13 @@ export default function Analise() {
   const [catFiltro, setCatFiltro] = useState('todas')
   const [respFiltro, setRespFiltro] = useState('todos')
 
-  // Período de comparação (padrão: automático = período anterior igual)
-  const [compAuto, setCompAuto] = useState(true)
+  // Período de comparação
+  const [compMode, setCompMode] = useState('anterior') // 'anterior' | 'mes_ant' | 'ano_ant' | 'custom'
   const [iniComp, setIniComp] = useState('')
   const [fimComp, setFimComp] = useState('')
+
+  // Análise trimestral
+  const [trimestres, setTrimestres] = useState([])
 
   const [loading, setLoading] = useState(false)
   const [embs, setEmbs] = useState([])
@@ -189,7 +232,7 @@ export default function Analise() {
       const mediaDia = diasUnicos > 0 ? Math.round(total / diasUnicos) : 0
 
       // período de comparação
-      const [iniAnt, fimAnt] = compAuto ? periodoAnterior(ini, fim) : [iniComp, fimComp]
+      const [iniAnt, fimAnt] = resolveCompPeriod(compMode, ini, fim, iniComp, fimComp)
       let qAnt = supabase.from('producao_diaria').select('quantidade, embalagem_id')
         .gte('data_producao', iniAnt).lte('data_producao', fimAnt)
       if (embIds) qAnt = qAnt.in('embalagem_id', embIds)
@@ -274,9 +317,23 @@ export default function Analise() {
         .order('data_producao', { ascending: false })
       setDesperdicio(desp || [])
 
+      // trimestres — carrega os 2 anos com dados
+      const anoAtual = new Date().getFullYear()
+      const anoAnterior = anoAtual - 1
+      const todosTrims = [...getTrimestres(anoAnterior), ...getTrimestres(anoAtual)]
+      const trimsComDados = await Promise.all(todosTrims.map(async t => {
+        const { data: d } = await supabase.from('producao_diaria')
+          .select('quantidade')
+          .gte('data_producao', t.ini)
+          .lte('data_producao', t.fim)
+        const total = (d || []).reduce((s, r) => s + r.quantidade, 0)
+        return { ...t, total }
+      }))
+      setTrimestres(trimsComDados)
+
     } catch(e) { console.error(e) }
     setLoading(false)
-  }, [ini, fim, catFiltro, respFiltro, embs, compAuto, iniComp, fimComp])
+  }, [ini, fim, catFiltro, respFiltro, embs, compMode, iniComp, fimComp])
 
   useEffect(() => { if (embs.length) carregar() }, [carregar])
 
@@ -376,38 +433,32 @@ export default function Analise() {
 
         {/* Período de comparação */}
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--gray-200)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)' }}>COMPARAR COM:</span>
-            <button
-              className={`btn btn-xs ${compAuto ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setCompAuto(true)}
-            >
-              Período anterior automático
-            </button>
-            <button
-              className={`btn btn-xs ${!compAuto ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setCompAuto(false)}
-            >
-              Período personalizado
-            </button>
-            {!compAuto && (
+            {[
+              { id: 'anterior', label: 'Período anterior' },
+              { id: 'mes_ant',  label: 'Mesmo período mês anterior' },
+              { id: 'ano_ant',  label: 'Mesmo período ano anterior' },
+              { id: 'custom',   label: 'Personalizado' },
+            ].map(opt => (
+              <button key={opt.id}
+                className={`btn btn-xs ${compMode === opt.id ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setCompMode(opt.id)}>
+                {opt.label}
+              </button>
+            ))}
+            {compMode === 'custom' && (
               <>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12 }}
-                    value={iniComp} onChange={e => setIniComp(e.target.value)}
-                    placeholder="De" />
-                </div>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={iniComp} onChange={e => setIniComp(e.target.value)} />
                 <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>até</span>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12 }}
-                    value={fimComp} onChange={e => setFimComp(e.target.value)}
-                    placeholder="Até" />
-                </div>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={fimComp} onChange={e => setFimComp(e.target.value)} />
               </>
             )}
-            {compAuto && (
+            {compMode !== 'custom' && (
               <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>
-                {(() => { const [a, b] = periodoAnterior(ini, fim); return `${new Date(a+'T12:00:00').toLocaleDateString('pt-BR')} a ${new Date(b+'T12:00:00').toLocaleDateString('pt-BR')}` })()}
+                → {compModeLabel(compMode, ini, fim, iniComp, fimComp)}
               </span>
             )}
           </div>
@@ -428,7 +479,9 @@ export default function Analise() {
               <div className="kpi-value" style={{ fontSize: 26, color: varTotal === null ? 'var(--gray-400)' : varTotal >= 0 ? 'var(--ok)' : 'var(--danger)' }}>
                 {varTotal === null ? '—' : `${varTotal >= 0 ? '+' : ''}${varTotal.toFixed(1)}%`}
               </div>
-              <div className="kpi-detail">{compAuto ? 'período anterior automático' : 'período personalizado'}</div>
+              <div className="kpi-detail">
+                {{ anterior: 'período anterior', mes_ant: 'mesmo período mês anterior', ano_ant: 'mesmo período ano anterior', custom: 'período personalizado' }[compMode]}
+              </div>
             </div>
           </div>
 
@@ -508,6 +561,57 @@ export default function Analise() {
               </div>
             )}
           </div>
+
+          {/* Análise Trimestral */}
+          {trimestres.length > 0 && (
+            <div className="card card-pad">
+              <div className="card-title">📆 Crescimento trimestral</div>
+              <div style={{ overflowX: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Trimestre</th>
+                      <th>Total produzido</th>
+                      <th>Vs trimestre anterior</th>
+                      <th>Vs mesmo trimestre ano anterior</th>
+                      <th>Gráfico</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trimestres.map((t, i) => {
+                      const anterior = trimestres[i - 1]
+                      const mesmoTrimestreAnoAnt = trimestres[i - 4]
+                      const vAnt = anterior?.total > 0 ? ((t.total - anterior.total) / anterior.total) * 100 : null
+                      const vAno = mesmoTrimestreAnoAnt?.total > 0 ? ((t.total - mesmoTrimestreAnoAnt.total) / mesmoTrimestreAnoAnt.total) * 100 : null
+                      const maxTotal = Math.max(...trimestres.map(x => x.total), 1)
+                      const corV = v => v === null ? 'var(--gray-400)' : v > 0 ? 'var(--ok)' : 'var(--danger)'
+                      const fmtV = v => v === null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
+                      const isCurrent = new Date() >= new Date(t.ini) && new Date() <= new Date(t.fim + 'T23:59:59')
+                      return (
+                        <tr key={t.label} style={{ background: isCurrent ? 'var(--purple-ghost)' : undefined }}>
+                          <td>
+                            <span style={{ fontWeight: 800, color: isCurrent ? 'var(--purple)' : 'var(--gray-800)' }}>{t.label}</span>
+                            {isCurrent && <span className="pill purple" style={{ marginLeft: 8, fontSize: 10 }}>atual</span>}
+                          </td>
+                          <td style={{ fontWeight: 700 }}>{t.total > 0 ? fmt(t.total) + ' un' : <span className="text-muted">—</span>}</td>
+                          <td style={{ fontWeight: 700, color: corV(vAnt) }}>{fmtV(vAnt)}</td>
+                          <td style={{ fontWeight: 700, color: corV(vAno) }}>{fmtV(vAno)}</td>
+                          <td style={{ minWidth: 120 }}>
+                            <div style={{ height: 12, background: 'var(--gray-100)', borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', borderRadius: 3, background: isCurrent ? 'var(--purple)' : 'var(--purple-light)', width: `${(t.total / maxTotal) * 100}%`, transition: 'width .4s' }} />
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 11, color: 'var(--gray-400)' }}>
+                Q1 = Jan–Mar · Q2 = Abr–Jun · Q3 = Jul–Set · Q4 = Out–Dez
+              </div>
+            </div>
+          )}
 
           {/* Desperdício */}
           <div className="card card-pad">
