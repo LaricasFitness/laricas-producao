@@ -129,6 +129,11 @@ export default function Analise() {
   const [catFiltro, setCatFiltro] = useState('todas')
   const [respFiltro, setRespFiltro] = useState('todos')
 
+  // Período de comparação (padrão: automático = período anterior igual)
+  const [compAuto, setCompAuto] = useState(true)
+  const [iniComp, setIniComp] = useState('')
+  const [fimComp, setFimComp] = useState('')
+
   const [loading, setLoading] = useState(false)
   const [embs, setEmbs] = useState([])
   const [cats, setCats] = useState([])
@@ -183,9 +188,9 @@ export default function Analise() {
       const diasUnicos = new Set(rows.map(r => r.data_producao)).size
       const mediaDia = diasUnicos > 0 ? Math.round(total / diasUnicos) : 0
 
-      // período anterior
-      const [iniAnt, fimAnt] = periodoAnterior(ini, fim)
-      let qAnt = supabase.from('producao_diaria').select('quantidade')
+      // período de comparação
+      const [iniAnt, fimAnt] = compAuto ? periodoAnterior(ini, fim) : [iniComp, fimComp]
+      let qAnt = supabase.from('producao_diaria').select('quantidade, embalagem_id')
         .gte('data_producao', iniAnt).lte('data_producao', fimAnt)
       if (embIds) qAnt = qAnt.in('embalagem_id', embIds)
       if (respFiltro !== 'todos') qAnt = qAnt.eq('registrado_por', respFiltro)
@@ -271,7 +276,7 @@ export default function Analise() {
 
     } catch(e) { console.error(e) }
     setLoading(false)
-  }, [ini, fim, catFiltro, respFiltro, embs])
+  }, [ini, fim, catFiltro, respFiltro, embs, compAuto, iniComp, fimComp])
 
   useEffect(() => { if (embs.length) carregar() }, [carregar])
 
@@ -368,6 +373,45 @@ export default function Analise() {
             <button key={a.label} className="btn btn-ghost btn-xs" onClick={a.fn}>{a.label}</button>
           ))}
         </div>
+
+        {/* Período de comparação */}
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--gray-200)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)' }}>COMPARAR COM:</span>
+            <button
+              className={`btn btn-xs ${compAuto ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setCompAuto(true)}
+            >
+              Período anterior automático
+            </button>
+            <button
+              className={`btn btn-xs ${!compAuto ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setCompAuto(false)}
+            >
+              Período personalizado
+            </button>
+            {!compAuto && (
+              <>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12 }}
+                    value={iniComp} onChange={e => setIniComp(e.target.value)}
+                    placeholder="De" />
+                </div>
+                <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>até</span>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12 }}
+                    value={fimComp} onChange={e => setFimComp(e.target.value)}
+                    placeholder="Até" />
+                </div>
+              </>
+            )}
+            {compAuto && (
+              <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>
+                {(() => { const [a, b] = periodoAnterior(ini, fim); return `${new Date(a+'T12:00:00').toLocaleDateString('pt-BR')} a ${new Date(b+'T12:00:00').toLocaleDateString('pt-BR')}` })()}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       {loading ? (
@@ -376,15 +420,15 @@ export default function Analise() {
         <>
           {/* KPIs */}
           <div className="kpi-row">
-            <KPI label="📦 Total produzido" value={kpis.total} sub="vs período anterior" prev={kpis.totalAnterior} unit=" un" />
+            <KPI label="📦 Total produzido" value={kpis.total} sub="vs período de comparação" prev={kpis.totalAnterior} unit=" un" />
             <KPI label="📅 Dias com produção" value={kpis.dias} sub="no período selecionado" />
             <KPI label="⚡ Média por dia" value={kpis.mediaDia} sub="unidades/dia produtivo" />
             <div className="kpi neutral">
-              <div className="kpi-label">📊 Variação vs anterior</div>
+              <div className="kpi-label">📊 Variação vs comparação</div>
               <div className="kpi-value" style={{ fontSize: 26, color: varTotal === null ? 'var(--gray-400)' : varTotal >= 0 ? 'var(--ok)' : 'var(--danger)' }}>
                 {varTotal === null ? '—' : `${varTotal >= 0 ? '+' : ''}${varTotal.toFixed(1)}%`}
               </div>
-              <div className="kpi-detail">mesmo intervalo anterior</div>
+              <div className="kpi-detail">{compAuto ? 'período anterior automático' : 'período personalizado'}</div>
             </div>
           </div>
 
