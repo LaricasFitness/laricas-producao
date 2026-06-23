@@ -115,22 +115,27 @@ function BarHorizontal({ dados, cor = 'var(--purple)', valueKey = 'total', label
   const max = Math.max(...dados.map(d => d[valueKey] || 0), 1)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {dados.map((d, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 160, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>
-            {d[labelKey]}
+      {dados.map((d, i) => {
+        const tooltip = d.itens?.length
+          ? `${d[labelKey]}: ${fmt(d[valueKey])} un\n\nProdutos:\n${d.itens.map(it => `• ${it.nome}: ${fmt(it.total)} un`).join('\n')}`
+          : `${d[labelKey]}: ${fmt(d[valueKey])} un`
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }} title={tooltip}>
+            <div style={{ width: 160, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 0 }}>
+              {d[labelKey]}
+            </div>
+            <div style={{ flex: 1, height: 18, background: 'var(--gray-100)', borderRadius: 3, overflow: 'hidden', cursor: 'help' }}>
+              <div style={{ height: '100%', borderRadius: 3, background: cor, width: `${((d[valueKey] || 0) / max) * 100}%`, transition: 'width .4s' }} />
+            </div>
+            <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontWeight: 700, color: 'var(--gray-800)' }}>
+              {fmt(d[valueKey])}
+            </div>
+            {d.pct !== undefined && (
+              <div style={{ width: 36, fontSize: 11, color: 'var(--gray-400)' }}>{d.pct.toFixed(0)}%</div>
+            )}
           </div>
-          <div style={{ flex: 1, height: 18, background: 'var(--gray-100)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ height: '100%', borderRadius: 3, background: cor, width: `${((d[valueKey] || 0) / max) * 100}%`, transition: 'width .4s' }} />
-          </div>
-          <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontWeight: 700, color: 'var(--gray-800)' }}>
-            {fmt(d[valueKey])}
-          </div>
-          {d.pct !== undefined && (
-            <div style={{ width: 36, fontSize: 11, color: 'var(--gray-400)' }}>{d.pct.toFixed(0)}%</div>
-          )}
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -265,15 +270,23 @@ export default function Analise() {
       const rankTotal = rank.reduce((s,r) => s + r.total, 0)
       setRanking(rank.slice(0,15).map(r => ({ ...r, pct: rankTotal > 0 ? (r.total/rankTotal)*100 : 0 })))
 
-      // por categoria
+      // por categoria — com detalhamento de produtos para tooltip
       const catMap = {}
+      const catItensMap = {} // cat -> { skuNome: total }
       for (const r of rows) {
         const emb = embs.find(e => e.id === r.embalagem_id)
-        const cat = emb?.categoria || 'Outros'
+        const cat = emb?.categoria || `Outros (${emb?.codigo || 'sem categoria'})`
         catMap[cat] = (catMap[cat] || 0) + r.quantidade
+        if (!catItensMap[cat]) catItensMap[cat] = {}
+        const nome = emb?.nome || emb?.codigo || '?'
+        catItensMap[cat][nome] = (catItensMap[cat][nome] || 0) + r.quantidade
       }
       const catTotal = Object.values(catMap).reduce((s,v) => s + v, 0)
-      setPorCategoria(Object.entries(catMap).sort(([,a],[,b]) => b-a).map(([nome, total]) => ({ nome, total, pct: catTotal > 0 ? (total/catTotal)*100 : 0 })))
+      setPorCategoria(Object.entries(catMap).sort(([,a],[,b]) => b-a).map(([nome, total]) => ({
+        nome, total,
+        pct: catTotal > 0 ? (total/catTotal)*100 : 0,
+        itens: Object.entries(catItensMap[nome] || {}).sort(([,a],[,b]) => b-a).map(([n, t]) => ({ nome: n, total: t }))
+      })))
 
       // por responsável
       const respMap = {}
