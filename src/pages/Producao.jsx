@@ -302,7 +302,14 @@ export default function Producao() {
         </div>
         <div className="form-group">
           <label className="form-label">Quem está preenchendo? *</label>
-          <input className="form-input" placeholder="Seu nome completo" value={nome} onChange={e => setNome(e.target.value)} autoFocus />
+          <select className="form-input" value={nome} onChange={e => setNome(e.target.value)}>
+            <option value="">Selecione seu nome...</option>
+            <option>Virgínia</option>
+            <option>Gabriel</option>
+            <option>Larissa</option>
+            <option>Teciane</option>
+            <option>Marinice</option>
+          </select>
         </div>
       </div>
 
