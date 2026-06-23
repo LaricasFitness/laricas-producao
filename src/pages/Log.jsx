@@ -73,7 +73,7 @@ export default function Log() {
   }
 
   const grid = getMesGrid(ano, mes)
-  const diasUteis = grid.filter(d => d && d.getDay() !== 0) // exclui domingo
+  const diasUteis = grid.filter(d => d && d.getDay() !== 0 && d.getDay() !== 6) // exclui sábado e domingo
   const diasComDados = diasUteis.filter(d => dados[d.toISOString().slice(0, 10)])
   const diasSemDados = diasUteis.filter(d => {
     const str = d.toISOString().slice(0, 10)
@@ -117,7 +117,7 @@ export default function Log() {
           <div style={{ display: 'flex', gap: 20, padding: '12px 20px', borderBottom: '1px solid var(--gray-100)', flexWrap: 'wrap' }}>
             <div><span style={{ fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}>DIAS COM REGISTRO</span><br/>
               <span style={{ fontWeight: 800, fontSize: 18, color: 'var(--ok)' }}>{diasComDados.length}</span>
-              <span style={{ color: 'var(--gray-400)', fontSize: 12 }}> / {diasUteis.filter(d => d.toISOString().slice(0,10) <= hoje.toISOString().slice(0,10)).length} dias úteis</span>
+              <span style={{ color: 'var(--gray-400)', fontSize: 12 }}> / {diasUteis.filter(d => d.toISOString().slice(0,10) <= hoje.toISOString().slice(0,10)).length} dias úteis (seg–sex)</span>
             </div>
             <div><span style={{ fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}>DIAS SEM REGISTRO</span><br/>
               <span style={{ fontWeight: 800, fontSize: 18, color: diasSemDados.length > 0 ? 'var(--danger)' : 'var(--ok)' }}>{diasSemDados.length}</span>
@@ -148,10 +148,10 @@ export default function Log() {
                   const isFuture = str > hoje.toISOString().slice(0, 10)
                   const hasData = !!dados[str]
                   const isSelected = diaSel === str
-                  const isSunday = d.getDay() === 0
+                  const isWeekend = d.getDay() === 0 || d.getDay() === 6
 
                   let cls = 'cal-day '
-                  if (isFuture || isSunday) cls += 'future'
+                  if (isFuture || isWeekend) cls += 'future'
                   else if (hasData) cls += 'has-data'
                   else cls += 'no-data'
 
@@ -168,7 +168,7 @@ export default function Log() {
                         outlineOffset: 1,
                       }}
                       onClick={() => hasData && !isFuture && verDetalhe(str)}
-                      title={hasData ? `${fmt(total)} un — ${resp.join(', ')}` : isFuture ? 'Futuro' : isSunday ? 'Domingo' : 'Sem registro'}
+                      title={hasData ? `${fmt(total)} un — ${resp.join(', ')}` : isFuture ? 'Futuro' : isWeekend ? 'Fim de semana' : 'Sem registro'}
                     >
                       <span>{d.getDate()}</span>
                       {hasData && <span style={{ fontSize: 8, opacity: .8 }}>{fmt(total)}</span>}
@@ -183,7 +183,7 @@ export default function Log() {
               {[
                 { cls: 'has-data', label: 'Com registro' },
                 { cls: 'no-data', label: 'Sem registro' },
-                { cls: 'future', label: 'Futuro / Domingo' },
+                { cls: 'future', label: 'Fim de semana / Futuro' },
               ].map(l => (
                 <div key={l.cls} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <div className={`cal-day ${l.cls}`} style={{ width: 16, height: 16, minHeight: 16, fontSize: 0, borderRadius: 4 }} />
