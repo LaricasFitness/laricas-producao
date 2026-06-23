@@ -80,6 +80,59 @@ function KPI({ label, value, sub, prev, unit = '' }) {
   )
 }
 
+function LineChart({ dados, height = 180 }) {
+  if (!dados?.length) return <div className="empty"><div className="empty-sub">Sem dados no período</div></div>
+  const max = Math.max(...dados.map(d => d.total), 1)
+  const w = Math.max(600, dados.length * 28)
+  const h = height - 40
+  const pts = dados.map((d, i) => {
+    const x = 20 + (i / Math.max(dados.length - 1, 1)) * (w - 40)
+    const y = 10 + (1 - d.total / max) * (h - 20)
+    return { x, y, ...d }
+  })
+  const polyline = pts.map(p => `${p.x},${p.y}`).join(' ')
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <svg width={w} height={height} style={{ display: 'block' }}>
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map(pct => {
+          const y = 10 + pct * (h - 20)
+          return (
+            <g key={pct}>
+              <line x1={20} y1={y} x2={w - 20} y2={y} stroke="var(--gray-100)" strokeWidth={1} />
+              <text x={14} y={y + 4} fontSize={9} fill="var(--gray-400)" textAnchor="end">
+                {Math.round(max * (1 - pct)).toLocaleString('pt-BR')}
+              </text>
+            </g>
+          )
+        })}
+        {/* Area fill */}
+        <polygon
+          points={`20,${h - 10} ${polyline} ${w - 20},${h - 10}`}
+          fill="rgba(103,63,124,0.08)"
+        />
+        {/* Line */}
+        <polyline points={polyline} fill="none" stroke="var(--purple)" strokeWidth={2} strokeLinejoin="round" />
+        {/* Points + labels */}
+        {pts.map((p, i) => (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r={3} fill="var(--purple)" />
+            <title>{`${new Date(p.dia+'T12:00:00').toLocaleDateString('pt-BR')}: ${p.total.toLocaleString('pt-BR')} un`}</title>
+            {/* Data label a cada 7 pontos ou no primeiro/último */}
+            {(i === 0 || i === pts.length - 1 || i % 7 === 0) && (
+              <text x={p.x} y={height - 6} fontSize={9} fill="var(--gray-400)" textAnchor="middle"
+                transform={pts.length > 20 ? `rotate(-35,${p.x},${height - 6})` : undefined}>
+                {new Date(p.dia+'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
 function BarChart({ dados, cor = 'var(--purple)', label = 'total', height = 180 }) {
   if (!dados?.length) return <div className="empty"><div className="empty-sub">Sem dados no período</div></div>
   const max = Math.max(...dados.map(d => d[label] || 0), 1)
@@ -182,6 +235,12 @@ export default function Analise() {
   // Análise trimestral
   const [trimestres, setTrimestres] = useState([])
 
+  // Evolução diária (período independente)
+  const [evoIni, setEvoIni] = useState(() => { const d = new Date(); d.setMonth(d.getMonth()-3); return d.toISOString().slice(0,10) })
+  const [evoFim, setEvoFim] = useState(hoje)
+  const [evolucao, setEvolucao] = useState([])
+  const [evoLoading, setEvoLoading] = useState(false)
+
   const [loading, setLoading] = useState(false)
   const [embs, setEmbs] = useState([])
   const [cats, setCats] = useState([])
@@ -208,6 +267,27 @@ export default function Analise() {
         setCats(uniqCats)
       })
   }, [])
+
+  // Evolução diária — período independente
+  useEffect(() => {
+    async function loadEvo() {
+      setEvoLoading(true)
+      const { data } = await supabase
+        .from('producao_diaria')
+        .select('data_producao, quantidade')
+        .gte('data_producao', evoIni)
+        .lte('data_producao', evoFim)
+        .order('data_producao')
+      // Agrupa por dia
+      const map = {}
+      for (const r of (data || [])) {
+        map[r.data_producao] = (map[r.data_producao] || 0) + r.quantidade
+      }
+      setEvolucao(Object.entries(map).map(([dia, total]) => ({ dia, total })))
+      setEvoLoading(false)
+    }
+    loadEvo()
+  }, [evoIni, evoFim])
 
   const carregar = useCallback(async () => {
     setLoading(true)
@@ -498,6 +578,36 @@ export default function Analise() {
                 {{ anterior: 'período anterior', mes_ant: 'mesmo período mês anterior', ano_ant: 'mesmo período ano anterior', custom: 'período personalizado' }[compMode]}
               </div>
             </div>
+          </div>
+
+          {/* Evolução diária — período independente */}
+          <div className="card card-pad">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>📈 Evolução diária de produção</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--gray-500)', fontWeight: 600 }}>Período:</span>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={evoIni} onChange={e => setEvoIni(e.target.value)} />
+                <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>até</span>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={evoFim} onChange={e => setEvoFim(e.target.value)} />
+              </div>
+            </div>
+            {/* Atalhos rápidos */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+              {[
+                { label: '30 dias', fn: () => { const d = new Date(); d.setDate(d.getDate()-29); setEvoIni(d.toISOString().slice(0,10)); setEvoFim(hoje) } },
+                { label: '3 meses', fn: () => { const d = new Date(); d.setMonth(d.getMonth()-3); setEvoIni(d.toISOString().slice(0,10)); setEvoFim(hoje) } },
+                { label: '6 meses', fn: () => { const d = new Date(); d.setMonth(d.getMonth()-6); setEvoIni(d.toISOString().slice(0,10)); setEvoFim(hoje) } },
+                { label: 'Tudo', fn: () => { setEvoIni('2025-01-01'); setEvoFim(hoje) } },
+              ].map(a => (
+                <button key={a.label} className="btn btn-ghost btn-xs" onClick={a.fn}>{a.label}</button>
+              ))}
+            </div>
+            {evoLoading
+              ? <div className="loading"><RefreshCw size={14} className="spin" /> Carregando...</div>
+              : <LineChart dados={evolucao} height={200} />
+            }
           </div>
 
           {/* Volume semanal */}
