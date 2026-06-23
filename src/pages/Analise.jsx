@@ -197,9 +197,11 @@ export default function Analise() {
   const [tendencia, setTendencia] = useState([]) // por produto: atual vs anterior
   const [desperdicio, setDesperdicio] = useState([])
 
-  // carrega lista de embalagens
+  // carrega embalagens visíveis na análise (respeita toggle do Admin)
   useEffect(() => {
-    supabase.from('embalagens').select('id,codigo,nome,categoria').eq('ativo', true).order('categoria').order('nome')
+    supabase.from('embalagens').select('id,codigo,nome,categoria')
+      .neq('visivel_analise', false)
+      .order('categoria').order('nome')
       .then(({ data }) => {
         setEmbs(data || [])
         const uniqCats = [...new Set((data||[]).map(e => e.categoria).filter(Boolean))]
