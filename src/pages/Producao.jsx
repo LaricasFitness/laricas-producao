@@ -58,13 +58,7 @@ function Fase1({ embalagens, qtds, setQtds }) {
             const filled = val !== '' && parseInt(val) > 0
             return (
               <div key={emb.id} className="prod-row">
-                <div>
-                  <div className="prod-nome">{emb.nome}</div>
-                  <div className="prod-sku">{emb.codigo}</div>
-                  <div style={{ fontSize: 12, color: 'var(--gray-600)', marginTop: 2 }}>
-                    Estoque atual: <strong>{(emb.estoque_atual || 0).toLocaleString('pt-BR')} un</strong>
-                  </div>
-                </div>
+                <div className="prod-nome">{emb.nome}</div>
                 <input type="number" min={0} placeholder="0"
                   className={`qty-input${filled ? ' filled' : ''}`}
                   value={val}
