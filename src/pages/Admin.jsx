@@ -19,6 +19,8 @@ function ModalEmb({ emb, onClose, onSaved }) {
     unidade_minima_grafica: emb?.unidade_minima_grafica || 100,
     margem_seguranca: emb?.margem_seguranca || 0.10,
     ativo: emb?.ativo ?? true,
+    visivel_producao: emb?.visivel_producao ?? true,
+    visivel_estoque: emb?.visivel_estoque ?? true,
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
@@ -106,13 +108,28 @@ function ModalEmb({ emb, onClose, onSaved }) {
               </select>
             </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Status</label>
-            <select className="form-input" value={f.ativo ? 'ativo' : 'inativo'}
-              onChange={e => set('ativo', e.target.value === 'ativo')}>
-              <option value="ativo">Ativo — aparece na produção</option>
-              <option value="inativo">Inativo — oculto da produção</option>
-            </select>
+          <div style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
+              Visibilidade
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[
+                { key: 'visivel_producao', label: '📋 Formulário de produção', sub: 'Aparece para a líder preencher diariamente' },
+                { key: 'visivel_estoque',  label: '📦 Dashboard de estoque',   sub: 'Aparece nos alertas e sugestões de pedido' },
+              ].map(opt => (
+                <label key={opt.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={f[opt.key]} onChange={e => set(opt.key, e.target.checked)}
+                    style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--purple)', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</div>
+                    <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{opt.sub}</div>
+                  </div>
+                </label>
+              ))}
+              <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 4, paddingTop: 8, borderTop: '1px solid var(--gray-200)' }}>
+                ℹ️ A aba Análise sempre considera todos os produtos independente dessas configurações.
+              </div>
+            </div>
           </div>
         </div>
         <div className="modal-footer">
@@ -224,13 +241,18 @@ export default function Admin() {
   const [modal, setModal] = useState(null)
   const [ajuste, setAjuste] = useState(null)
   const [excluir, setExcluir] = useState(null)
-  const [filtro, setFiltro] = useState('ativo')
+  const [filtro, setFiltro] = useState('todos')
 
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('embalagens').select('*').order('categoria').order('nome')
     setEmbs(data || [])
     setLoading(false)
+  }
+
+  async function toggleVisibilidade(id, campo, valor) {
+    await supabase.from('embalagens').update({ [campo]: valor }).eq('id', id)
+    setEmbs(prev => prev.map(e => e.id === id ? { ...e, [campo]: valor } : e))
   }
 
   useEffect(() => { load() }, [])
@@ -244,6 +266,27 @@ export default function Admin() {
     return acc
   }, {})
 
+  function Toggle({ value, onChange, title }) {
+    return (
+      <button
+        title={title}
+        onClick={onChange}
+        style={{
+          width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer',
+          background: value ? 'var(--ok)' : 'var(--gray-300)',
+          position: 'relative', transition: 'background .2s', flexShrink: 0,
+        }}
+      >
+        <div style={{
+          width: 14, height: 14, borderRadius: '50%', background: '#fff',
+          position: 'absolute', top: 3,
+          left: value ? 19 : 3,
+          transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.2)',
+        }} />
+      </button>
+    )
+  }
+
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -252,13 +295,13 @@ export default function Admin() {
           <Plus size={14} /> Nova embalagem
         </button>
       </div>
-      <div className="card-desc">Cadastre, edite ou desative embalagens. O estoque é atualizado automaticamente pela produção.</div>
+      <div className="card-desc">Gerencie embalagens e controle onde cada uma aparece no sistema.</div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {['ativo','inativo','todos'].map(f => (
+        {['todos','ativo','inativo'].map(f => (
           <button key={f} className={`btn btn-sm ${filtro === f ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setFiltro(f)}>
-            {f === 'ativo' ? 'Ativos' : f === 'inativo' ? 'Inativos' : 'Todos'}
+            {f === 'todos' ? 'Todas' : f === 'ativo' ? 'Ativas' : 'Inativas'}
           </button>
         ))}
       </div>
@@ -276,27 +319,44 @@ export default function Admin() {
                   <th>Nome</th>
                   <th>Estoque</th>
                   <th>Dias</th>
-                  <th>Status</th>
+                  <th title="Aparece no formulário de produção">📋 Produção</th>
+                  <th title="Aparece no dashboard de estoque e alertas">📦 Estoque</th>
+                  <th title="Aparece nos gráficos e análises">📈 Análise</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {items.map(e => (
-                  <tr key={e.id} style={{ opacity: e.ativo ? 1 : 0.5 }}>
+                  <tr key={e.id} style={{ opacity: (e.visivel_producao || e.visivel_estoque || e.visivel_analise) ? 1 : 0.45 }}>
                     <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--gray-400)' }}>{e.codigo}</td>
                     <td style={{ fontWeight: 600 }}>{e.nome}</td>
                     <td style={{ fontWeight: 700 }}>{(e.estoque_atual || 0).toLocaleString('pt-BR')} un</td>
                     <td style={{ fontSize: 13, color: 'var(--gray-600)' }}>{e.dias_producao}d</td>
                     <td>
-                      <span className={`pill ${e.ativo ? 'pill-ok' : 'pill-gray'}`}>
-                        {e.ativo ? 'Ativo' : 'Inativo'}
-                      </span>
+                      <Toggle
+                        value={e.visivel_producao !== false}
+                        onChange={() => toggleVisibilidade(e.id, 'visivel_producao', !(e.visivel_producao !== false))}
+                        title={e.visivel_producao !== false ? 'Visível na produção — clique para ocultar' : 'Oculto da produção — clique para mostrar'}
+                      />
+                    </td>
+                    <td>
+                      <Toggle
+                        value={e.visivel_estoque !== false}
+                        onChange={() => toggleVisibilidade(e.id, 'visivel_estoque', !(e.visivel_estoque !== false))}
+                        title={e.visivel_estoque !== false ? 'Visível no estoque — clique para ocultar' : 'Oculto do estoque — clique para mostrar'}
+                      />
+                    </td>
+                    <td>
+                      <Toggle
+                        value={e.visivel_analise !== false}
+                        onChange={() => toggleVisibilidade(e.id, 'visivel_analise', !(e.visivel_analise !== false))}
+                        title={e.visivel_analise !== false ? 'Visível na análise — clique para ocultar' : 'Oculto da análise — clique para mostrar'}
+                      />
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn btn-ghost btn-sm" onClick={() => setAjuste(e)} title="Ajustar estoque">📦</button>
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal(e)} title="Editar"><Pencil size={12} /></button>
-                        {e.ativo && <button className="btn btn-ghost btn-sm" onClick={() => setExcluir(e)} title="Desativar" style={{ color: 'var(--danger)' }}><Trash2 size={12} /></button>}
                       </div>
                     </td>
                   </tr>
@@ -309,7 +369,6 @@ export default function Admin() {
 
       {modal && <ModalEmb emb={modal === 'new' ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} />}
       {ajuste && <ModalAjuste emb={ajuste} onClose={() => setAjuste(null)} onSaved={() => { setAjuste(null); load() }} />}
-      {excluir && <ModalExcluir emb={excluir} onClose={() => setExcluir(null)} onSaved={() => { setExcluir(null); load() }} />}
     </div>
   )
 }
