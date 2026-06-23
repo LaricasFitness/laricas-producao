@@ -92,7 +92,7 @@ function BarChart({ dados, cor = 'var(--purple)', label = 'total', height = 180 
             {d[label] > 0 ? fmt(d[label]) : ''}
           </span>
           <div
-            title={`Sem ${i + 1}: ${fmt(d[label])}`}
+            title={`${fmtDate(d.semana || d.dia)}: ${fmt(d[label])}`}
             style={{
               width: 22, minHeight: 3, borderRadius: '3px 3px 0 0',
               background: cor, opacity: 0.85,
@@ -102,7 +102,7 @@ function BarChart({ dados, cor = 'var(--purple)', label = 'total', height = 180 
             }}
           />
           <span style={{ fontSize: 9, color: 'var(--gray-500)', fontWeight: 600, marginTop: 4 }}>
-            {`Sem ${i + 1}`}
+            {fmtDate(d.semana || d.dia)}
           </span>
         </div>
       ))}
