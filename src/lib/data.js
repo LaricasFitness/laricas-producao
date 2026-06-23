@@ -8,7 +8,17 @@ export function diasPorCategoria(cat) {
 
 export async function carregarEmbalagens() {
   const { data, error } = await supabase
-    .from('embalagens').select('*').eq('ativo', true)
+    .from('embalagens').select('*')
+    .eq('visivel_producao', true)
+    .order('categoria').order('nome')
+  if (error) throw error
+  return data || []
+}
+
+export async function carregarEmbalagenEstoque() {
+  const { data, error } = await supabase
+    .from('embalagens').select('*')
+    .eq('visivel_estoque', true)
     .order('categoria').order('nome')
   if (error) throw error
   return data || []
@@ -62,7 +72,7 @@ export async function consumoSemanal(embalagemId, semanas = 8) {
 
 // Status completo de todas as embalagens
 export async function carregarStatusCompleto() {
-  const embs = await carregarEmbalagens()
+  const embs = await carregarEmbalagenEstoque()
   const result = []
 
   for (const emb of embs) {
