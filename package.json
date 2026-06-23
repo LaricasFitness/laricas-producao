@@ -1,0 +1,20 @@
+{
+  "name": "laricas-emb3",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.50.0",
+    "@vitejs/plugin-react": "^4.5.2",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.5",
+    "lucide-react": "^0.511.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "vite": "^6.3.5"
+  }
+}
