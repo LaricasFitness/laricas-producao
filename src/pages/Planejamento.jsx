@@ -258,8 +258,8 @@ export default function Planejamento() {
       const datas = Object.keys(novosBling).sort()
       setDiasBling(novosBling)
       setDiasOrdenados(datas)
-      // Por padrão, ativa todas as datas
-      setDatasAtivas(datas)
+      // Começa sem nenhuma data selecionada — usuário escolhe quais incluir
+      setDatasAtivas([])
       if (datas.length) {
         setDiasDelivery({ [datas[0]]: {} })
       }
@@ -341,7 +341,7 @@ export default function Planejamento() {
 
         {temDados && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)' }}>DATAS DO ARQUIVO:</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)' }}>SELECIONE AS DATAS:</span>
             {diasOrdenados.map((d, i) => {
               const ativa = datasAtivas.includes(d)
               return (
@@ -350,11 +350,15 @@ export default function Planejamento() {
                   onClick={() => toggleData(d)}
                   style={{ fontSize: 12 }}
                 >
-                  {i === 0 && ativa ? '🎯 ' : ''}{headerDia(d)}
-                  {!ativa && <span style={{ marginLeft: 4, opacity: .6 }}>✕</span>}
+                  {ativa && i === datasAtivas.indexOf(d) ? '🎯 ' : ''}{headerDia(d)}
                 </button>
               )
             })}
+            {datasAtivas.length === 0 && (
+              <span style={{ fontSize: 12, color: 'var(--danger)', fontWeight: 600 }}>
+                Selecione pelo menos uma data para ver a tabela
+              </span>
+            )}
           </div>
         )}
 
@@ -365,7 +369,15 @@ export default function Planejamento() {
         )}
       </div>
 
-      {temDados && (
+      {temDados && datasAtivas.length === 0 && (
+        <div className="card card-pad">
+          <div className="alert-banner info">
+            👆 Selecione pelo menos uma data acima para ver a tabela de planejamento.
+          </div>
+        </div>
+      )}
+
+      {temDados && datasAtivas.length > 0 && (
         <div className="card">
           {/* Header da tabela com dias */}
           <div style={{ overflowX: 'auto' }}>
@@ -376,9 +388,9 @@ export default function Planejamento() {
                     Produto
                   </th>
                   {/* Próximo dia: 3 colunas */}
-                  <th colSpan={3} style={{ textAlign: 'center', padding: '10px 14px', background: 'var(--purple-pale)', borderBottom: '2px solid var(--purple)', color: 'var(--purple)', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                  {diaAtual && <th colSpan={3} style={{ textAlign: 'center', padding: '10px 14px', background: 'var(--purple-pale)', borderBottom: '2px solid var(--purple)', color: 'var(--purple)', fontWeight: 800, whiteSpace: 'nowrap' }}>
                     🎯 {headerDia(diaAtual)}
-                  </th>
+                  </th>}
                   {/* Dias seguintes: 1 coluna cada */}
                   {diasResto.map(d => (
                     <th key={d} style={{ textAlign: 'center', padding: '10px 10px', background: 'var(--gray-50)', borderBottom: '2px solid var(--gray-200)', color: 'var(--gray-600)', fontWeight: 700, whiteSpace: 'nowrap', fontSize: 12 }}>
@@ -388,9 +400,11 @@ export default function Planejamento() {
                 </tr>
                 <tr>
                   <th style={{ padding: '6px 14px', background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}></th>
-                  <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700 }}>Bling</th>
-                  <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700 }}>Delivery</th>
-                  <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--purple)', fontWeight: 800 }}>Total</th>
+                  {diaAtual && <>
+                    <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700 }}>Bling</th>
+                    <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700 }}>Delivery</th>
+                    <th style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--purple-ghost)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--purple)', fontWeight: 800 }}>Total</th>
+                  </>}
                   {diasResto.map(d => (
                     <th key={d} style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}>Bling</th>
                   ))}
@@ -399,39 +413,36 @@ export default function Planejamento() {
               <tbody>
                 {ORDEM_CATS.map(cat => {
                   const itens = embalagens.filter(e => e.categoria === cat)
-                  const temAlgo = itens.some(e =>
-                    diasOrdenados.some(d => (diasBling[d]?.[e.codigo] || 0) > 0 || (diasDelivery[d]?.[e.codigo] || 0) > 0)
-                  )
-                  if (!itens.length || !temAlgo) return null
+                  if (!itens.length) return null
                   return [
-                    // Linha de categoria
+                    // Linha de categoria — sempre mostra
                     <tr key={`cat-${cat}`}>
                       <td colSpan={4 + diasResto.length} style={{ background: 'var(--purple-pale)', padding: '7px 14px', fontWeight: 800, fontSize: 11, color: 'var(--purple)', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                         {cat}
                       </td>
                     </tr>,
-                    // Linhas de produto
+                    // Linhas de produto — todos aparecem sempre
                     ...itens.map(e => {
-                      const bAtual = diasBling[diaAtual]?.[e.codigo] || 0
-                      const del = diasDelivery[diaAtual]?.[e.codigo] || 0
+                      const bAtual = diaAtual ? (diasBling[diaAtual]?.[e.codigo] || 0) : 0
+                      const del = diaAtual ? (diasDelivery[diaAtual]?.[e.codigo] || 0) : 0
                       const tot = bAtual + del
-                      const temQualquer = tot > 0 || diasResto.some(d => (diasBling[d]?.[e.codigo] || 0) > 0)
-                      if (!temQualquer) return null
                       return (
-                        <tr key={e.codigo} style={{ opacity: tot === 0 && !diasResto.some(d => diasBling[d]?.[e.codigo] > 0) ? 0.4 : 1 }}>
+                        <tr key={e.codigo} style={{ opacity: tot === 0 && !diasResto.some(d => diasBling[d]?.[e.codigo] > 0) ? 0.45 : 1 }}>
                           <td style={{ padding: '9px 14px', fontWeight: tot > 0 ? 600 : 400, borderBottom: '1px solid var(--gray-100)' }}>{e.nome}</td>
-                          <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: bAtual > 0 ? 'var(--purple)' : 'var(--gray-300)', fontWeight: bAtual > 0 ? 700 : 400, background: 'var(--purple-ghost)' }}>
-                            {bAtual > 0 ? bAtual : '—'}
-                          </td>
-                          <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', background: 'var(--purple-ghost)' }}>
-                            <input type="number" min={0} value={del || ''}
-                              placeholder="0"
-                              onChange={ev => setDel(e.codigo, ev.target.value)}
-                              style={{ width: 60, padding: '5px 6px', border: `1.5px solid ${del > 0 ? 'var(--ok)' : 'var(--gray-200)'}`, borderRadius: 6, fontSize: 13, fontWeight: 700, textAlign: 'center', background: del > 0 ? 'var(--ok-pale)' : 'var(--white)', outline: 'none' }} />
-                          </td>
-                          <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', fontWeight: 800, fontSize: 15, color: tot > 0 ? 'var(--gray-800)' : 'var(--gray-300)', background: 'var(--purple-ghost)' }}>
-                            {tot > 0 ? tot : '—'}
-                          </td>
+                          {diaAtual && <>
+                            <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: bAtual > 0 ? 'var(--purple)' : 'var(--gray-300)', fontWeight: bAtual > 0 ? 700 : 400, background: 'var(--purple-ghost)' }}>
+                              {bAtual > 0 ? bAtual : '—'}
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', background: 'var(--purple-ghost)' }}>
+                              <input type="number" min={0} value={del || ''}
+                                placeholder="0"
+                                onChange={ev => setDel(e.codigo, ev.target.value)}
+                                style={{ width: 60, padding: '5px 6px', border: `1.5px solid ${del > 0 ? 'var(--ok)' : 'var(--gray-200)'}`, borderRadius: 6, fontSize: 13, fontWeight: 700, textAlign: 'center', background: del > 0 ? 'var(--ok-pale)' : 'var(--white)', outline: 'none' }} />
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', fontWeight: 800, fontSize: 15, color: tot > 0 ? 'var(--gray-800)' : 'var(--gray-300)', background: 'var(--purple-ghost)' }}>
+                              {tot > 0 ? tot : '—'}
+                            </td>
+                          </>}
                           {diasResto.map(d => {
                             const bResto = diasBling[d]?.[e.codigo] || 0
                             return (
@@ -442,7 +453,7 @@ export default function Planejamento() {
                           })}
                         </tr>
                       )
-                    }).filter(Boolean)
+                    })
                   ]
                 })}
               </tbody>
