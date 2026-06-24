@@ -106,39 +106,48 @@ function gerarPDFProducao(dataProducao, itensDia, totalGeral) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 
-  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 38, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(18); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 15)
-  doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
-  doc.text('Produção do dia', 14, 23)
-  doc.text(`Data: ${headerDia(dataProducao)} · Gerado: ${agora}`, 14, 30)
+  // Header compacto
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 28, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(15); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness', 14, 12)
+  doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Produção do dia — ${headerDia(dataProducao)}`, 14, 20)
+  doc.text(`Gerado: ${agora}`, 130, 20)
 
-  let startY = 46
+  let startY = 33
   const cats = ORDEM_CATS.filter(c => itensDia[c]?.length)
 
+  // Junta tudo em uma única tabela com separadores de categoria
+  const body = []
   for (const cat of cats) {
     const itens = itensDia[cat].filter(i => i.total > 0)
     if (!itens.length) continue
     const totalCat = itens.reduce((s, i) => s + i.total, 0)
-
-    autoTable(doc, {
-      startY,
-      head: [[{ content: `${cat}  —  ${totalCat.toLocaleString('pt-BR')} un`, colSpan: 2 }]],
-      body: itens.map(i => [i.nome, { content: i.total.toLocaleString('pt-BR'), styles: { halign: 'center', fontStyle: 'bold' } }]),
-      styles: { fontSize: 10, cellPadding: 5 },
-      headStyles: { fillColor: [103, 63, 124], textColor: 255, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [245, 240, 248] },
-      columnStyles: { 1: { cellWidth: 28, halign: 'center' } },
-      margin: { left: 14, right: 14 },
-    })
-    startY = doc.lastAutoTable.finalY + 6
-    if (startY > 260 && cats.indexOf(cat) < cats.length - 1) { doc.addPage(); startY = 14 }
+    // Linha de categoria como separador
+    body.push([
+      { content: `${cat}  —  ${totalCat.toLocaleString('pt-BR')} un`, colSpan: 2,
+        styles: { fillColor: [103, 63, 124], textColor: [255,255,255], fontStyle: 'bold', fontSize: 8, cellPadding: 3 } }
+    ])
+    for (const i of itens) {
+      body.push([i.nome, { content: i.total.toLocaleString('pt-BR'), styles: { halign: 'center', fontStyle: 'bold' } }])
+    }
   }
 
-  doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(82,46,100)
-  doc.text(`Total geral: ${totalGeral.toLocaleString('pt-BR')} unidades`, 14, startY + 8)
-  doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(150,150,150)
-  doc.text('Laricas Fitness — Planejamento de Produção', 14, 288)
+  autoTable(doc, {
+    startY,
+    body,
+    styles: { fontSize: 8, cellPadding: 2.5 },
+    alternateRowStyles: { fillColor: [248, 245, 252] },
+    columnStyles: { 1: { cellWidth: 22, halign: 'center' } },
+    margin: { left: 14, right: 14 },
+    pageBreak: 'avoid', // tenta manter na mesma página
+  })
+
+  const finalY = doc.lastAutoTable.finalY + 6
+  doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+  doc.text(`Total geral: ${totalGeral.toLocaleString('pt-BR')} unidades`, 14, finalY)
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
+  doc.text('Laricas Fitness — Planejamento de Produção', 14, 290)
   doc.save(`Producao_${dataProducao}.pdf`)
 }
 
