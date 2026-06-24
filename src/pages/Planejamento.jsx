@@ -189,7 +189,7 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
-export default function Planejamento() {
+export default function Planejamento({ onIrLogistica }) {
   const [embalagens, setEmbalagens] = useState([])
   const [loading, setLoading] = useState(true)
   const [importando, setImportando] = useState(false)
@@ -197,6 +197,7 @@ export default function Planejamento() {
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
   const [datasAtivas, setDatasAtivas] = useState([])
+  const [csvRaw, setCsvRaw] = useState(null) // guarda o texto CSV para passar à logística
   const fileRef = useRef()
 
   useEffect(() => {
@@ -211,7 +212,9 @@ export default function Planejamento() {
     setImportando(true)
     const reader = new FileReader()
     reader.onload = e => {
-      const parsed = parsearCSV(e.target.result)
+      const texto = e.target.result
+      setCsvRaw(texto)
+      const parsed = parsearCSV(texto)
       const novosBling = {}
       for (const { sku, qtd, data } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
@@ -306,6 +309,11 @@ export default function Planejamento() {
               {diaAtual && totalDiaAtual > 0 && (
                 <button className="btn btn-gold" onClick={exportarPDFProducao}>
                   <FileText size={14} /> PDF Produção
+                </button>
+              )}
+              {diaAtual && csvRaw && onIrLogistica && (
+                <button className="btn btn-outline" onClick={() => onIrLogistica(csvRaw)}>
+                  🚚 Ir para Logística
                 </button>
               )}
               {diaAtual && (
