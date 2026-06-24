@@ -7,9 +7,8 @@ import Producao from './pages/Producao'
 import Pedidos from './pages/Pedidos'
 import Compras from './pages/Compras'
 import Admin from './pages/Admin'
-
 import Planejamento from './pages/Planejamento'
-
+import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
 import Logistica from './pages/Logistica'
 
 const PAGES = [
