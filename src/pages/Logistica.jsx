@@ -523,7 +523,7 @@ export default function Logistica({ csvInicial }) {
             <div>
               <div style={{ fontWeight:700, fontSize:14 }}>Roteiros prontos — {routes.length} rotas · {totalParadas} paradas</div>
               <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>
-                Data: {dateStr} · Arraste para reordenar · ✕ para excluir · histórico salvo automaticamente ao baixar
+                Data: {dateStr} · Arraste um pedido para outra rota · ✕ para excluir rota
               </div>
             </div>
             <div style={{ display:'flex', gap:8 }}>
@@ -537,35 +537,62 @@ export default function Logistica({ csvInicial }) {
           </div>
 
           <div style={{ padding:'14px 20px', display:'flex', flexDirection:'column', gap:10 }}>
-            {routes.map((r,rIdx)=>(
-              <div key={r.code} draggable
-                onDragStart={e=>e.dataTransfer.setData('routeIdx',rIdx)}
-                onDragOver={e=>e.preventDefault()}
-                onDrop={e=>{
+            {routes.map((r, rIdx) => (
+              <div
+                key={r.code}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => {
                   e.preventDefault()
-                  const from=parseInt(e.dataTransfer.getData('routeIdx'))
-                  if(from===rIdx) return
-                  const nr=[...routes]; const [moved]=nr.splice(from,1); nr.splice(rIdx,0,moved)
-                  setRoutes(nr.map((rt,i)=>({...rt,code:String(i+1).padStart(2,'0')})))
+                  const data = JSON.parse(e.dataTransfer.getData('stop'))
+                  const { fromRoute, stopId } = data
+                  if (fromRoute === rIdx) return
+                  // Move o stop de fromRoute para rIdx
+                  const newRoutes = routes.map((rt, i) => {
+                    if (i === fromRoute) return { ...rt, stops: rt.stops.filter(s => s.id !== stopId) }
+                    if (i === rIdx) {
+                      const stop = routes[fromRoute].stops.find(s => s.id === stopId)
+                      return { ...rt, stops: [...rt.stops, stop] }
+                    }
+                    return rt
+                  }).filter(rt => rt.stops.length > 0) // remove rota se ficar vazia
+                   .map((rt, i) => ({ ...rt, code: String(i+1).padStart(2,'0') }))
+                  setRoutes(newRoutes)
                 }}
-                style={{ border:'1px solid #1565C020', borderRadius:8, overflow:'hidden', cursor:'grab' }}>
+                style={{ border:'1px solid #1565C020', borderRadius:8, overflow:'hidden' }}>
                 <div style={{ background:'#1565C0', color:'#fff', padding:'8px 14px', display:'flex', alignItems:'center', gap:10 }}>
-                  <span style={{ fontSize:16, opacity:.6, cursor:'grab', userSelect:'none' }}>⠿</span>
-                  <span style={{ fontWeight:800, fontSize:13, flex:1 }}>ROTA {r.code} — {r.label}  ({r.stops.length} parada{r.stops.length>1?'s':''})</span>
+                  <span style={{ fontWeight:800, fontSize:13, flex:1 }}>
+                    ROTA {r.code} — {r.label}  ({r.stops.length} parada{r.stops.length>1?'s':''})
+                  </span>
                   <button className="btn btn-sm" style={{ background:'rgba(255,255,255,0.2)', color:'#fff', fontSize:12 }}
-                    onClick={()=>downloadCSV(buildLalamoveCSV(r),`R${r.code}_${r.label.replace(/[^a-zA-Z0-9]/g,'_')}.csv`)}>
+                    onClick={() => downloadCSV(buildLalamoveCSV(r), `R${r.code}_${r.label.replace(/[^a-zA-Z0-9]/g,'_')}.csv`)}>
                     <Download size={12}/> CSV
                   </button>
-                  <button onClick={()=>{
-                    if(!window.confirm(`Excluir ROTA ${r.code} — ${r.label}?`)) return
-                    setRoutes(routes.filter((_,i)=>i!==rIdx).map((rt,i)=>({...rt,code:String(i+1).padStart(2,'0')})))
+                  <button onClick={() => {
+                    if (!window.confirm(`Excluir ROTA ${r.code} — ${r.label}?`)) return
+                    setRoutes(routes.filter((_,i) => i !== rIdx).map((rt,i) => ({ ...rt, code: String(i+1).padStart(2,'0') })))
                   }} style={{ background:'rgba(255,255,255,0.15)', color:'#fff', border:'none', cursor:'pointer', borderRadius:4, padding:'4px 8px', fontSize:14 }}>
                     ✕
                   </button>
                 </div>
                 <div>
-                  {r.stops.map((stop,idx)=>(
-                    <div key={stop.id} style={{ padding:'9px 14px', borderBottom:'1px solid var(--gray-100)', display:'grid', gridTemplateColumns:'20px 80px 160px 1fr', gap:8, alignItems:'center', background:idx%2===0?'#fff':'#f9f8ff', fontSize:13 }}>
+                  {r.stops.map((stop, idx) => (
+                    <div
+                      key={stop.id}
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('stop', JSON.stringify({ fromRoute: rIdx, stopId: stop.id }))
+                        e.currentTarget.style.opacity = '0.4'
+                      }}
+                      onDragEnd={e => { e.currentTarget.style.opacity = '1' }}
+                      style={{
+                        padding:'9px 14px', borderBottom:'1px solid var(--gray-100)',
+                        display:'grid', gridTemplateColumns:'20px 20px 80px 160px 1fr',
+                        gap:8, alignItems:'center',
+                        background: idx%2===0 ? '#fff' : '#f9f8ff',
+                        fontSize:13, cursor:'grab',
+                      }}>
+                      {/* Drag handle */}
+                      <span style={{ color:'var(--gray-300)', fontSize:14, userSelect:'none' }}>⠿</span>
                       <span style={{ fontWeight:800, color:'#1565C0', textAlign:'center' }}>{idx+1}</span>
                       <span style={{ fontFamily:'monospace', color:'var(--gray-500)', fontSize:12 }}>#{stop.id}</span>
                       <span style={{ fontWeight:600 }}>{stop.nome}</span>
@@ -574,6 +601,12 @@ export default function Logistica({ csvInicial }) {
                       </span>
                     </div>
                   ))}
+                  {/* Drop zone visual quando a rota está vazia de paradas */}
+                  {r.stops.length === 0 && (
+                    <div style={{ padding:20, textAlign:'center', color:'var(--gray-300)', fontSize:13 }}>
+                      Solte aqui para mover um pedido para esta rota
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
