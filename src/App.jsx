@@ -10,7 +10,7 @@ import Admin from './pages/Admin'
 
 import Planejamento from './pages/Planejamento'
 
-import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
+import Logistica from './pages/Logistica'
 
 const PAGES = [
   { id: 'dashboard',    label: 'Estoque',       icon: '📦' },
@@ -18,6 +18,7 @@ const PAGES = [
   { id: 'log',          label: 'Log',            icon: '📅' },
   { id: 'producao',     label: 'Produção',       icon: '📋' },
   { id: 'planejamento', label: 'Planejamento',   icon: '🗓️' },
+  { id: 'logistica',    label: 'Logística',      icon: '🚚' },
   { id: 'historico',    label: 'Histórico',      icon: '📁' },
   { id: 'pedidos',      label: 'Pedidos',        icon: '🛒' },
   { id: 'compras',      label: 'Compras',        icon: '💰' },
@@ -30,6 +31,7 @@ const TITLES = {
   log:          { title: 'Log de Produção',             sub: 'Calendário de registros e dias sem preenchimento' },
   producao:     { title: 'Registro de Produção',        sub: 'Preenchimento diário pela equipe' },
   planejamento: { title: 'Planejamento do Dia',         sub: 'Importa Bling + delivery → PDF para a equipe' },
+  logistica:    { title: 'Logística LALAMOVE',          sub: 'Roteiros automáticos por zona + CSVs de importação' },
   historico:    { title: 'Histórico de Planejamentos',  sub: 'Consulte e reimprima planejamentos anteriores' },
   pedidos:      { title: 'Pedidos à Gráfica',           sub: 'Histórico, geração de PDF e conferência' },
   compras:      { title: 'Compras de Embalagens',       sub: 'Recebimentos, estoque e custo com a gráfica' },
@@ -39,7 +41,13 @@ const TITLES = {
 export default function App() {
   const [page, setPage] = useState('dashboard')
   const [novoPedidoFlag, setNovoPedidoFlag] = useState(false)
+  const [csvLogistica, setCsvLogistica] = useState(null)
   const { title, sub } = TITLES[page] || {}
+
+  function irLogistica(csvTexto) {
+    setCsvLogistica(csvTexto)
+    setPage('logistica')
+  }
 
   return (
     <div className="app">
@@ -70,7 +78,8 @@ export default function App() {
           {page === 'analise'   && <Analise />}
           {page === 'log'       && <Log />}
           {page === 'producao'     && <Producao />}
-          {page === 'planejamento' && <Planejamento />}
+          {page === 'planejamento' && <Planejamento onIrLogistica={irLogistica} />}
+          {page === 'logistica'    && <Logistica csvInicial={csvLogistica} />}
           {page === 'historico'    && <HistoricoPlanejamento />}
           {page === 'pedidos'   && <Pedidos abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
           {page === 'compras'   && <Compras />}
