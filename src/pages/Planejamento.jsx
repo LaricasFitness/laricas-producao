@@ -274,15 +274,6 @@ export default function Planejamento() {
     )
   }
 
-  function setDel(sku, val) {
-    if (!diasOrdenados.length) return
-    const diaAtual = diasOrdenados[0]
-    setDiasDelivery(prev => ({
-      ...prev,
-      [diaAtual]: { ...(prev[diaAtual] || {}), [sku]: parseInt(val) || 0 }
-    }))
-  }
-
   function limpar() {
     setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([])
   }
@@ -291,6 +282,13 @@ export default function Planejamento() {
   const diaAtual = diasVisiveis[0]
   const diasResto = diasVisiveis.slice(1)
 
+  function setDel(sku, val) {
+    if (!diaAtual) return
+    setDiasDelivery(prev => ({
+      ...prev,
+      [diaAtual]: { ...(prev[diaAtual] || {}), [sku]: parseInt(val) || 0 }
+    }))
+  }
   // Monta dados do dia atual para PDF simples
   const itensDiaAtual = {}
   if (diaAtual) {
