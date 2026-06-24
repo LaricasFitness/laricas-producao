@@ -10,26 +10,30 @@ import Admin from './pages/Admin'
 
 import Planejamento from './pages/Planejamento'
 
+import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
+
 const PAGES = [
   { id: 'dashboard',    label: 'Estoque',       icon: '📦' },
   { id: 'analise',      label: 'Análise',        icon: '📈' },
   { id: 'log',          label: 'Log',            icon: '📅' },
   { id: 'producao',     label: 'Produção',       icon: '📋' },
   { id: 'planejamento', label: 'Planejamento',   icon: '🗓️' },
+  { id: 'historico',    label: 'Histórico',      icon: '📁' },
   { id: 'pedidos',      label: 'Pedidos',        icon: '🛒' },
   { id: 'compras',      label: 'Compras',        icon: '💰' },
   { id: 'admin',        label: 'Admin',          icon: '⚙️' },
 ]
 
 const TITLES = {
-  dashboard:    { title: 'Estoque de Embalagens',    sub: 'Alertas, cobertura e sugestões de pedido' },
-  analise:      { title: 'Análise de Produção',      sub: 'Volume, tendências, ranking e desperdício' },
-  log:          { title: 'Log de Produção',          sub: 'Calendário de registros e dias sem preenchimento' },
-  producao:     { title: 'Registro de Produção',     sub: 'Preenchimento diário pela equipe' },
-  planejamento: { title: 'Planejamento do Dia',      sub: 'Importa Bling + delivery → PDF para a equipe' },
-  pedidos:      { title: 'Pedidos à Gráfica',        sub: 'Histórico, geração de PDF e conferência' },
-  compras:      { title: 'Compras de Embalagens',    sub: 'Recebimentos, estoque e custo com a gráfica' },
-  admin:        { title: 'Administração',            sub: 'Embalagens, estoque e configurações' },
+  dashboard:    { title: 'Estoque de Embalagens',       sub: 'Alertas, cobertura e sugestões de pedido' },
+  analise:      { title: 'Análise de Produção',         sub: 'Volume, tendências, ranking e planejado x realizado' },
+  log:          { title: 'Log de Produção',             sub: 'Calendário de registros e dias sem preenchimento' },
+  producao:     { title: 'Registro de Produção',        sub: 'Preenchimento diário pela equipe' },
+  planejamento: { title: 'Planejamento do Dia',         sub: 'Importa Bling + delivery → PDF para a equipe' },
+  historico:    { title: 'Histórico de Planejamentos',  sub: 'Consulte e reimprima planejamentos anteriores' },
+  pedidos:      { title: 'Pedidos à Gráfica',           sub: 'Histórico, geração de PDF e conferência' },
+  compras:      { title: 'Compras de Embalagens',       sub: 'Recebimentos, estoque e custo com a gráfica' },
+  admin:        { title: 'Administração',               sub: 'Embalagens, estoque e configurações' },
 }
 
 export default function App() {
@@ -67,6 +71,7 @@ export default function App() {
           {page === 'log'       && <Log />}
           {page === 'producao'     && <Producao />}
           {page === 'planejamento' && <Planejamento />}
+          {page === 'historico'    && <HistoricoPlanejamento />}
           {page === 'pedidos'   && <Pedidos abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
           {page === 'compras'   && <Compras />}
           {page === 'admin'     && <Admin />}
