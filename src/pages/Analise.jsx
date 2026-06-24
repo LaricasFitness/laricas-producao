@@ -252,6 +252,7 @@ export default function Analise() {
   const [resps, setResps] = useState([])
 
   // dados processados
+  const [loading, setLoading] = useState(false)
   const [kpis, setKpis] = useState({ total: 0, dias: 0, mediaDia: 0, totalAnterior: 0 })
   const [porSemana, setPorSemana] = useState([])
   const [ranking, setRanking] = useState([])
