@@ -9,22 +9,62 @@ const ORDEM_CATS = [
   'Potinho 60g','Potão 280g','Barra 180g','Bombom','Outros'
 ]
 
-function parsearCSV(texto) {
-  const linhas = texto.trim().split('\n').slice(1)
+function parsearDataBr(dataBr) {
+  if (!dataBr) return null
+  const [d, m, y] = dataBr.trim().split('/')
+  if (!d || !m || !y) return null
+  return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
+}
+
+// Detecta o formato do CSV e parseia
+// Formato A (Bling producao): Código;GTIN;Descrição;Quantidade;Localização;Data Prevista
+// Formato B (Bling vendas):   Número pedido;Nome;Data;...;Produto;SKU;Un;Quantidade;...;Data Prevista;...
+function parsearCSV(texto, amanha) {
+  // Remove BOM se existir
+  const clean = texto.replace(/^\uFEFF/, '')
+  const linhas = clean.trim().split('\n')
+  if (linhas.length < 2) return []
+
+  const header = linhas[0].split(';').map(c => c.replace(/^"|"$/g, '').trim())
+
+  // Detecta formato pelo header
+  const isFormatoVendas = header[0] === 'Número pedido' || header.includes('SKU')
+
   const resultado = []
-  for (const linha of linhas) {
-    const cols = linha.split(';').map(c => c.replace(/^"|"$/g, '').trim())
-    if (cols.length < 6) continue
-    const sku = cols[0]
-    const qtd = parseFloat(cols[3].replace(',', '.')) || 0
-    const dataBr = cols[5] // DD/MM/YYYY
-    if (!sku || qtd <= 0 || !dataBr) continue
-    // Converte DD/MM/YYYY → YYYY-MM-DD
-    const [d, m, y] = dataBr.split('/')
-    if (!d || !m || !y) continue
-    const dataIso = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
-    resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
+
+  if (!isFormatoVendas) {
+    // Formato A: Código;GTIN;Descrição;Quantidade;Localização;Data Prevista
+    for (const linha of linhas.slice(1)) {
+      const cols = linha.split(';').map(c => c.replace(/^"|"$/g, '').trim())
+      if (cols.length < 6) continue
+      const sku = cols[0]
+      const qtd = parseFloat(cols[3].replace(',', '.')) || 0
+      const dataIso = parsearDataBr(cols[5])
+      if (!sku || qtd <= 0 || !dataIso) continue
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
+    }
+  } else {
+    // Formato B: relatório de vendas
+    // Colunas: SKU=15, Quantidade=17, Data Prevista=37
+    const idxSku    = header.indexOf('SKU')
+    const idxQtd    = header.indexOf('Quantidade')
+    const idxData   = header.indexOf('Data Prevista')
+    if (idxSku < 0 || idxQtd < 0 || idxData < 0) return []
+
+    for (const linha of linhas.slice(1)) {
+      const cols = linha.split(';').map(c => c.replace(/^"|"$/g, '').trim())
+      const sku     = cols[idxSku]
+      const qtd     = parseFloat((cols[idxQtd] || '0').replace(',', '.')) || 0
+      const dataIso = parsearDataBr(cols[idxData])
+
+      // Filtro: data prevista preenchida e >= amanhã
+      if (!sku || qtd <= 0 || !dataIso) continue
+      if (dataIso < amanha) continue
+
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
+    }
   }
+
   return resultado
 }
 
@@ -189,7 +229,12 @@ export default function Planejamento() {
     setImportando(true)
     const reader = new FileReader()
     reader.onload = e => {
-      const parsed = parsearCSV(e.target.result)
+      // Calcula amanhã no momento do import
+      const amanha = new Date()
+      amanha.setDate(amanha.getDate() + 1)
+      const amanhaIso = amanha.toISOString().slice(0, 10)
+
+      const parsed = parsearCSV(e.target.result, amanhaIso)
       const novosBling = {}
       for (const { sku, qtd, data } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
@@ -286,8 +331,7 @@ export default function Planejamento() {
 
         {!temDados && (
           <div className="alert-banner info" style={{ marginTop: 14 }}>
-            💡 Importe o CSV do Bling. O sistema distribui os itens por data de produção automaticamente.
-            Para o próximo dia, adicione o delivery manualmente. Depois exporte os PDFs.
+            💡 Aceita dois formatos: relatório de produção do Bling (por SKU) ou relatório de vendas (por pedido). No relatório de vendas, só considera pedidos com data prevista a partir de amanhã.
           </div>
         )}
       </div>
