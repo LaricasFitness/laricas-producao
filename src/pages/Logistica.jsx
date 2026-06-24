@@ -510,7 +510,9 @@ export default function Logistica({ csvInicial }) {
           <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Roteiros prontos — {routes.length} rotas · {totalParadas} paradas</div>
-              <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>Data: {dateStr}</div>
+              <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+                Data: {dateStr} · Arraste as rotas para reordenar · clique no X para excluir
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-outline" onClick={() => gerarPDFRoteiro(routes, dateStr)}>
@@ -522,15 +524,46 @@ export default function Logistica({ csvInicial }) {
             </div>
           </div>
 
-          {/* Preview das rotas */}
-          <div style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {routes.map(r => (
-              <div key={r.code} style={{ border: '1px solid #1565C020', borderRadius: 8, overflow: 'hidden' }}>
-                <div style={{ background: '#1565C0', color: '#fff', padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontWeight: 800, fontSize: 13 }}>ROTA {r.code} — {r.label}  ({r.stops.length} parada{r.stops.length > 1 ? 's' : ''})</span>
+          {/* Preview das rotas com drag and delete */}
+          <div style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {routes.map((r, rIdx) => (
+              <div
+                key={r.code}
+                draggable
+                onDragStart={e => e.dataTransfer.setData('routeIdx', rIdx)}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => {
+                  e.preventDefault()
+                  const from = parseInt(e.dataTransfer.getData('routeIdx'))
+                  if (from === rIdx) return
+                  const newRoutes = [...routes]
+                  const [moved] = newRoutes.splice(from, 1)
+                  newRoutes.splice(rIdx, 0, moved)
+                  // Renumera
+                  setRoutes(newRoutes.map((rt, i) => ({ ...rt, code: String(i + 1).padStart(2, '0') })))
+                }}
+                style={{ border: '1px solid #1565C020', borderRadius: 8, overflow: 'hidden', cursor: 'grab' }}
+              >
+                <div style={{ background: '#1565C0', color: '#fff', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Drag handle */}
+                  <span style={{ fontSize: 16, opacity: .6, cursor: 'grab', userSelect: 'none' }}>⠿</span>
+                  <span style={{ fontWeight: 800, fontSize: 13, flex: 1 }}>
+                    ROTA {r.code} — {r.label}  ({r.stops.length} parada{r.stops.length > 1 ? 's' : ''})
+                  </span>
                   <button className="btn btn-sm" style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', fontSize: 12 }}
                     onClick={() => downloadCSV(buildLalamoveCSV(r), `R${r.code}_${r.label.replace(/[^a-zA-Z0-9]/g,'_')}.csv`)}>
                     <Download size={12} /> CSV
+                  </button>
+                  <button
+                    title="Excluir esta rota"
+                    onClick={() => {
+                      if (!window.confirm(`Excluir a ROTA ${r.code} — ${r.label}?`)) return
+                      const newRoutes = routes.filter((_, i) => i !== rIdx)
+                        .map((rt, i) => ({ ...rt, code: String(i + 1).padStart(2, '0') }))
+                      setRoutes(newRoutes)
+                    }}
+                    style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: 4, padding: '4px 8px', fontSize: 14, lineHeight: 1 }}>
+                    ✕
                   </button>
                 </div>
                 <div>
