@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { diasPorCategoria } from '../lib/data'
 import { Plus, Pencil, Trash2, RefreshCw, Save } from 'lucide-react'
+import Usuarios from './Usuarios'
 
 const CATEGORIAS = [
   'Pão de Mel 100g','Mini Pão de Mel 30g','Lata Mini 240g',
@@ -236,6 +237,7 @@ function ModalExcluir({ emb, onClose, onSaved }) {
 }
 
 export default function Admin() {
+  const [tab, setTab] = useState('embalagens')
   const [embs, setEmbs] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
@@ -288,7 +290,16 @@ export default function Admin() {
   }
 
   return (
-    <div className="card">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Tabs */}
+      <div className="tabs">
+        <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Embalagens</button>
+        <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
+      </div>
+
+      {tab === 'usuarios' && <Usuarios />}
+
+      {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <div className="card-title" style={{ marginBottom: 0 }}>⚙️ Administração de Embalagens</div>
         <button className="btn btn-primary btn-sm" onClick={() => setModal('new')}>
@@ -369,6 +380,7 @@ export default function Admin() {
 
       {modal && <ModalEmb emb={modal === 'new' ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} />}
       {ajuste && <ModalAjuste emb={ajuste} onClose={() => setAjuste(null)} onSaved={() => { setAjuste(null); load() }} />}
+    </div>}
     </div>
   )
 }
