@@ -9,6 +9,32 @@ const ORDEM_CATS = [
   'Potinho 60g','Potão 280g','Barra 180g','Bombom','Outros'
 ]
 
+// Parser CSV robusto — respeita campos com aspas e quebras de linha internas
+function parseCSVRobusto(texto) {
+  const rows = []
+  let col = '', row = [], inQuote = false
+  const clean = texto.replace(/^\uFEFF/, '') // remove BOM
+
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean[i]
+    const next = clean[i + 1]
+
+    if (inQuote) {
+      if (c === '"' && next === '"') { col += '"'; i++ }
+      else if (c === '"') { inQuote = false }
+      else { col += c }
+    } else {
+      if (c === '"') { inQuote = true }
+      else if (c === ';') { row.push(col.trim()); col = '' }
+      else if (c === '\n') { row.push(col.trim()); rows.push(row); row = []; col = '' }
+      else if (c === '\r') { /* ignora */ }
+      else { col += c }
+    }
+  }
+  if (col || row.length) { row.push(col.trim()); rows.push(row) }
+  return rows
+}
+
 function parsearDataBr(dataBr) {
   if (!dataBr) return null
   const [d, m, y] = dataBr.trim().split('/')
@@ -16,16 +42,11 @@ function parsearDataBr(dataBr) {
   return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
 }
 
-// Detecta o formato do CSV e parseia
-// Formato A (Bling producao): Código;GTIN;Descrição;Quantidade;Localização;Data Prevista
-// Formato B (Bling vendas):   Número pedido;Nome;Data;...;Produto;SKU;Un;Quantidade;...;Data Prevista;...
 function parsearCSV(texto, amanha) {
-  // Remove BOM se existir
-  const clean = texto.replace(/^\uFEFF/, '')
-  const linhas = clean.trim().split('\n')
-  if (linhas.length < 2) return []
+  const rows = parseCSVRobusto(texto)
+  if (rows.length < 2) return []
 
-  const header = linhas[0].split(';').map(c => c.replace(/^"|"$/g, '').trim())
+  const header = rows[0].map(h => h.replace(/^"|"$/g, '').trim())
 
   // Detecta formato pelo header
   const isFormatoVendas = header[0] === 'Número pedido' || header.includes('SKU')
@@ -34,8 +55,7 @@ function parsearCSV(texto, amanha) {
 
   if (!isFormatoVendas) {
     // Formato A: Código;GTIN;Descrição;Quantidade;Localização;Data Prevista
-    for (const linha of linhas.slice(1)) {
-      const cols = linha.split(';').map(c => c.replace(/^"|"$/g, '').trim())
+    for (const cols of rows.slice(1)) {
       if (cols.length < 6) continue
       const sku = cols[0]
       const qtd = parseFloat(cols[3].replace(',', '.')) || 0
@@ -44,22 +64,20 @@ function parsearCSV(texto, amanha) {
       resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
     }
   } else {
-    // Formato B: relatório de vendas
-    // Colunas: SKU=15, Quantidade=17, Data Prevista=37
-    const idxSku    = header.indexOf('SKU')
-    const idxQtd    = header.indexOf('Quantidade')
-    const idxData   = header.indexOf('Data Prevista')
+    // Formato B: relatório de vendas — usa índices pelos headers
+    const idxSku  = header.indexOf('SKU')
+    const idxQtd  = header.indexOf('Quantidade')
+    const idxData = header.indexOf('Data Prevista')
     if (idxSku < 0 || idxQtd < 0 || idxData < 0) return []
 
-    for (const linha of linhas.slice(1)) {
-      const cols = linha.split(';').map(c => c.replace(/^"|"$/g, '').trim())
+    for (const cols of rows.slice(1)) {
+      if (cols.length <= idxData) continue
       const sku     = cols[idxSku]
       const qtd     = parseFloat((cols[idxQtd] || '0').replace(',', '.')) || 0
       const dataIso = parsearDataBr(cols[idxData])
 
-      // Filtro: data prevista preenchida e >= amanhã
       if (!sku || qtd <= 0 || !dataIso) continue
-      if (dataIso < amanha) continue
+      if (dataIso < amanha) continue  // só datas a partir de amanhã
 
       resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
     }
