@@ -241,7 +241,12 @@ export default function Analise() {
   const [evolucao, setEvolucao] = useState([])
   const [evoLoading, setEvoLoading] = useState(false)
 
-  const [loading, setLoading] = useState(false)
+  // Planejado x Realizado
+  const [pvr, setPvr] = useState([]) // por produto
+  const [pvrCat, setPvrCat] = useState([]) // por categoria
+  const [pvrLoading, setPvrLoading] = useState(false)
+  const [pvrIni, setPvrIni] = useState(() => { const d = new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10) })
+  const [pvrFim, setPvrFim] = useState(hoje)
   const [embs, setEmbs] = useState([])
   const [cats, setCats] = useState([])
   const [resps, setResps] = useState([])
@@ -267,6 +272,87 @@ export default function Analise() {
         setCats(uniqCats)
       })
   }, [])
+
+  // Planejado x Realizado — carrega independente
+  useEffect(() => {
+    async function loadPvR() {
+      setPvrLoading(true)
+      try {
+        // Busca planejamentos no período
+        const { data: plans } = await supabase
+          .from('planejamentos')
+          .select('id, data_producao')
+          .gte('data_producao', pvrIni)
+          .lte('data_producao', pvrFim)
+
+        if (!plans?.length) { setPvr([]); setPvrCat([]); setPvrLoading(false); return }
+
+        const planIds = plans.map(p => p.id)
+
+        // Busca itens planejados
+        const { data: planItens } = await supabase
+          .from('planejamento_itens')
+          .select('embalagem_id, quantidade_total, planejamento_id')
+          .in('planejamento_id', planIds)
+
+        // Busca produção real no mesmo período
+        const { data: prodReal } = await supabase
+          .from('producao_diaria')
+          .select('embalagem_id, quantidade, data_producao')
+          .gte('data_producao', pvrIni)
+          .lte('data_producao', pvrFim)
+
+        // Busca embalagens
+        const { data: embsData } = await supabase
+          .from('embalagens')
+          .select('id, nome, codigo, categoria')
+
+        const embMap = {}
+        ;(embsData || []).forEach(e => { embMap[e.id] = e })
+
+        // Agrega por embalagem
+        const planejadoMap = {}
+        for (const i of (planItens || [])) {
+          planejadoMap[i.embalagem_id] = (planejadoMap[i.embalagem_id] || 0) + i.quantidade_total
+        }
+        const realMap = {}
+        for (const r of (prodReal || [])) {
+          realMap[r.embalagem_id] = (realMap[r.embalagem_id] || 0) + r.quantidade
+        }
+
+        // Todos os IDs que aparecem em qualquer um
+        const todosIds = [...new Set([...Object.keys(planejadoMap), ...Object.keys(realMap)])]
+
+        const porProduto = todosIds.map(id => {
+          const emb = embMap[id] || { nome: '?', codigo: id, categoria: 'Outros' }
+          const plan = planejadoMap[id] || 0
+          const real = realMap[id] || 0
+          const desvio = plan > 0 ? ((real - plan) / plan) * 100 : null
+          return { id, nome: emb.nome, categoria: emb.categoria, plan, real, desvio }
+        }).sort((a, b) => b.plan - a.plan)
+
+        setPvr(porProduto)
+
+        // Agrega por categoria
+        const catMap = {}
+        for (const p of porProduto) {
+          const cat = p.categoria || 'Outros'
+          if (!catMap[cat]) catMap[cat] = { plan: 0, real: 0 }
+          catMap[cat].plan += p.plan
+          catMap[cat].real += p.real
+        }
+        setPvrCat(Object.entries(catMap).map(([cat, v]) => ({
+          cat,
+          plan: v.plan,
+          real: v.real,
+          desvio: v.plan > 0 ? ((v.real - v.plan) / v.plan) * 100 : null
+        })).sort((a, b) => b.plan - a.plan))
+
+      } catch(e) { console.error(e) }
+      setPvrLoading(false)
+    }
+    loadPvR()
+  }, [pvrIni, pvrFim])
 
   // Evolução diária — período independente
   useEffect(() => {
@@ -737,6 +823,123 @@ export default function Analise() {
               </div>
             </div>
           )}
+
+          {/* Planejado x Realizado */}
+          <div className="card card-pad">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>🎯 Planejado × Realizado</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--gray-500)', fontWeight: 600 }}>Período:</span>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={pvrIni} onChange={e => setPvrIni(e.target.value)} />
+                <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>até</span>
+                <input type="date" className="form-input" style={{ padding: '5px 8px', fontSize: 12, width: 140 }}
+                  value={pvrFim} onChange={e => setPvrFim(e.target.value)} />
+              </div>
+            </div>
+
+            {pvrLoading ? (
+              <div className="loading"><RefreshCw size={14} className="spin" /> Carregando...</div>
+            ) : pvr.length === 0 ? (
+              <div className="alert-banner info">
+                📋 Nenhum planejamento salvo neste período. Os planejamentos são salvos automaticamente ao exportar o PDF de Produção.
+              </div>
+            ) : (
+              <>
+                {/* Por categoria */}
+                <div style={{ marginBottom: 20 }}>
+                  <div className="card-title">Por categoria</div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Categoria</th>
+                          <th style={{ textAlign: 'center' }}>Planejado</th>
+                          <th style={{ textAlign: 'center' }}>Realizado</th>
+                          <th style={{ textAlign: 'center' }}>Desvio</th>
+                          <th style={{ minWidth: 120 }}>Barra</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pvrCat.map(c => {
+                          const cor = c.desvio === null ? 'var(--gray-400)'
+                            : c.desvio >= -5 ? 'var(--ok)'
+                            : c.desvio >= -20 ? 'var(--warning)'
+                            : 'var(--danger)'
+                          const pctPlan = 100
+                          const pctReal = c.plan > 0 ? Math.min(150, (c.real / c.plan) * 100) : 0
+                          return (
+                            <tr key={c.cat}>
+                              <td style={{ fontWeight: 700 }}>{c.cat}</td>
+                              <td style={{ textAlign: 'center', color: 'var(--gray-600)' }}>{fmt(c.plan)} un</td>
+                              <td style={{ textAlign: 'center', fontWeight: 700 }}>{fmt(c.real)} un</td>
+                              <td style={{ textAlign: 'center', fontWeight: 800, color: cor }}>
+                                {c.desvio === null ? '—' : `${c.desvio >= 0 ? '+' : ''}${c.desvio.toFixed(1)}%`}
+                              </td>
+                              <td>
+                                <div style={{ position: 'relative', height: 16, background: 'var(--gray-100)', borderRadius: 3, overflow: 'hidden' }}>
+                                  <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${pctPlan}%`, background: 'var(--purple-pale)', borderRadius: 3 }} />
+                                  <div style={{ position: 'absolute', left: 0, top: 2, height: 12, width: `${pctReal}%`, background: cor, borderRadius: 3, opacity: .85 }} />
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Por produto */}
+                <div>
+                  <div className="card-title">Por produto</div>
+                  <div style={{ overflowX: 'auto', maxHeight: 360, overflowY: 'auto' }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Produto</th>
+                          <th>Categoria</th>
+                          <th style={{ textAlign: 'center' }}>Planejado</th>
+                          <th style={{ textAlign: 'center' }}>Realizado</th>
+                          <th style={{ textAlign: 'center' }}>Desvio</th>
+                          <th style={{ textAlign: 'center' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pvr.map(p => {
+                          const cor = p.desvio === null ? 'neutral'
+                            : p.desvio >= -5 ? 'ok'
+                            : p.desvio >= -20 ? 'warning'
+                            : 'danger'
+                          const label = p.desvio === null ? '—'
+                            : p.desvio >= -5 ? '✅ OK'
+                            : p.desvio >= -20 ? '⚠️ Abaixo'
+                            : '🚨 Crítico'
+                          return (
+                            <tr key={p.id}>
+                              <td style={{ fontWeight: 600, fontSize: 13 }}>{p.nome}</td>
+                              <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>{p.categoria}</td>
+                              <td style={{ textAlign: 'center', color: 'var(--gray-600)' }}>{fmt(p.plan)}</td>
+                              <td style={{ textAlign: 'center', fontWeight: 700 }}>{fmt(p.real)}</td>
+                              <td style={{ textAlign: 'center', fontWeight: 800, color: `var(--${cor === 'ok' ? 'ok' : cor === 'warning' ? 'warning' : cor === 'danger' ? 'danger' : 'gray-400'})` }}>
+                                {p.desvio === null ? '—' : `${p.desvio >= 0 ? '+' : ''}${p.desvio.toFixed(1)}%`}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className={`pill ${cor}`}>{label}</span>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: 'var(--gray-400)' }}>
+                    ✅ OK = desvio dentro de 5% · ⚠️ Abaixo = até -20% · 🚨 Crítico = mais de -20% abaixo do planejado
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
 
           {/* Desperdício */}
           <div className="card card-pad">
