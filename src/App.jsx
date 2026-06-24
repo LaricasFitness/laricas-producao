@@ -3,29 +3,25 @@ import './App.css'
 import Login from './pages/Login'
 import Embalagens from './pages/Embalagens'
 import ProducaoHub from './pages/ProducaoHub'
-import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
 import Logistica from './pages/Logistica'
 import Admin from './pages/Admin'
 
 const ALL_PAGES = [
-  { id: 'embalagens',   label: 'Embalagens',  icon: '📦' },
-  { id: 'producao',     label: 'Produção',    icon: '📋' },
-  { id: 'logistica',    label: 'Logística',   icon: '🚚' },
-  { id: 'historico',    label: 'Histórico',   icon: '📁' },
-  { id: 'admin',        label: 'Admin',       icon: '⚙️' },
+  { id: 'embalagens', label: 'Embalagens', icon: '📦' },
+  { id: 'producao',   label: 'Produção',   icon: '📋' },
+  { id: 'logistica',  label: 'Logística',  icon: '🚚' },
+  { id: 'admin',      label: 'Admin',      icon: '⚙️' },
 ]
 
-// Abas antigas mapeadas para as novas
 const PERM_MAP = {
   dashboard: 'embalagens', pedidos: 'embalagens', compras: 'embalagens',
-  analise: 'producao', log: 'producao', planejamento: 'producao',
+  analise: 'producao', log: 'producao', planejamento: 'producao', historico: 'producao',
 }
 
 const TITLES = {
   embalagens: { title: 'Embalagens',         sub: 'Situação, pedidos à gráfica e compras' },
-  producao:   { title: 'Produção',           sub: 'Registro, planejamento, análise e log' },
+  producao:   { title: 'Produção',           sub: 'Registro, planejamento, análise, log e histórico' },
   logistica:  { title: 'Logística LALAMOVE', sub: 'Roteiros automáticos por zona + CSVs' },
-  historico:  { title: 'Histórico',          sub: 'Planejamentos anteriores' },
   admin:      { title: 'Administração',      sub: 'Embalagens, usuários e configurações' },
 }
 
@@ -93,7 +89,6 @@ export default function App() {
           {pageAtual === 'embalagens' && <Embalagens />}
           {pageAtual === 'producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
           {pageAtual === 'logistica'  && <Logistica csvInicial={csvLogistica} />}
-          {pageAtual === 'historico'  && <HistoricoPlanejamento />}
           {pageAtual === 'admin'      && <Admin />}
         </div>
       </div>
