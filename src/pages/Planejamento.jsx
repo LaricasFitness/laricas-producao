@@ -232,6 +232,8 @@ export default function Planejamento() {
   // diasDelivery[dataIso][sku] = qtd (só para o próximo dia)
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
+  // datas selecionadas para exibir (o usuário escolhe quais incluir)
+  const [datasAtivas, setDatasAtivas] = useState([])
 
   const fileRef = useRef()
 
@@ -247,12 +249,7 @@ export default function Planejamento() {
     setImportando(true)
     const reader = new FileReader()
     reader.onload = e => {
-      // Calcula amanhã no momento do import
-      const amanha = new Date()
-      amanha.setDate(amanha.getDate() + 1)
-      const amanhaIso = amanha.toISOString().slice(0, 10)
-
-      const parsed = parsearCSV(e.target.result, amanhaIso)
+      const parsed = parsearCSV(e.target.result, '')  // sem filtro de data
       const novosBling = {}
       for (const { sku, qtd, data } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
@@ -261,13 +258,20 @@ export default function Planejamento() {
       const datas = Object.keys(novosBling).sort()
       setDiasBling(novosBling)
       setDiasOrdenados(datas)
-      // Inicializa delivery zerado para o primeiro dia
+      // Por padrão, ativa todas as datas
+      setDatasAtivas(datas)
       if (datas.length) {
         setDiasDelivery({ [datas[0]]: {} })
       }
       setImportando(false)
     }
     reader.readAsText(file, 'UTF-8')
+  }
+
+  function toggleData(d) {
+    setDatasAtivas(prev =>
+      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort()
+    )
   }
 
   function setDel(sku, val) {
@@ -280,11 +284,12 @@ export default function Planejamento() {
   }
 
   function limpar() {
-    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([])
+    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([])
   }
 
-  const diaAtual = diasOrdenados[0]
-  const diasResto = diasOrdenados.slice(1)
+  const diasVisiveis = diasOrdenados.filter(d => datasAtivas.includes(d))
+  const diaAtual = diasVisiveis[0]
+  const diasResto = diasVisiveis.slice(1)
 
   // Monta dados do dia atual para PDF simples
   const itensDiaAtual = {}
@@ -327,7 +332,7 @@ export default function Planejamento() {
               <button className="btn btn-gold" onClick={() => gerarPDFProducao(diaAtual, itensDiaAtual, totalDiaAtual)}>
                 <FileText size={14} /> PDF Produção
               </button>
-              <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasOrdenados, diasBling, diasDelivery, embalagens, diaAtual)}>
+              <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual)}>
                 <FileText size={14} /> PDF Produção Completa
               </button>
             </div>
@@ -335,15 +340,21 @@ export default function Planejamento() {
         </div>
 
         {temDados && (
-          <div style={{ display: 'flex', gap: 20, marginTop: 14, flexWrap: 'wrap' }}>
-            {diasOrdenados.map((d, i) => (
-              <div key={d} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: i === 0 ? 'var(--purple)' : 'var(--gray-400)', textTransform: 'uppercase' }}>
-                  {i === 0 ? '🎯 Próxima produção' : `📅 ${headerDia(d)}`}
-                </div>
-                {i === 0 && <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--purple)' }}>{headerDia(d)}</div>}
-              </div>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)' }}>DATAS DO ARQUIVO:</span>
+            {diasOrdenados.map((d, i) => {
+              const ativa = datasAtivas.includes(d)
+              return (
+                <button key={d}
+                  className={`btn btn-sm ${ativa ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => toggleData(d)}
+                  style={{ fontSize: 12 }}
+                >
+                  {i === 0 && ativa ? '🎯 ' : ''}{headerDia(d)}
+                  {!ativa && <span style={{ marginLeft: 4, opacity: .6 }}>✕</span>}
+                </button>
+              )
+            })}
           </div>
         )}
 
