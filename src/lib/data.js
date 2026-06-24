@@ -30,18 +30,35 @@ export async function carregarTodasEmbalagens() {
   return data || []
 }
 
-// Média diária das últimas N semanas
-export async function calcularMedia(embalagemId, semanas = 8) {
-  const desde = new Date()
-  desde.setDate(desde.getDate() - semanas * 7)
+// Média diária ponderada: últimas 4 semanas valem 2x mais que as 4 anteriores
+export async function calcularMedia(embalagemId) {
+  const desde8s = new Date()
+  desde8s.setDate(desde8s.getDate() - 56)
+  const desde4s = new Date()
+  desde4s.setDate(desde4s.getDate() - 28)
+
   const { data } = await supabase
     .from('producao_diaria')
     .select('quantidade, data_producao')
     .eq('embalagem_id', embalagemId)
-    .gte('data_producao', desde.toISOString().slice(0, 10))
+    .gte('data_producao', desde8s.toISOString().slice(0, 10))
+
   if (!data?.length) return 0
-  const total = data.reduce((s, r) => s + r.quantidade, 0)
-  return total / (semanas * 7)
+
+  const corte4s = desde4s.toISOString().slice(0, 10)
+
+  // Separa as duas janelas
+  const recente   = data.filter(r => r.data_producao >= corte4s)
+  const anterior  = data.filter(r => r.data_producao <  corte4s)
+
+  const totalRecente  = recente.reduce((s, r) => s + r.quantidade, 0)
+  const totalAnterior = anterior.reduce((s, r) => s + r.quantidade, 0)
+
+  // Média diária ponderada: recente (28 dias) peso 2, anterior (28 dias) peso 1
+  // Equivale a: (totalRecente*2 + totalAnterior*1) / (28*2 + 28*1)
+  const mediaPonderada = (totalRecente * 2 + totalAnterior * 1) / (28 * 2 + 28 * 1)
+
+  return mediaPonderada
 }
 
 // Consumo semanal agrupado (últimas N semanas) para gráfico
@@ -76,24 +93,37 @@ export async function carregarStatusCompleto() {
   const result = []
 
   for (const emb of embs) {
-    const media8s = await calcularMedia(emb.id, 8)
-    const media4s = await calcularMedia(emb.id, 4) // últimas 4 semanas
+    // Média ponderada (8 semanas, últimas 4 com peso 2)
+    const mediaPonderada = await calcularMedia(emb.id)
+
+    // Média simples das últimas 4 semanas para calcular tendência
+    const desde4s = new Date()
+    desde4s.setDate(desde4s.getDate() - 28)
+    const { data: dados4s } = await supabase
+      .from('producao_diaria')
+      .select('quantidade')
+      .eq('embalagem_id', emb.id)
+      .gte('data_producao', desde4s.toISOString().slice(0, 10))
+    const media4s = dados4s?.length
+      ? dados4s.reduce((s, r) => s + r.quantidade, 0) / 28
+      : 0
 
     const dias = emb.dias_producao || diasPorCategoria(emb.categoria)
     const margem = emb.margem_seguranca || 0.10
     const estoque = emb.estoque_atual || 0
 
-    const minimoIdeal = Math.ceil(media8s * dias * (1 + margem))
-    const diasRestantes = media8s > 0 ? Math.floor(estoque / media8s) : null
+    const minimoIdeal = Math.ceil(mediaPonderada * dias * (1 + margem))
+    const diasRestantes = mediaPonderada > 0 ? Math.floor(estoque / mediaPonderada) : null
 
-    // Sugestão de pedido
     const falta = Math.max(0, minimoIdeal - estoque)
     const minG = emb.unidade_minima_grafica || 100
     const qtdPedido = falta > 0 ? Math.ceil(falta / minG) * minG : 0
 
-    // Tendência (4s vs 8s)
-    const tendencia = media4s > media8s * 1.1 ? 'up'
-      : media4s < media8s * 0.9 ? 'down' : 'flat'
+    // Tendência: compara média das últimas 4 semanas vs média ponderada geral
+    const tendencia = mediaPonderada > 0
+      ? media4s > mediaPonderada * 1.1 ? 'up'
+        : media4s < mediaPonderada * 0.9 ? 'down' : 'flat'
+      : 'flat'
 
     const status = estoque === 0 ? 'critico'
       : diasRestantes !== null && diasRestantes <= dias * 0.5 ? 'critico'
@@ -103,7 +133,7 @@ export async function carregarStatusCompleto() {
 
     result.push({
       ...emb,
-      media: Math.round(media8s * 10) / 10,
+      media: Math.round(mediaPonderada * 10) / 10,
       media4s: Math.round(media4s * 10) / 10,
       minimoIdeal,
       diasRestantes,
