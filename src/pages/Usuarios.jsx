@@ -4,9 +4,8 @@ import { Plus, Pencil, RefreshCw, Save, Key } from 'lucide-react'
 
 const TODAS_ABAS = [
   { id: 'embalagens', label: '📦 Embalagens (Situação + Pedidos + Compras)' },
-  { id: 'producao',   label: '📋 Produção (Registro + Planejamento + Análise + Log)' },
+  { id: 'producao',   label: '📋 Produção (Registro + Planejamento + Análise + Log + Histórico)' },
   { id: 'logistica',  label: '🚚 Logística' },
-  { id: 'historico',  label: '📁 Histórico' },
   { id: 'admin',      label: '⚙️ Admin' },
 ]
 
