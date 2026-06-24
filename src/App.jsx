@@ -1,64 +1,67 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import './App.css'
 import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
+import Embalagens from './pages/Embalagens'
 import Analise from './pages/Analise'
 import Log from './pages/Log'
 import Producao from './pages/Producao'
-import Pedidos from './pages/Pedidos'
-import Compras from './pages/Compras'
-import Admin from './pages/Admin'
 import Planejamento from './pages/Planejamento'
 import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
 import Logistica from './pages/Logistica'
+import Admin from './pages/Admin'
 
 const ALL_PAGES = [
-  { id: 'dashboard',    label: 'Estoque',       icon: '📦' },
+  { id: 'embalagens',   label: 'Embalagens',    icon: '📦' },
   { id: 'analise',      label: 'Análise',        icon: '📈' },
   { id: 'log',          label: 'Log',            icon: '📅' },
   { id: 'producao',     label: 'Produção',       icon: '📋' },
   { id: 'planejamento', label: 'Planejamento',   icon: '🗓️' },
   { id: 'logistica',    label: 'Logística',      icon: '🚚' },
   { id: 'historico',    label: 'Histórico',      icon: '📁' },
-  { id: 'pedidos',      label: 'Pedidos',        icon: '🛒' },
-  { id: 'compras',      label: 'Compras',        icon: '💰' },
   { id: 'admin',        label: 'Admin',          icon: '⚙️' },
 ]
 
+// Mapeamento para permissões — dashboard/pedidos/compras agora são 'embalagens'
+const PERM_MAP = {
+  dashboard: 'embalagens', pedidos: 'embalagens', compras: 'embalagens',
+}
+
 const TITLES = {
-  dashboard:    { title: 'Estoque de Embalagens',       sub: 'Alertas, cobertura e sugestões de pedido' },
-  analise:      { title: 'Análise de Produção',         sub: 'Volume, tendências, ranking e planejado x realizado' },
-  log:          { title: 'Log de Produção',             sub: 'Calendário de registros e dias sem preenchimento' },
-  producao:     { title: 'Registro de Produção',        sub: 'Preenchimento diário pela equipe' },
-  planejamento: { title: 'Planejamento do Dia',         sub: 'Importa Bling + delivery → PDF para a equipe' },
-  logistica:    { title: 'Logística LALAMOVE',          sub: 'Roteiros automáticos por zona + CSVs de importação' },
-  historico:    { title: 'Histórico de Planejamentos',  sub: 'Consulte e reimprima planejamentos anteriores' },
-  pedidos:      { title: 'Pedidos à Gráfica',           sub: 'Histórico, geração de PDF e conferência' },
-  compras:      { title: 'Compras de Embalagens',       sub: 'Recebimentos, estoque e custo com a gráfica' },
-  admin:        { title: 'Administração',               sub: 'Embalagens, usuários e configurações' },
+  embalagens:   { title: 'Embalagens',              sub: 'Situação do estoque, pedidos à gráfica e compras' },
+  analise:      { title: 'Análise de Produção',     sub: 'Volume, tendências, ranking e planejado x realizado' },
+  log:          { title: 'Log de Produção',          sub: 'Calendário de registros e dias sem preenchimento' },
+  producao:     { title: 'Registro de Produção',    sub: 'Preenchimento diário pela equipe' },
+  planejamento: { title: 'Planejamento do Dia',     sub: 'Importa Bling + delivery → PDF para a equipe' },
+  logistica:    { title: 'Logística LALAMOVE',      sub: 'Roteiros automáticos por zona + CSVs de importação' },
+  historico:    { title: 'Histórico de Planejamentos', sub: 'Consulte e reimprima planejamentos anteriores' },
+  admin:        { title: 'Administração',           sub: 'Embalagens, usuários e configurações' },
+}
+
+function temPermissao(abas, pageId) {
+  // Aceita a aba direta ou os antigos IDs mapeados
+  return abas.includes(pageId) ||
+    abas.includes(PERM_MAP[pageId]) ||
+    Object.entries(PERM_MAP).some(([old, novo]) => novo === pageId && abas.includes(old))
 }
 
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
   })
-  const [page, setPage] = useState('dashboard')
-  const [novoPedidoFlag, setNovoPedidoFlag] = useState(false)
+  const [page, setPage] = useState('embalagens')
   const [csvLogistica, setCsvLogistica] = useState(null)
 
-  // Se não tem sessão, mostra login
-  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('dashboard') }} />
+  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('embalagens') }} />
 
   const abas = usuario.abas_permitidas || []
-  const pages = ALL_PAGES.filter(p => abas.includes(p.id))
 
-  // Se a página atual não é permitida, vai para a primeira disponível
-  const pageAtual = abas.includes(page) ? page : (pages[0]?.id || 'producao')
-
+  // Filtra páginas que o usuário tem acesso
+  const pages = ALL_PAGES.filter(p => temPermissao(abas, p.id))
+  const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
   const { title, sub } = TITLES[pageAtual] || {}
 
   function irLogistica(csvTexto) {
-    if (!abas.includes('logistica')) return
+    if (!temPermissao(abas, 'logistica')) return
     setCsvLogistica(csvTexto)
     setPage('logistica')
   }
@@ -80,8 +83,7 @@ export default function App() {
           </button>
         ))}
         <div className="sidebar-spacer" />
-        {/* Sair */}
-        <button className="nav-btn" onClick={sair} title="Sair" style={{ marginTop: 'auto' }}>
+        <button className="nav-btn" onClick={sair} title="Sair">
           <span style={{ fontSize: 16 }}>↩️</span>
           <span className="nav-label">Sair</span>
         </button>
@@ -94,12 +96,8 @@ export default function App() {
             <div className="topbar-sub">{sub}</div>
           </div>
           <div className="topbar-right">
-            <span style={{ fontSize: 12, color: 'var(--gray-500)', fontWeight: 600 }}>
-              {usuario.nome}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--gray-400)', marginLeft: 4 }}>
-              · {usuario.perfil}
-            </span>
+            <span style={{ fontSize: 12, color: 'var(--gray-500)', fontWeight: 600 }}>{usuario.nome}</span>
+            <span style={{ fontSize: 11, color: 'var(--gray-400)', marginLeft: 4 }}>· {usuario.perfil}</span>
             <span style={{ fontSize: 12, color: 'var(--gray-400)', marginLeft: 12 }}>
               {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
             </span>
@@ -107,15 +105,13 @@ export default function App() {
         </header>
 
         <div className="page">
-          {pageAtual === 'dashboard'    && <Dashboard onNovoPedido={() => { setPage('pedidos'); setNovoPedidoFlag(true) }} />}
+          {pageAtual === 'embalagens'   && <Embalagens />}
           {pageAtual === 'analise'      && <Analise />}
           {pageAtual === 'log'          && <Log />}
           {pageAtual === 'producao'     && <Producao />}
           {pageAtual === 'planejamento' && <Planejamento onIrLogistica={irLogistica} />}
           {pageAtual === 'logistica'    && <Logistica csvInicial={csvLogistica} />}
           {pageAtual === 'historico'    && <HistoricoPlanejamento />}
-          {pageAtual === 'pedidos'      && <Pedidos abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
-          {pageAtual === 'compras'      && <Compras />}
           {pageAtual === 'admin'        && <Admin />}
         </div>
       </div>
