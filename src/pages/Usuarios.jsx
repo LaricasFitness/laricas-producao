@@ -3,14 +3,11 @@ import { supabase } from '../supabase'
 import { Plus, Pencil, RefreshCw, Save, Key } from 'lucide-react'
 
 const TODAS_ABAS = [
-  { id: 'embalagens',   label: '📦 Embalagens (Situação + Pedidos + Compras)' },
-  { id: 'analise',      label: '📈 Análise' },
-  { id: 'log',          label: '📅 Log' },
-  { id: 'producao',     label: '📋 Produção' },
-  { id: 'planejamento', label: '🗓️ Planejamento' },
-  { id: 'logistica',    label: '🚚 Logística' },
-  { id: 'historico',    label: '📁 Histórico' },
-  { id: 'admin',        label: '⚙️ Admin' },
+  { id: 'embalagens', label: '📦 Embalagens (Situação + Pedidos + Compras)' },
+  { id: 'producao',   label: '📋 Produção (Registro + Planejamento + Análise + Log)' },
+  { id: 'logistica',  label: '🚚 Logística' },
+  { id: 'historico',  label: '📁 Histórico' },
+  { id: 'admin',      label: '⚙️ Admin' },
 ]
 
 async function sha256(text) {
