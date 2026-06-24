@@ -2,43 +2,34 @@ import { useState } from 'react'
 import './App.css'
 import Login from './pages/Login'
 import Embalagens from './pages/Embalagens'
-import Analise from './pages/Analise'
-import Log from './pages/Log'
-import Producao from './pages/Producao'
-import Planejamento from './pages/Planejamento'
+import ProducaoHub from './pages/ProducaoHub'
 import HistoricoPlanejamento from './pages/HistoricoPlanejamento'
 import Logistica from './pages/Logistica'
 import Admin from './pages/Admin'
 
 const ALL_PAGES = [
-  { id: 'embalagens',   label: 'Embalagens',    icon: '📦' },
-  { id: 'analise',      label: 'Análise',        icon: '📈' },
-  { id: 'log',          label: 'Log',            icon: '📅' },
-  { id: 'producao',     label: 'Produção',       icon: '📋' },
-  { id: 'planejamento', label: 'Planejamento',   icon: '🗓️' },
-  { id: 'logistica',    label: 'Logística',      icon: '🚚' },
-  { id: 'historico',    label: 'Histórico',      icon: '📁' },
-  { id: 'admin',        label: 'Admin',          icon: '⚙️' },
+  { id: 'embalagens',   label: 'Embalagens',  icon: '📦' },
+  { id: 'producao',     label: 'Produção',    icon: '📋' },
+  { id: 'logistica',    label: 'Logística',   icon: '🚚' },
+  { id: 'historico',    label: 'Histórico',   icon: '📁' },
+  { id: 'admin',        label: 'Admin',       icon: '⚙️' },
 ]
 
-// Mapeamento para permissões — dashboard/pedidos/compras agora são 'embalagens'
+// Abas antigas mapeadas para as novas
 const PERM_MAP = {
   dashboard: 'embalagens', pedidos: 'embalagens', compras: 'embalagens',
+  analise: 'producao', log: 'producao', planejamento: 'producao',
 }
 
 const TITLES = {
-  embalagens:   { title: 'Embalagens',              sub: 'Situação do estoque, pedidos à gráfica e compras' },
-  analise:      { title: 'Análise de Produção',     sub: 'Volume, tendências, ranking e planejado x realizado' },
-  log:          { title: 'Log de Produção',          sub: 'Calendário de registros e dias sem preenchimento' },
-  producao:     { title: 'Registro de Produção',    sub: 'Preenchimento diário pela equipe' },
-  planejamento: { title: 'Planejamento do Dia',     sub: 'Importa Bling + delivery → PDF para a equipe' },
-  logistica:    { title: 'Logística LALAMOVE',      sub: 'Roteiros automáticos por zona + CSVs de importação' },
-  historico:    { title: 'Histórico de Planejamentos', sub: 'Consulte e reimprima planejamentos anteriores' },
-  admin:        { title: 'Administração',           sub: 'Embalagens, usuários e configurações' },
+  embalagens: { title: 'Embalagens',         sub: 'Situação, pedidos à gráfica e compras' },
+  producao:   { title: 'Produção',           sub: 'Registro, planejamento, análise e log' },
+  logistica:  { title: 'Logística LALAMOVE', sub: 'Roteiros automáticos por zona + CSVs' },
+  historico:  { title: 'Histórico',          sub: 'Planejamentos anteriores' },
+  admin:      { title: 'Administração',      sub: 'Embalagens, usuários e configurações' },
 }
 
 function temPermissao(abas, pageId) {
-  // Aceita a aba direta ou os antigos IDs mapeados
   return abas.includes(pageId) ||
     abas.includes(PERM_MAP[pageId]) ||
     Object.entries(PERM_MAP).some(([old, novo]) => novo === pageId && abas.includes(old))
@@ -54,22 +45,16 @@ export default function App() {
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('embalagens') }} />
 
   const abas = usuario.abas_permitidas || []
-
-  // Filtra páginas que o usuário tem acesso
   const pages = ALL_PAGES.filter(p => temPermissao(abas, p.id))
   const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
   const { title, sub } = TITLES[pageAtual] || {}
 
   function irLogistica(csvTexto) {
     if (!temPermissao(abas, 'logistica')) return
-    setCsvLogistica(csvTexto)
-    setPage('logistica')
+    setCsvLogistica(csvTexto); setPage('logistica')
   }
 
-  function sair() {
-    sessionStorage.removeItem('usuario')
-    setUsuario(null)
-  }
+  function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
 
   return (
     <div className="app">
@@ -105,14 +90,11 @@ export default function App() {
         </header>
 
         <div className="page">
-          {pageAtual === 'embalagens'   && <Embalagens />}
-          {pageAtual === 'analise'      && <Analise />}
-          {pageAtual === 'log'          && <Log />}
-          {pageAtual === 'producao'     && <Producao />}
-          {pageAtual === 'planejamento' && <Planejamento onIrLogistica={irLogistica} />}
-          {pageAtual === 'logistica'    && <Logistica csvInicial={csvLogistica} />}
-          {pageAtual === 'historico'    && <HistoricoPlanejamento />}
-          {pageAtual === 'admin'        && <Admin />}
+          {pageAtual === 'embalagens' && <Embalagens />}
+          {pageAtual === 'producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
+          {pageAtual === 'logistica'  && <Logistica csvInicial={csvLogistica} />}
+          {pageAtual === 'historico'  && <HistoricoPlanejamento />}
+          {pageAtual === 'admin'      && <Admin />}
         </div>
       </div>
     </div>
