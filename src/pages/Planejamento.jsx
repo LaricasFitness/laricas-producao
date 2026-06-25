@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { Upload, FileText, RefreshCw, Trash2 } from 'lucide-react'
+import { registrarAcao } from '../lib/log'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -268,6 +269,15 @@ export default function Planejamento({ onIrLogistica }) {
         }
       }
       if (itensParaSalvar.length) await supabase.from('planejamento_itens').insert(itensParaSalvar)
+
+      await registrarAcao({
+        acao: 'planejamento_salvo',
+        descricao: `Planejamento de ${diaAtual} salvo — ${totalDiaAtual} unidades`,
+        tabela: 'planejamentos',
+        registroId: plan.id,
+        dadosAnteriores: { ids_itens: itensParaSalvar.map(i => i.embalagem_id) },
+        dadosNovos: { data_producao: diaAtual, total: totalDiaAtual },
+      })
     } catch(e) { console.error('Erro ao salvar planejamento:', e) }
   }
 
