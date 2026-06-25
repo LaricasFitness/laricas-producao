@@ -42,7 +42,11 @@ export async function reverterAcao(logEntry) {
       if (ids.length) await supabase.from('producao_diaria').delete().in('id', ids)
     }
     else if (acao === 'ajuste_estoque') {
-      await supabase.from('embalagens').update({ estoque_atual: dados_anteriores.estoque_atual }).eq('id', registro_id)
+      // Deleta o inventário mais recente para essa embalagem (reverte o ponto de referência)
+      const { data: invs } = await supabase.from('inventarios')
+        .select('id').eq('embalagem_id', registro_id)
+        .order('criado_em', { ascending: false }).limit(1)
+      if (invs?.length) await supabase.from('inventarios').delete().eq('id', invs[0].id)
     }
     else if (acao === 'editar_embalagem') {
       await supabase.from('embalagens').update(dados_anteriores).eq('id', registro_id)
