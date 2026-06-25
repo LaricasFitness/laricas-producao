@@ -1,12 +1,122 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { registrarAcao } from '../lib/log'
-import { Plus, RefreshCw, Save, Package } from 'lucide-react'
+import { Plus, RefreshCw, Save, Package, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 function fmt(n) { return (n || 0).toLocaleString('pt-BR') }
 function fmtR(n) { return (n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
+
+function ModalEditarCompra({ recebimento, embalagens, onClose, onSaved }) {
+  const [nf, setNf] = useState(recebimento.numero_nf || '')
+  const [dataRec, setDataRec] = useState(recebimento.data_recebimento || new Date().toISOString().slice(0, 10))
+  const [obs, setObs] = useState(recebimento.observacao || '')
+  const [itens, setItens] = useState(
+    (recebimento.recebimento_itens || []).map(i => ({
+      id: i.id,
+      embalagem_id: i.embalagem_id,
+      quantidade: String(i.quantidade_recebida),
+      valor_unitario: i.valor_unitario ? String(i.valor_unitario) : '',
+    }))
+  )
+  const [saving, setSaving] = useState(false)
+
+  function addItem() { setItens(prev => [...prev, { id: null, embalagem_id: '', quantidade: '', valor_unitario: '' }]) }
+  function updItem(i, k, v) { setItens(prev => prev.map((it, idx) => idx === i ? { ...it, [k]: v } : it)) }
+  function remItem(i) { setItens(prev => prev.filter((_, idx) => idx !== i)) }
+
+  const totalGeral = itens.reduce((s, it) => {
+    return s + (parseFloat(it.quantidade) || 0) * (parseFloat(it.valor_unitario) || 0)
+  }, 0)
+
+  async function salvar() {
+    const itensFiltrados = itens.filter(it => it.embalagem_id && it.quantidade > 0)
+    if (!itensFiltrados.length) { alert('Adicione pelo menos um item.'); return }
+    setSaving(true)
+    try {
+      // Atualiza cabeçalho
+      await supabase.from('recebimentos').update({
+        numero_nf: nf || null,
+        data_recebimento: dataRec,
+        observacao: obs || null,
+        valor_total: totalGeral || null,
+      }).eq('id', recebimento.id)
+
+      // Deleta itens antigos e reinssere
+      await supabase.from('recebimento_itens').delete().eq('recebimento_id', recebimento.id)
+      await supabase.from('recebimento_itens').insert(
+        itensFiltrados.map(it => ({
+          recebimento_id: recebimento.id,
+          embalagem_id: it.embalagem_id,
+          quantidade_recebida: parseInt(it.quantidade),
+          valor_unitario: parseFloat(it.valor_unitario) || null,
+        }))
+      )
+
+      onSaved()
+    } catch(e) { alert('Erro: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 580 }}>
+        <div className="modal-header">
+          <div className="modal-title">✏️ Editar recebimento</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Data de recebimento</label>
+              <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Número da NF</label>
+              <input className="form-input" placeholder="NF-001234" value={nf} onChange={e => setNf(e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
+              Itens recebidos
+            </div>
+            {itens.map((it, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 110px auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
+                  <option value="">Selecione...</option>
+                  {embalagens.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                </select>
+                <input type="number" min={0} className="form-input" placeholder="Qtd" value={it.quantidade} onChange={e => updItem(i, 'quantidade', e.target.value)} />
+                <input type="number" min={0} step={0.01} className="form-input" placeholder="R$ unit." value={it.valor_unitario} onChange={e => updItem(i, 'valor_unitario', e.target.value)} />
+                <button className="btn btn-ghost btn-sm" onClick={() => remItem(i)} style={{ color: 'var(--danger)', padding: '7px' }}>✕</button>
+              </div>
+            ))}
+            <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12} /> Adicionar item</button>
+          </div>
+
+          {totalGeral > 0 && (
+            <div style={{ background: 'var(--purple-pale)', borderRadius: 8, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+              <span>Total</span>
+              <span style={{ color: 'var(--purple)', fontSize: 16 }}>{fmtR(totalGeral)}</span>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+            {saving ? <RefreshCw size={14} className="spin" /> : <><Save size={14} /> Salvar alterações</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
   const [pedidoId, setPedidoId] = useState('')
@@ -204,6 +314,7 @@ export default function Compras() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [expandido, setExpandido] = useState(null)
+  const [editando, setEditando] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -303,6 +414,7 @@ export default function Compras() {
                   <th>Total un.</th>
                   <th>Valor pago</th>
                   <th>Observação</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -321,6 +433,11 @@ export default function Compras() {
                           {r.valor_total ? fmtR(r.valor_total) : '—'}
                         </td>
                         <td style={{ color: 'var(--gray-500)', fontSize: 12 }}>{r.observacao || '—'}</td>
+                        <td onClick={e => e.stopPropagation()}>
+                          <button className="btn btn-ghost btn-xs" onClick={() => setEditando(r)} title="Editar">
+                            <Pencil size={12} />
+                          </button>
+                        </td>
                       </tr>
                       {exp && (
                         <tr key={r.id + '-exp'}>
@@ -368,6 +485,14 @@ export default function Compras() {
           embalagens={embalagens}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load() }}
+        />
+      )}
+      {editando && (
+        <ModalEditarCompra
+          recebimento={editando}
+          embalagens={embalagens}
+          onClose={() => setEditando(null)}
+          onSaved={() => { setEditando(null); load() }}
         />
       )}
     </>
