@@ -228,12 +228,7 @@ export default function Producao() {
 
       if (fase1.length > 0) {
         const { data: inseridos } = await supabase.from('producao_diaria').insert(fase1).select()
-        for (const r of fase1) {
-          const emb = embalagens.find(e => e.id === r.embalagem_id)
-          const novo = Math.max(0, (emb.estoque_atual || 0) - r.quantidade)
-          await supabase.from('embalagens').update({ estoque_atual: novo, atualizado_em: new Date().toISOString() }).eq('id', r.embalagem_id)
-        }
-        // Loga como lote
+        // Não atualiza estoque_atual diretamente — calculado cronologicamente
         const nomes = fase1.map(r => { const e = embalagens.find(x => x.id === r.embalagem_id); return `${e?.nome}: ${r.quantidade}` }).join(', ')
         const ids = (inseridos || []).map(r => r.id)
         await registrarAcao({
