@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { registrarAcao } from '../lib/log'
 import { Plus, RefreshCw, Save, Package } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -75,6 +76,16 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
       if (pedidoId) {
         await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
       }
+
+      // Log
+      await registrarAcao({
+        acao: 'recebimento',
+        descricao: `Recebimento de ${itensFiltrados.length} tipo(s) de embalagem${nf ? ` — NF ${nf}` : ''}${totalGeral ? ` — R$ ${totalGeral.toFixed(2)}` : ''}`,
+        tabela: 'recebimentos',
+        registroId: rec.id,
+        dadosAnteriores: { itens: itensFiltrados.map(it => ({ embalagem_id: it.embalagem_id, quantidade_recebida: parseInt(it.quantidade) })) },
+        dadosNovos: { numero_nf: nf, valor_total: totalGeral },
+      })
 
       onSaved()
     } catch(e) { alert('Erro: ' + e.message) }
