@@ -166,20 +166,30 @@ function ModalAjuste({ emb, onClose, onSaved }) {
     if (isNaN(n) || n < 0) { alert('Quantidade inválida.'); return }
     setSaving(true)
     const anterior = emb.estoque_atual || 0
-    const novo = tipo === 'entrada' ? anterior + n : n
-    await supabase.from('embalagens').update({ estoque_atual: novo, atualizado_em: new Date().toISOString() }).eq('id', emb.id)
-    if (tipo === 'entrada') {
-      await supabase.from('entradas_embalagem').insert({ embalagem_id: emb.id, quantidade: n, observacao: obs || null })
-    }
+
+    // Calcula o valor absoluto do novo estoque
+    const novoEstoque = tipo === 'entrada' ? anterior + n : n
+
+    // Salva como inventário (ponto de referência datado)
+    const hoje = new Date().toISOString().slice(0, 10)
+    const u = JSON.parse(sessionStorage.getItem('usuario') || '{}')
+    await supabase.from('inventarios').insert({
+      embalagem_id: emb.id,
+      quantidade: novoEstoque,
+      data_inventario: hoje,
+      observacao: obs || (tipo === 'entrada' ? `Entrada manual de ${n} un` : `Ajuste de estoque para ${n} un`),
+      registrado_por: u.nome || 'Admin',
+    })
+
     await registrarAcao({
       acao: 'ajuste_estoque',
       descricao: tipo === 'entrada'
-        ? `Entrada de ${n} un em "${emb.nome}" (${anterior} → ${novo})`
-        : `Estoque de "${emb.nome}" ajustado para ${novo} un (era ${anterior})`,
-      tabela: 'embalagens',
+        ? `Entrada de ${n} un em "${emb.nome}" (${anterior} → ${novoEstoque})`
+        : `Estoque de "${emb.nome}" ajustado para ${novoEstoque} un (era ${anterior})`,
+      tabela: 'inventarios',
       registroId: emb.id,
       dadosAnteriores: { estoque_atual: anterior },
-      dadosNovos: { estoque_atual: novo },
+      dadosNovos: { estoque_atual: novoEstoque },
     })
     onSaved()
     setSaving(false)
