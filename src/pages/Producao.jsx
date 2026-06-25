@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { carregarEmbalagens } from '../lib/data'
+import { registrarAcao } from '../lib/log'
 import { Save, RefreshCw, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-react'
 
 // Itens fixos das fases internas
@@ -226,12 +227,22 @@ export default function Producao() {
         .map(e => ({ embalagem_id: e.id, quantidade: parseInt(qtdsFase1[e.id]), data_producao: dataStr, registrado_por: registradoPor }))
 
       if (fase1.length > 0) {
-        await supabase.from('producao_diaria').insert(fase1)
+        const { data: inseridos } = await supabase.from('producao_diaria').insert(fase1).select()
         for (const r of fase1) {
           const emb = embalagens.find(e => e.id === r.embalagem_id)
           const novo = Math.max(0, (emb.estoque_atual || 0) - r.quantidade)
           await supabase.from('embalagens').update({ estoque_atual: novo, atualizado_em: new Date().toISOString() }).eq('id', r.embalagem_id)
         }
+        // Loga como lote
+        const nomes = fase1.map(r => { const e = embalagens.find(x => x.id === r.embalagem_id); return `${e?.nome}: ${r.quantidade}` }).join(', ')
+        const ids = (inseridos || []).map(r => r.id)
+        await registrarAcao({
+          acao: 'registro_producao_lote',
+          descricao: `Produção de ${dataStr} — ${fase1.length} itens: ${nomes}`,
+          tabela: 'producao_diaria',
+          dadosAnteriores: { ids },
+          dadosNovos: { fase1 },
+        })
       }
 
       // Fases internas (2, 3, 4, 5)
