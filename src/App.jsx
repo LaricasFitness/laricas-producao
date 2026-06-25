@@ -4,13 +4,15 @@ import Login from './pages/Login'
 import Embalagens from './pages/Embalagens'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
+import Financeiro from './pages/Financeiro'
 import Admin from './pages/Admin'
 
 const ALL_PAGES = [
-  { id: 'embalagens', label: 'Embalagens', icon: '📦' },
-  { id: 'producao',   label: 'Produção',   icon: '📋' },
-  { id: 'logistica',  label: 'Logística',  icon: '🚚' },
-  { id: 'admin',      label: 'Admin',      icon: '⚙️' },
+  { id: 'embalagens',  label: 'Embalagens',  icon: '📦' },
+  { id: 'producao',    label: 'Produção',    icon: '📋' },
+  { id: 'logistica',   label: 'Logística',   icon: '🚚' },
+  { id: 'financeiro',  label: 'Financeiro',  icon: '💰' },
+  { id: 'admin',       label: 'Admin',       icon: '⚙️' },
 ]
 
 const PERM_MAP = {
@@ -19,10 +21,11 @@ const PERM_MAP = {
 }
 
 const TITLES = {
-  embalagens: { title:'Embalagens',         sub:'Situação, pedidos à gráfica e compras' },
-  producao:   { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
-  logistica:  { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
-  admin:      { title:'Administração',      sub:'Embalagens, usuários e configurações' },
+  embalagens:  { title:'Embalagens',         sub:'Situação, pedidos à gráfica e compras' },
+  producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
+  logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
+  financeiro:  { title:'Financeiro',         sub:'Contas a receber, a pagar, fluxo de caixa e DRE' },
+  admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
 }
 
 function temPermissao(abas, pageId) {
@@ -45,7 +48,7 @@ export default function App() {
   const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
   const { title, sub } = TITLES[pageAtual] || {}
 
-  function irLogistica(csv) { setCsvLogistica(csv); setPage('logistica') }
+  function irLogistica(csv) { if (!temPermissao(abas,'logistica')) return; setCsvLogistica(csv); setPage('logistica') }
   function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
 
   return (
@@ -83,6 +86,7 @@ export default function App() {
           {pageAtual==='embalagens' && <Embalagens />}
           {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
+          {pageAtual==='financeiro' && <Financeiro />}
           {pageAtual==='admin'      && <Admin />}
         </div>
       </div>
