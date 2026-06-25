@@ -4,6 +4,7 @@ import Planejamento from './Planejamento'
 import Analise from './Analise'
 import Log from './Log'
 import HistoricoPlanejamento from './HistoricoPlanejamento'
+import LogGeral from './LogGeral'
 
 export default function ProducaoHub({ onIrLogistica }) {
   const [sub, setSub] = useState('registro')
@@ -26,6 +27,9 @@ export default function ProducaoHub({ onIrLogistica }) {
         <button className={`tab${sub === 'historico' ? ' active' : ''}`} onClick={() => setSub('historico')}>
           📁 Histórico
         </button>
+        <button className={`tab${sub === 'acoes' ? ' active' : ''}`} onClick={() => setSub('acoes')}>
+          🕓 Minhas ações
+        </button>
       </div>
 
       {sub === 'registro'     && <RegistroProducao />}
@@ -33,6 +37,7 @@ export default function ProducaoHub({ onIrLogistica }) {
       {sub === 'analise'      && <Analise />}
       {sub === 'log'          && <Log />}
       {sub === 'historico'    && <HistoricoPlanejamento />}
+      {sub === 'acoes'        && <div className="card card-pad"><LogGeral /></div>}
     </>
   )
 }
