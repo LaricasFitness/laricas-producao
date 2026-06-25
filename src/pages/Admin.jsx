@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { diasPorCategoria } from '../lib/data'
+import { registrarAcao } from '../lib/log'
 import { Plus, Pencil, Trash2, RefreshCw, Save } from 'lucide-react'
 import Usuarios from './Usuarios'
 
@@ -50,6 +51,16 @@ function ModalEmb({ emb, onClose, onSaved }) {
       ? await supabase.from('embalagens').insert(payload)
       : await supabase.from('embalagens').update(payload).eq('id', emb.id)
     if (error) { setErr(error.message); setSaving(false); return }
+    if (!isNew) {
+      await registrarAcao({
+        acao: 'editar_embalagem',
+        descricao: `Editou embalagem "${emb.nome}" (${emb.codigo})`,
+        tabela: 'embalagens',
+        registroId: emb.id,
+        dadosAnteriores: { nome: emb.nome, codigo: emb.codigo, categoria: emb.categoria, dias_producao: emb.dias_producao, margem_seguranca: emb.margem_seguranca },
+        dadosNovos: payload,
+      })
+    }
     onSaved()
   }
 
@@ -154,11 +165,22 @@ function ModalAjuste({ emb, onClose, onSaved }) {
     const n = parseInt(qtd)
     if (isNaN(n) || n < 0) { alert('Quantidade inválida.'); return }
     setSaving(true)
-    const novo = tipo === 'entrada' ? (emb.estoque_atual || 0) + n : n
+    const anterior = emb.estoque_atual || 0
+    const novo = tipo === 'entrada' ? anterior + n : n
     await supabase.from('embalagens').update({ estoque_atual: novo, atualizado_em: new Date().toISOString() }).eq('id', emb.id)
     if (tipo === 'entrada') {
       await supabase.from('entradas_embalagem').insert({ embalagem_id: emb.id, quantidade: n, observacao: obs || null })
     }
+    await registrarAcao({
+      acao: 'ajuste_estoque',
+      descricao: tipo === 'entrada'
+        ? `Entrada de ${n} un em "${emb.nome}" (${anterior} → ${novo})`
+        : `Estoque de "${emb.nome}" ajustado para ${novo} un (era ${anterior})`,
+      tabela: 'embalagens',
+      registroId: emb.id,
+      dadosAnteriores: { estoque_atual: anterior },
+      dadosNovos: { estoque_atual: novo },
+    })
     onSaved()
     setSaving(false)
   }
