@@ -435,3 +435,32 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
 .compra-stat { display: flex; flex-direction: column; gap: 2px; }
 .compra-stat-label { font-size: 11px; color: var(--gray-500); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .compra-stat-value { font-size: 18px; font-weight: 800; color: var(--purple-dark); }
+
+/* ── TABS ── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--gray-100);
+  border-radius: var(--radius);
+  padding: 4px;
+  flex-wrap: wrap;
+}
+.tab {
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-500);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.tab:hover { background: var(--white); color: var(--gray-800); }
+.tab.active { background: var(--white); color: var(--purple); font-weight: 800; box-shadow: var(--shadow-sm); }
+
+@media (max-width: 768px) {
+  .tabs { gap: 2px; }
+  .tab { padding: 6px 10px; font-size: 12px; }
+}
