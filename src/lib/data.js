@@ -87,39 +87,89 @@ export async function consumoSemanal(embalagemId, semanas = 8) {
     .map(([semana, total]) => ({ semana, total }))
 }
 
-// Status completo de todas as embalagens
+// Calcula estoque cronologicamente:
+// pega o inventário mais recente como base, soma entradas depois, subtrai produções depois
+export async function calcularEstoqueCronologico(embalagemId, dataRef) {
+  // 1. Busca o inventário mais recente (ou a referência da embalagem)
+  const { data: invs } = await supabase
+    .from('inventarios')
+    .select('quantidade, data_inventario')
+    .eq('embalagem_id', embalagemId)
+    .order('data_inventario', { ascending: false })
+    .limit(1)
+
+  let base = 0
+  let dataBase = null
+
+  if (invs?.length) {
+    base = invs[0].quantidade
+    dataBase = invs[0].data_inventario
+  } else {
+    // Usa o estoque_referencia da embalagem
+    const { data: emb } = await supabase
+      .from('embalagens')
+      .select('estoque_referencia, estoque_referencia_data')
+      .eq('id', embalagemId)
+      .single()
+    base = emb?.estoque_referencia || 0
+    dataBase = emb?.estoque_referencia_data || '2025-07-01'
+  }
+
+  const limite = dataRef || new Date().toISOString().slice(0, 10)
+
+  // 2. Soma recebimentos depois da data base até hoje
+  const { data: recebimentos } = await supabase
+    .from('recebimento_itens')
+    .select('quantidade_recebida, recebimentos(data_recebimento)')
+    .eq('embalagem_id', embalagemId)
+  
+  const entradas = (recebimentos || [])
+    .filter(r => {
+      const d = r.recebimentos?.data_recebimento
+      return d && d > dataBase && d <= limite
+    })
+    .reduce((s, r) => s + (r.quantidade_recebida || 0), 0)
+
+  // 3. Subtrai produções depois da data base até hoje
+  const { data: producoes } = await supabase
+    .from('producao_diaria')
+    .select('quantidade, data_producao')
+    .eq('embalagem_id', embalagemId)
+    .gt('data_producao', dataBase)
+    .lte('data_producao', limite)
+
+  const saidas = (producoes || []).reduce((s, r) => s + r.quantidade, 0)
+
+  return Math.max(0, base + entradas - saidas)
+}
 export async function carregarStatusCompleto() {
   const embs = await carregarEmbalagenEstoque()
   const result = []
 
   for (const emb of embs) {
-    // Média ponderada (8 semanas, últimas 4 com peso 2)
     const mediaPonderada = await calcularMedia(emb.id)
 
-    // Média simples das últimas 4 semanas para calcular tendência
     const desde4s = new Date()
     desde4s.setDate(desde4s.getDate() - 28)
     const { data: dados4s } = await supabase
-      .from('producao_diaria')
-      .select('quantidade')
+      .from('producao_diaria').select('quantidade')
       .eq('embalagem_id', emb.id)
       .gte('data_producao', desde4s.toISOString().slice(0, 10))
     const media4s = dados4s?.length
-      ? dados4s.reduce((s, r) => s + r.quantidade, 0) / 28
-      : 0
+      ? dados4s.reduce((s, r) => s + r.quantidade, 0) / 28 : 0
 
     const dias = emb.dias_producao || diasPorCategoria(emb.categoria)
     const margem = emb.margem_seguranca || 0.10
-    const estoque = emb.estoque_atual || 0
+
+    // Calcula estoque cronologicamente
+    const estoque = await calcularEstoqueCronologico(emb.id)
 
     const minimoIdeal = Math.ceil(mediaPonderada * dias * (1 + margem))
     const diasRestantes = mediaPonderada > 0 ? Math.floor(estoque / mediaPonderada) : null
-
     const falta = Math.max(0, minimoIdeal - estoque)
     const minG = emb.unidade_minima_grafica || 100
     const qtdPedido = falta > 0 ? Math.ceil(falta / minG) * minG : 0
 
-    // Tendência: compara média das últimas 4 semanas vs média ponderada geral
     const tendencia = mediaPonderada > 0
       ? media4s > mediaPonderada * 1.1 ? 'up'
         : media4s < mediaPonderada * 0.9 ? 'down' : 'flat'
@@ -133,14 +183,10 @@ export async function carregarStatusCompleto() {
 
     result.push({
       ...emb,
+      estoque_atual: estoque,
       media: Math.round(mediaPonderada * 10) / 10,
       media4s: Math.round(media4s * 10) / 10,
-      minimoIdeal,
-      diasRestantes,
-      qtdPedido,
-      tendencia,
-      status,
-      dias,
+      minimoIdeal, diasRestantes, qtdPedido, tendencia, status, dias,
     })
   }
   return result
