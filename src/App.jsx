@@ -1,162 +1,95 @@
-import { supabase } from '../supabase'
+import { useState } from 'react'
+import './App.css'
+import Login from './pages/Login'
+import Embalagens from './pages/Embalagens'
+import ProducaoHub from './pages/ProducaoHub'
+import Logistica from './pages/Logistica'
+import Financeiro from './pages/Financeiro'
+import Admin from './pages/Admin'
 
-export const STATUS_LABEL = {
-  pendente:  { label: 'Pendente',   cls: 'warning' },
-  pago:      { label: 'Pago',       cls: 'ok'      },
-  agendado:  { label: 'Agendado',   cls: 'purple'  },
-  cancelado: { label: 'Cancelado',  cls: 'neutral' },
-  vencido:   { label: 'Vencido',    cls: 'danger'  },
+const ALL_PAGES = [
+  { id: 'embalagens',  label: 'Embalagens',  icon: '📦' },
+  { id: 'producao',    label: 'Produção',    icon: '📋' },
+  { id: 'logistica',   label: 'Logística',   icon: '🚚' },
+  { id: 'financeiro',  label: 'Financeiro',  icon: '💰' },
+  { id: 'admin',       label: 'Admin',       icon: '⚙️' },
+]
+
+const PERM_MAP = {
+  dashboard:'embalagens', pedidos:'embalagens', compras:'embalagens',
+  analise:'producao', log:'producao', planejamento:'producao', historico:'producao',
 }
 
-export function fmtR(n) {
-  return (n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const TITLES = {
+  embalagens:  { title:'Embalagens',         sub:'Situação, pedidos à gráfica e compras' },
+  producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
+  logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
+  financeiro:  { title:'Financeiro',         sub:'Contas a receber, a pagar, fluxo de caixa e DRE' },
+  admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
 }
 
-export function fmtData(iso) {
-  if (!iso) return '—'
-  return new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR')
+function temPermissao(abas, pageId) {
+  return abas.includes(pageId) ||
+    abas.includes(PERM_MAP[pageId]) ||
+    Object.entries(PERM_MAP).some(([old,novo]) => novo===pageId && abas.includes(old))
 }
 
-export function mesLabel(iso) {
-  return new Date(iso + '-01T12:00:00').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })
-}
-
-// Verifica parcelas vencidas e atualiza status
-export async function atualizarVencidas() {
-  const hoje = new Date().toISOString().slice(0, 10)
-  await supabase.from('fin_parcelas')
-    .update({ status: 'vencido' })
-    .eq('status', 'pendente')
-    .lt('data_vencimento', hoje)
-}
-
-// Carrega lançamentos com parcelas, categoria e canal
-export async function carregarLancamentos({ tipo, status, ini, fim, categoriaId, canalId } = {}) {
-  let q = supabase.from('fin_lancamentos')
-    .select(`*, fin_categorias(id,nome,cor,tipo), fin_canais(id,nome,cor), fin_contas(id,nome),
-             fin_parcelas(id,numero_parcela,valor,data_vencimento,data_competencia,data_pagamento,status,observacao)`)
-    .order('criado_em', { ascending: false })
-
-  if (tipo)        q = q.eq('tipo', tipo)
-  if (categoriaId) q = q.eq('categoria_id', categoriaId)
-  if (canalId)     q = q.eq('canal_id', canalId)
-
-  const { data } = await q
-  let result = data || []
-
-  // Filtra por status/data das parcelas se necessário
-  if (status || ini || fim) {
-    result = result.filter(l => {
-      const parcelas = l.fin_parcelas || []
-      return parcelas.some(p => {
-        if (status && p.status !== status) return false
-        if (ini && p.data_vencimento < ini) return false
-        if (fim && p.data_vencimento > fim) return false
-        return true
-      })
-    })
-  }
-
-  return result
-}
-
-// KPIs do dashboard financeiro
-export async function carregarKPIs(ini, fim) {
-  const { data: parcelas } = await supabase
-    .from('fin_parcelas')
-    .select('*, fin_lancamentos(tipo, categoria_id, canal_id, fin_categorias(nome), fin_canais(nome))')
-    .gte('data_vencimento', ini)
-    .lte('data_vencimento', fim)
-
-  const todas = parcelas || []
-  const receitas = todas.filter(p => p.fin_lancamentos?.tipo === 'receita')
-  const despesas = todas.filter(p => p.fin_lancamentos?.tipo === 'despesa')
-
-  const receitaTotal     = receitas.reduce((s, p) => s + p.valor, 0)
-  const receitaPaga      = receitas.filter(p => p.status === 'pago').reduce((s, p) => s + p.valor, 0)
-  const receitaPendente  = receitas.filter(p => ['pendente','agendado'].includes(p.status)).reduce((s, p) => s + p.valor, 0)
-  const receitaVencida   = receitas.filter(p => p.status === 'vencido').reduce((s, p) => s + p.valor, 0)
-
-  const despesaTotal     = despesas.reduce((s, p) => s + p.valor, 0)
-  const despesaPaga      = despesas.filter(p => p.status === 'pago').reduce((s, p) => s + p.valor, 0)
-  const despesaPendente  = despesas.filter(p => ['pendente','agendado'].includes(p.status)).reduce((s, p) => s + p.valor, 0)
-  const despesaVencida   = despesas.filter(p => p.status === 'vencido').reduce((s, p) => s + p.valor, 0)
-
-  const resultado = receitaPaga - despesaPaga
-  const margem    = receitaPaga > 0 ? (resultado / receitaPaga) * 100 : 0
-
-  return {
-    receitaTotal, receitaPaga, receitaPendente, receitaVencida,
-    despesaTotal, despesaPaga, despesaPendente, despesaVencida,
-    resultado, margem,
-    inadimplencia: receitaTotal > 0 ? (receitaVencida / receitaTotal) * 100 : 0,
-  }
-}
-
-// Fluxo de caixa diário
-export async function carregarFluxo(ini, fim) {
-  const { data } = await supabase
-    .from('fin_parcelas')
-    .select('valor, data_vencimento, data_pagamento, status, fin_lancamentos(tipo)')
-    .gte('data_vencimento', ini)
-    .lte('data_vencimento', fim)
-    .order('data_vencimento')
-
-  const map = {}
-  const d = new Date(ini + 'T00:00:00')
-  const fimD = new Date(fim + 'T00:00:00')
-  while (d <= fimD) {
-    map[d.toISOString().slice(0, 10)] = { entradas: 0, saidas: 0, entradas_real: 0, saidas_real: 0 }
-    d.setDate(d.getDate() + 1)
-  }
-
-  for (const p of (data || [])) {
-    const dia = p.data_vencimento
-    if (!map[dia]) continue
-    if (p.fin_lancamentos?.tipo === 'receita') {
-      map[dia].entradas += p.valor
-      if (p.status === 'pago') map[dia].entradas_real += p.valor
-    } else {
-      map[dia].saidas += p.valor
-      if (p.status === 'pago') map[dia].saidas_real += p.valor
-    }
-  }
-
-  // Acumula saldo
-  let saldo = 0, saldoReal = 0
-  return Object.entries(map).map(([dia, v]) => {
-    saldo += v.entradas - v.saidas
-    saldoReal += v.entradas_real - v.saidas_real
-    return { dia, ...v, saldo, saldoReal }
+export default function App() {
+  const [usuario, setUsuario] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
   })
-}
+  const [page, setPage] = useState('embalagens')
+  const [csvLogistica, setCsvLogistica] = useState(null)
 
-// DRE gerencial mensal
-export async function carregarDRE(anoMesIni, anoMesFim, canalId) {
-  const ini = anoMesIni + '-01'
-  const fim = anoMesFim + '-31'
+  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('embalagens') }} />
 
-  let q = supabase.from('fin_parcelas')
-    .select('valor, data_competencia, data_vencimento, status, fin_lancamentos(tipo, canal_id, fin_categorias(id,nome,tipo), fin_canais(nome))')
-    .gte('data_vencimento', ini)
-    .lte('data_vencimento', fim)
-    .eq('status', 'pago')
+  const abas = usuario.abas_permitidas || []
+  const pages = ALL_PAGES.filter(p => temPermissao(abas, p.id))
+  const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
+  const { title, sub } = TITLES[pageAtual] || {}
 
-  const { data } = await q
-  const parcelas = (data || []).filter(p => !canalId || p.fin_lancamentos?.canal_id === canalId)
+  function irLogistica(csv) { if (!temPermissao(abas,'logistica')) return; setCsvLogistica(csv); setPage('logistica') }
+  function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
 
-  // Agrupa por mês e categoria
-  const meses = {}
-  for (const p of parcelas) {
-    const mes = (p.data_competencia || p.data_vencimento).slice(0, 7)
-    const tipo = p.fin_lancamentos?.tipo
-    const cat = p.fin_lancamentos?.fin_categorias
-    if (!cat) continue
-    if (!meses[mes]) meses[mes] = { receitas: {}, despesas: {} }
-    const bucket = tipo === 'receita' ? meses[mes].receitas : meses[mes].despesas
-    if (!bucket[cat.nome]) bucket[cat.nome] = 0
-    bucket[cat.nome] += p.valor
-  }
-
-  return meses
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="sidebar-logo"><span>L</span></div>
+        {pages.map(p => (
+          <button key={p.id} className={`nav-btn${pageAtual===p.id?' active':''}`}
+            onClick={() => setPage(p.id)} title={p.label}>
+            <span style={{ fontSize:18 }}>{p.icon}</span>
+            <span className="nav-label">{p.label}</span>
+          </button>
+        ))}
+        <div className="sidebar-spacer" />
+        <button className="nav-btn" onClick={sair} title="Sair">
+          <span style={{ fontSize:16 }}>↩️</span>
+          <span className="nav-label">Sair</span>
+        </button>
+      </aside>
+      <div className="main">
+        <header className="topbar">
+          <div>
+            <div className="topbar-title">{title}</div>
+            <div className="topbar-sub">{sub}</div>
+          </div>
+          <div className="topbar-right">
+            <span style={{ fontSize:12, color:'var(--gray-500)', fontWeight:600 }}>{usuario.nome}</span>
+            <span style={{ fontSize:11, color:'var(--gray-400)', marginLeft:4 }}>· {usuario.perfil}</span>
+            <span style={{ fontSize:12, color:'var(--gray-400)', marginLeft:12 }}>
+              {new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}
+            </span>
+          </div>
+        </header>
+        <div className="page">
+          {pageAtual==='embalagens' && <Embalagens />}
+          {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
+          {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
+          {pageAtual==='financeiro' && <Financeiro />}
+          {pageAtual==='admin'      && <Admin />}
+        </div>
+      </div>
+    </div>
+  )
 }
