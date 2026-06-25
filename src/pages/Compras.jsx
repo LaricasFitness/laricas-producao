@@ -64,13 +64,7 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
         valor_unitario: parseFloat(it.valor_unitario) || null,
       }))
       await supabase.from('recebimento_itens').insert(itensInsert)
-
-      // Atualiza estoque
-      for (const it of itensFiltrados) {
-        const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', it.embalagem_id).single()
-        const novoEstoque = (emb?.estoque_atual || 0) + parseInt(it.quantidade)
-        await supabase.from('embalagens').update({ estoque_atual: novoEstoque, atualizado_em: new Date().toISOString() }).eq('id', it.embalagem_id)
-      }
+      // Não atualiza estoque_atual diretamente — calculado cronologicamente
 
       // Atualiza status do pedido se vinculado
       if (pedidoId) {
