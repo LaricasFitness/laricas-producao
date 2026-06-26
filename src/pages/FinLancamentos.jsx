@@ -535,6 +535,126 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
   )
 }
 
+// ── Modal de Transferência entre contas ──────────────────────────────────────
+function ModalTransferencia({ contas, onClose, onSaved }) {
+  const [f, setF] = useState({
+    conta_origem: contas[0]?.id || '',
+    conta_destino: contas[1]?.id || contas[0]?.id || '',
+    valor: '',
+    data: new Date().toISOString().slice(0,10),
+    descricao: 'Transferência entre contas',
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (k,v) => setF(p=>({...p,[k]:v}))
+
+  async function salvar() {
+    if (!f.valor || parseFloat(f.valor) <= 0) { setErr('Informe o valor.'); return }
+    if (f.conta_origem === f.conta_destino) { setErr('Origem e destino devem ser diferentes.'); return }
+    setSaving(true); setErr('')
+    try {
+      const usuario = JSON.parse(sessionStorage.getItem('usuario')||'{}').nome
+      const valor = parseFloat(f.valor)
+
+      // Cria saída na conta de origem
+      const { data: saida } = await supabase.from('fin_lancamentos').insert({
+        tipo: 'despesa',
+        descricao: f.descricao,
+        valor_total: valor,
+        conta_id: f.conta_origem,
+        total_parcelas: 1,
+        observacao: `Transferência → ${contas.find(c=>c.id===f.conta_destino)?.nome}`,
+        criado_por: usuario,
+      }).select().single()
+
+      await supabase.from('fin_parcelas').insert({
+        lancamento_id: saida.id, numero_parcela: 1, valor,
+        data_vencimento: f.data, data_pagamento: f.data,
+        conta_id: f.conta_origem, status: 'pago',
+      })
+
+      // Cria entrada na conta de destino
+      const { data: entrada } = await supabase.from('fin_lancamentos').insert({
+        tipo: 'receita',
+        descricao: f.descricao,
+        valor_total: valor,
+        conta_id: f.conta_destino,
+        total_parcelas: 1,
+        observacao: `Transferência ← ${contas.find(c=>c.id===f.conta_origem)?.nome}`,
+        criado_por: usuario,
+      }).select().single()
+
+      await supabase.from('fin_parcelas').insert({
+        lancamento_id: entrada.id, numero_parcela: 1, valor,
+        data_vencimento: f.data, data_pagamento: f.data,
+        conta_id: f.conta_destino, status: 'pago',
+      })
+
+      onSaved()
+    } catch(e) { setErr(e.message) }
+    setSaving(false)
+  }
+
+  const contasOrdem = contas.filter(c=>c.ativo!==false)
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:400}}>
+        <div className="modal-header">
+          <div className="modal-title">↔️ Transferência entre contas</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {err && <div style={{color:'var(--danger)',fontSize:13,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:6,marginBottom:10}}>{err}</div>}
+
+          <div className="form-group">
+            <label className="form-label">Conta de origem (saída)</label>
+            <select className="form-input" value={f.conta_origem} onChange={e=>set('conta_origem',e.target.value)}>
+              {contasOrdem.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+
+          <div style={{textAlign:'center',fontSize:20,margin:'4px 0',color:'var(--purple)'}}>↓</div>
+
+          <div className="form-group">
+            <label className="form-label">Conta de destino (entrada)</label>
+            <select className="form-input" value={f.conta_destino} onChange={e=>set('conta_destino',e.target.value)}>
+              {contasOrdem.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Valor (R$) *</label>
+              <input className="form-input" type="number" min={0} step={0.01}
+                value={f.valor} onChange={e=>set('valor',e.target.value)} placeholder="0,00" autoFocus/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Data</label>
+              <input type="date" className="form-input" value={f.data} onChange={e=>set('data',e.target.value)}/>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Descrição</label>
+            <input className="form-input" value={f.descricao} onChange={e=>set('descricao',e.target.value)}/>
+          </div>
+
+          <div style={{fontSize:11,color:'var(--gray-400)',padding:'8px 12px',background:'var(--gray-50)',borderRadius:6}}>
+            Cria automaticamente uma saída na conta de origem e uma entrada na conta de destino, ambas marcadas como pagas.
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||!f.valor}>
+            {saving?<RefreshCw size={14} className="spin"/>:<><Save size={14}/> Transferir</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function FinLancamentos({ tipo }) {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
@@ -553,6 +673,7 @@ export default function FinLancamentos({ tipo }) {
   const [modal, setModal] = useState(null)
   const [modalParcela, setModalParcela] = useState(null)
   const [modalXml, setModalXml] = useState(null)
+  const [modalTransf, setModalTransf] = useState(false)
   const [expandido, setExpandido] = useState(null)
   const xmlRef = useRef()
 
@@ -654,6 +775,9 @@ export default function FinLancamentos({ tipo }) {
           )}
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14} /></button>
           <div style={{ marginLeft: 'auto', display:'flex', gap:8 }}>
+            <button className="btn btn-ghost" onClick={()=>setModalTransf(true)} title="Transferência entre contas">
+              ↔️ Transferência
+            </button>
             {tipo === 'despesa' && (
               <>
                 <button className="btn btn-ghost" onClick={()=>xmlRef.current?.click()}>
@@ -828,6 +952,12 @@ export default function FinLancamentos({ tipo }) {
         )}
       </div>
 
+      {modalTransf && (
+        <ModalTransferencia contas={contas}
+          onClose={() => setModalTransf(false)}
+          onSaved={() => { setModalTransf(false); load() }}
+        />
+      )}
       {modal && (
         <ModalLancamento
           lancamento={modal === 'new' ? null : modal}
