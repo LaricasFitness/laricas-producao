@@ -81,8 +81,9 @@ function ModalNovaCategoria({ tipo, onClose, onSaved }) {
 
 // ── Modal confirmação XML ─────────────────────────────────────────────────────
 function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved }) {
+  const [catUnica, setCatUnica] = useState(true)  // true = categoria na NF toda; false = por produto
   const [categoria_id, setCategoria] = useState('')
-  const [itensCategoria, setItensCategoria] = useState({}) // { idx: categoria_id }
+  const [itensCategoria, setItensCategoria] = useState({})
   const [conta_id, setConta] = useState(contas[0]?.id || '')
   const [forma_id, setForma] = useState('')
   const [vencimento, setVencimento] = useState(nf.data_emissao)
@@ -108,7 +109,7 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
         tipo: 'despesa',
         descricao: `NF ${nf.numero} — ${nf.fornecedor.razao_social || nf.fornecedor.nome_fantasia}`,
         valor_total: nf.valor_total,
-        categoria_id: categoria_id || null,
+        categoria_id: catUnica ? (categoria_id || null) : null,  // só coloca se modo único
         conta_id: conta_id || null,
         forma_pagamento_id: forma_id || null,
         fornecedor_id: fornecedorId,
@@ -147,8 +148,8 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
               .select().single()
             insumo_id = ins?.id
           }
-          // Usa categoria por item se definida, senão usa a categoria global
-          const catItem = itensCategoria[idx] || categoria_id || null
+          // Usa categoria por item se modo por produto; ignora itensCategoria no modo único
+          const catItem = catUnica ? null : (itensCategoria[idx] || null)
           itensInsert.push({ ...item, lancamento_id: lanc.id, insumo_id, categoria_id: catItem })
         }
         await supabase.from('fin_nf_itens').insert(itensInsert)
@@ -175,40 +176,59 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
             <div style={{fontWeight:800,color:'var(--purple)',fontSize:16,marginTop:6}}>Total: {fmtR(nf.valor_total)}</div>
           </div>
 
+          {/* Toggle modo categoria */}
+          <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',marginBottom:12,padding:'10px 12px',background:'var(--gray-50)',borderRadius:8}}>
+            <div style={{width:40,height:22,borderRadius:11,background:catUnica?'var(--purple)':'var(--gray-300)',position:'relative',cursor:'pointer',transition:'background .2s',flexShrink:0}}
+              onClick={()=>setCatUnica(p=>!p)}>
+              <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:catUnica?20:2,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.2)'}}/>
+            </div>
+            <div>
+              <div style={{fontWeight:700,fontSize:13}}>{catUnica ? '📂 Categoria única para a NF toda' : '📂 Categoria por produto'}</div>
+              <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                {catUnica ? 'Uma categoria classifica o lançamento inteiro' : 'Cada produto recebe sua própria categoria'}
+              </div>
+            </div>
+          </label>
+
+          {/* Tabela de itens */}
           <div style={{maxHeight:200,overflowY:'auto',marginBottom:14,border:'1px solid var(--gray-200)',borderRadius:8}}>
             <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
               <thead><tr>
                 <th style={{textAlign:'left',padding:'6px 10px',background:'var(--gray-50)'}}>Produto</th>
                 <th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Qtd</th>
                 <th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Total</th>
-                <th style={{padding:'6px 10px',background:'var(--gray-50)',minWidth:140}}>Categoria</th>
+                {!catUnica && <th style={{padding:'6px 10px',background:'var(--gray-50)',minWidth:140}}>Categoria</th>}
               </tr></thead>
               <tbody>{nf.itens.map((it,i)=>(
                 <tr key={i} style={{borderTop:'1px solid var(--gray-100)'}}>
                   <td style={{padding:'5px 10px'}}>{it.descricao}</td>
                   <td style={{textAlign:'right',padding:'5px 10px'}}>{it.quantidade} {it.unidade}</td>
                   <td style={{textAlign:'right',padding:'5px 10px',fontWeight:600}}>{fmtR(it.valor_total)}</td>
-                  <td style={{padding:'3px 6px'}}>
-                    <select className="form-input" style={{padding:'3px 6px',fontSize:11}}
-                      value={itensCategoria[i]||categoria_id}
-                      onChange={e=>setItensCategoria(prev=>({...prev,[i]:e.target.value}))}>
-                      <option value="">— padrão —</option>
-                      {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-                    </select>
-                  </td>
+                  {!catUnica && (
+                    <td style={{padding:'3px 6px'}}>
+                      <select className="form-input" style={{padding:'3px 6px',fontSize:11}}
+                        value={itensCategoria[i]||''}
+                        onChange={e=>setItensCategoria(prev=>({...prev,[i]:e.target.value}))}>
+                        <option value="">Selecione...</option>
+                        {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                      </select>
+                    </td>
+                  )}
                 </tr>
               ))}</tbody>
             </table>
           </div>
 
           <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">Categoria</label>
-              <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
-                <option value="">Selecione...</option>
-                {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-              </select>
-            </div>
+            {catUnica && (
+              <div className="form-group">
+                <label className="form-label">Categoria da NF</label>
+                <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
+                  <option value="">Selecione...</option>
+                  {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                </select>
+              </div>
+            )}
             <div className="form-group">
               <label className="form-label">Vencimento</label>
               <input type="date" className="form-input" value={vencimento} onChange={e=>setVencimento(e.target.value)} />
