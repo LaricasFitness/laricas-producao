@@ -107,9 +107,18 @@ export default function FinDRE() {
     setLoading(false)
   }
 
-  const meses = Object.keys(dadosLanc).length > 0
-    ? Object.keys(dadosLanc).sort()
-    : []
+  // Gera meses do período selecionado sempre, independente de ter dados
+  const meses = (() => {
+    const result = []
+    const [anoIni, mesIni] = anoMesIni.split('-').map(Number)
+    const [anoFim, mesFim] = anoMesFim.split('-').map(Number)
+    let ano = anoIni, mes = mesIni
+    while (ano < anoFim || (ano === anoFim && mes <= mesFim)) {
+      result.push(`${ano}-${String(mes).padStart(2,'0')}`)
+      mes++; if (mes > 12) { mes = 1; ano++ }
+    }
+    return result
+  })()
 
   // Valor de uma linha: ajuste manual se existir, senão soma de lançamentos
   function valorLinha(mes, grupoId, catNomes=[]) {
@@ -250,21 +259,15 @@ export default function FinDRE() {
         </div>
       </div>
 
-      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div>
-      : gruposRaiz.length===0 ? (
+      {loading && <div className="loading"><RefreshCw size={14} className="spin"/></div>}
+
+      {gruposRaiz.length === 0 && (
         <div className="card card-pad empty">
           <div className="empty-icon">📋</div>
           <div className="empty-title">Nenhuma cascata configurada</div>
           <div className="empty-sub">Vá em Config → Cascata DRE para montar a estrutura</div>
         </div>
-      ) : meses.length===0 ? (
-        <div className="card card-pad">
-          <div style={{fontSize:13,color:'var(--gray-400)',textAlign:'center',padding:20}}>
-            Nenhum lançamento pago no período. Os valores manuais aparecerão após você editá-los na tabela.
-          </div>
-          {/* Mostra tabela mesmo sem lançamentos para permitir edição manual */}
-        </div>
-      ) : null}
+      )}
 
       {(gruposRaiz.length > 0) && (
         <div className="card">
