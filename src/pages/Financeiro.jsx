@@ -4,6 +4,7 @@ import FinLancamentos from './FinLancamentos'
 import FinFluxo from './FinFluxo'
 import FinDRE from './FinDRE'
 import FinCanais from './FinCanais'
+import FinCanalDespesas from './FinCanalDespesas'
 import FinOrcamento from './FinOrcamento'
 import FinSazonalidade from './FinSazonalidade'
 import FinReconciliacao from './FinReconciliacao'
@@ -12,27 +13,23 @@ import FinConfig from './FinConfig'
 import { verificarEDispararAlertas } from '../lib/alertas'
 
 const TABS = [
-  { id:'dashboard',     label:'📊 Dashboard'     },
-  { id:'receber',       label:'📈 A Receber'      },
-  { id:'pagar',         label:'📉 A Pagar'        },
-  { id:'fluxo',         label:'💰 Fluxo de Caixa' },
-  { id:'dre',           label:'📋 DRE'            },
-  { id:'canais',        label:'🏷️ Canais'         },
-  { id:'orcamento',     label:'🎯 Orçamento'      },
-  { id:'sazonalidade',  label:'📅 Sazonalidade'   },
-  { id:'reconciliacao', label:'🏦 Reconciliação'  },
-  { id:'alertas',       label:'🔔 Alertas'        },
-  { id:'config',        label:'⚙️ Config'         },
+  { id:'dashboard',     label:'📊 Dashboard'       },
+  { id:'receber',       label:'📈 A Receber'        },
+  { id:'pagar',         label:'📉 A Pagar'          },
+  { id:'fluxo',         label:'💰 Fluxo de Caixa'  },
+  { id:'dre',           label:'📋 DRE'              },
+  { id:'canais',        label:'🏷️ DRE por Canal'   },
+  { id:'canal_desp',    label:'⚙️ Desp. por Canal' },
+  { id:'orcamento',     label:'🎯 Orçamento'        },
+  { id:'sazonalidade',  label:'📅 Sazonalidade'     },
+  { id:'reconciliacao', label:'🏦 Reconciliação'    },
+  { id:'alertas',       label:'🔔 Alertas'          },
+  { id:'config',        label:'⚙️ Config'           },
 ]
 
 export default function Financeiro() {
   const [tab, setTab] = useState('dashboard')
-
-  useEffect(() => {
-    // Verifica e dispara alertas ao abrir o módulo financeiro
-    verificarEDispararAlertas().catch(console.error)
-  }, [])
-
+  useEffect(() => { verificarEDispararAlertas().catch(console.error) }, [])
   return (
     <>
       <div className="tabs" style={{ marginBottom:0 }}>
@@ -48,6 +45,7 @@ export default function Financeiro() {
       {tab==='fluxo'        && <FinFluxo />}
       {tab==='dre'          && <FinDRE />}
       {tab==='canais'       && <FinCanais />}
+      {tab==='canal_desp'   && <FinCanalDespesas />}
       {tab==='orcamento'    && <FinOrcamento />}
       {tab==='sazonalidade' && <FinSazonalidade />}
       {tab==='reconciliacao'&& <FinReconciliacao />}
