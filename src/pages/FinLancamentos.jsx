@@ -501,7 +501,43 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
               <label className="form-label">Canal / origem</label>
               <select className="form-input" value={f.canal_id} onChange={e=>set('canal_id',e.target.value)}>
                 <option value="">Sem canal</option>
-                {canais.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                {(() => {
+                  // Monta hierarquia: só mostra canais finais com contexto pai
+                  const opts = []
+                  const porId = Object.fromEntries(canais.map(c=>[c.id,c]))
+                  function getNomePath(c) {
+                    const parts = [c.nome]
+                    let cur = c
+                    while (cur.parent_id && porId[cur.parent_id]) {
+                      cur = porId[cur.parent_id]
+                      parts.unshift(cur.nome)
+                    }
+                    return parts
+                  }
+                  const finais = canais.filter(c=>c.tipo==='canal_final'||c.nivel===3)
+                  // Agrupa por pai nível 1
+                  const agrupadores = canais.filter(c=>c.nivel===1).sort((a,b)=>a.ordem-b.ordem)
+                  for (const ag of agrupadores) {
+                    const filhosFinais = finais.filter(c=>{
+                      const path = getNomePath(c)
+                      return path[0]===ag.nome
+                    })
+                    if (filhosFinais.length===0) {
+                      // canais finais diretos do agrupador
+                      const diretos = finais.filter(c=>c.parent_id===ag.id)
+                      if (diretos.length>0) {
+                        opts.push(<optgroup key={ag.id} label={ag.nome}>
+                          {diretos.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </optgroup>)
+                      }
+                    } else {
+                      opts.push(<optgroup key={ag.id} label={ag.nome}>
+                        {filhosFinais.sort((a,b)=>a.nome.localeCompare(b.nome)).map(c=><option key={c.id} value={c.id}>{getNomePath(c).slice(1).join(' › ')}</option>)}
+                      </optgroup>)
+                    }
+                  }
+                  return opts
+                })()}
               </select>
             </div>
           </div>
