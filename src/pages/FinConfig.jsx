@@ -285,18 +285,6 @@ export default function FinConfig() {
       {aba==='canais' && <FinConfigCanais/>}
 
       {aba==='contas' && (
-        <SecaoSimples titulo="🏦 Contas bancárias / Caixas" tabela="fin_contas" orderBy="nome"
-          campos={[
-            {key:'nome',label:'Nome'},
-            {key:'cor',label:'Cor'},
-            {key:'ordem',label:'Ordem'},
-            {key:'ativo',label:'Ativo'},
-          ]}
-          defaults={{nome:'',cor:'#7f8c8d',ordem:99,ativo:true}}
-        />
-      )}
-
-      {aba==='contas' && (
         <SecaoSimples titulo="🏦 Contas bancárias / Caixas" tabela="fin_contas"
           campos={[
             {key:'nome',label:'Nome'},
