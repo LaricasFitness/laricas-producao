@@ -1,7 +1,8 @@
 import { supabase } from '../supabase'
 
 export const STATUS_LABEL = {
-  pendente:  { label: 'Pendente',   cls: 'warning' },
+  em_aberto: { label: 'Em aberto',  cls: 'warning' },
+  pendente:  { label: 'Em aberto',  cls: 'warning' }, // compatibilidade com dados antigos
   pago:      { label: 'Pago',       cls: 'ok'      },
   agendado:  { label: 'Agendado',   cls: 'purple'  },
   cancelado: { label: 'Cancelado',  cls: 'neutral' },
@@ -18,16 +19,19 @@ export function fmtData(iso) {
 }
 
 export function mesLabel(iso) {
-  return new Date(iso + '-01T12:00:00').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })
+  if (!iso) return '—'
+  // Aceita '2025-01' ou '2025-01-01'
+  const parte = iso.slice(0, 7)
+  const [ano, mes] = parte.split('-').map(Number)
+  return new Date(ano, mes - 1, 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })
 }
 
 // Verifica parcelas vencidas e atualiza status
 export async function atualizarVencidas() {
   const hoje = new Date().toISOString().slice(0, 10)
-  await supabase.from('fin_parcelas')
-    .update({ status: 'vencido' })
-    .eq('status', 'pendente')
-    .lt('data_vencimento', hoje)
+  // Atualiza tanto 'pendente' (legacy) quanto 'em_aberto'
+  await supabase.from('fin_parcelas').update({ status: 'vencido' })
+    .in('status', ['pendente', 'em_aberto']).lt('data_vencimento', hoje)
 }
 
 // Carrega lançamentos com parcelas, categoria e canal
