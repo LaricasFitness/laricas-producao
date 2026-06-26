@@ -131,13 +131,37 @@ export default function FinDRE() {
       }
     }
 
-    // Aplica ajustes manuais
+    // Aplica ajustes manuais — sem canal no total, com canal no dadosCanal
     for (const aj of (ajustesDb||[])) {
       const mes = aj.ano_mes
       const cat = aj.fin_categorias?.nome
       if (!cat) continue
       if (!mapa[mes]) mapa[mes] = {}
-      mapa[mes][cat] = aj.valor
+
+      if (aj.canal_id) {
+        // Ajuste por canal — vai para mapaCanal
+        const canalNome = canalMap[aj.canal_id]?.nome
+        if (canalNome) {
+          if (!mapaCanal[mes]) mapaCanal[mes] = {}
+          if (!mapaCanal[mes][cat]) mapaCanal[mes][cat] = {}
+          mapaCanal[mes][cat][canalNome] = aj.valor
+        }
+      } else {
+        // Ajuste total da categoria
+        mapa[mes][cat] = aj.valor
+      }
+    }
+
+    // Recalcula total das categorias que têm ajustes por canal
+    for (const mes of Object.keys(mapaCanal)) {
+      for (const cat of Object.keys(mapaCanal[mes])) {
+        const somaCanais = Object.values(mapaCanal[mes][cat]).reduce((s,v)=>s+v,0)
+        // Se há ajustes por canal, o total é a soma deles
+        if (somaCanais > 0 && !ajustesDb?.find(a=>a.fin_categorias?.nome===cat&&!a.canal_id&&a.ano_mes===mes)) {
+          if (!mapa[mes]) mapa[mes] = {}
+          mapa[mes][cat] = somaCanais
+        }
+      }
     }
 
     setDados(mapa); setDadosCanal(mapaCanal)
@@ -189,14 +213,35 @@ export default function FinDRE() {
     return acc
   },{fb:0,fl:0,lb:0,mc:0,mcm:0,res:0})
 
-  async function salvarAjuste(mes, catNome, valor) {
+  async function salvarAjuste(mes, catNome, valor, canalId=null) {
     const cat = categorias.find(c=>c.nome===catNome)
     if (!cat) return
     await supabase.from('fin_dre_ajustes').upsert({
-      ano_mes:mes, categoria_id:cat.id, canal_id:null, valor,
+      ano_mes:mes, categoria_id:cat.id, canal_id:canalId||null, valor,
       criado_por:JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
     },{onConflict:'ano_mes,categoria_id,canal_id'})
-    setDados(prev=>{const n={...prev};if(!n[mes])n[mes]={};n[mes][catNome]=valor;return n})
+
+    if (canalId) {
+      // Atualiza dadosCanal local e recalcula total da categoria
+      const canalNome = canais.find(c=>c.id===canalId)?.nome
+      if (!canalNome) return
+      setDadosCanal(prev => {
+        const n = JSON.parse(JSON.stringify(prev))
+        if (!n[mes]) n[mes] = {}
+        if (!n[mes][catNome]) n[mes][catNome] = {}
+        n[mes][catNome][canalNome] = valor
+        return n
+      })
+      // Recalcula total da categoria a partir dos canais
+      setDados(prev => {
+        const n = {...prev}
+        if (!n[mes]) n[mes] = {}
+        // Será recalculado no próximo render via dadosCanal
+        return n
+      })
+    } else {
+      setDados(prev=>{const n={...prev};if(!n[mes])n[mes]={};n[mes][catNome]=valor;return n})
+    }
   }
 
   return (
@@ -289,11 +334,20 @@ export default function FinDRE() {
                     const expandido = expandidos.has(cat.id)
                     const basePct = grupo.base_pct || 'fl'
 
-                    // Expansão por canal só nas folhas (sem filhos)
-                    const canaisNestaCat = !temFilhos
-                      ? [...new Set(meses.flatMap(m=>Object.keys(dadosCanal[m]?.[cat.nome]||{})))].filter(Boolean)
+                    // Canais finais disponíveis para expansão manual
+                    const canaisFinais = !temFilhos
+                      ? canais.filter(c=>c.tipo==='canal_final'||c.nivel===3).sort((a,b)=>a.nome.localeCompare(b.nome))
                       : []
-                    const temCanais = canaisNestaCat.length > 0
+                    const temCanais = canaisFinais.length > 0
+
+                    // Total real: soma dos ajustes por canal (se existirem) ou valor direto
+                    function totalComCanais(mesData, canalData) {
+                      const porCanal = canalData?.[cat.nome]
+                      if (porCanal && Object.keys(porCanal).length > 0) {
+                        return Object.values(porCanal).reduce((s,v)=>s+v,0)
+                      }
+                      return somaTotal(mesData, cat)
+                    }
 
                     const bgCor = nivel===1?'var(--white)':nivel===2?'#fafafa':'#f5f5f5'
                     const fontW = nivel===1?600:nivel===2?500:400
@@ -303,7 +357,15 @@ export default function FinDRE() {
                       <tr key={cat.id} style={{borderBottom:(expandido&&(temFilhos||temCanais))?'none':'1px solid var(--gray-100)'}}>
                         <td style={{padding:`7px 14px 7px ${indent}px`,color:nivel===1?'var(--gray-700)':'var(--gray-600)',position:'sticky',left:0,background:bgCor}}>
                           <div style={{display:'flex',alignItems:'center',gap:5}}>
-                            {(temFilhos||temCanais) && (
+                            {/* Sempre mostra ▶ nas folhas para permitir edição por canal */}
+                            {!temFilhos && (
+                              <button onClick={()=>setExpandidos(prev=>{const n=new Set(prev);expandido?n.delete(cat.id):n.add(cat.id);return n})}
+                                style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:'0 1px',fontSize:10,lineHeight:1,flexShrink:0}}
+                                title={expandido?'Recolher canais':'Expandir por canal (edição manual)'}>
+                                {expandido?'▼':'▶'}
+                              </button>
+                            )}
+                            {temFilhos && (
                               <button onClick={()=>setExpandidos(prev=>{const n=new Set(prev);expandido?n.delete(cat.id):n.add(cat.id);return n})}
                                 style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:'0 1px',fontSize:10,lineHeight:1,flexShrink:0}}>
                                 {expandido?'▼':'▶'}
@@ -314,20 +376,24 @@ export default function FinDRE() {
                           </div>
                         </td>
                         {meses.map(m=>{
-                          const v = somaTotal(dados[m]||{}, cat)
+                          const v = totalComCanais(dados[m]||{}, dadosCanal[m])
                           const s = calcSubtotais(dados[m]||{})
                           const base = s[basePct]||s.fb||1
                           return (
                             <td key={m} style={{padding:'7px 10px',textAlign:'right',background:bgCor}}>
-                              {!temFilhos
+                              {!temFilhos && !expandido
                                 ? <CelulaEditavel valor={v} onSave={val=>salvarAjuste(m,cat.nome,val)}/>
+                                : !temFilhos && expandido
+                                ? <span style={{fontWeight:700,color:v>0?'var(--purple)':'var(--gray-300)',fontSize:12}}>{v>0?fmtR(v):'—'}</span>
                                 : <span style={{fontWeight:600,color:v>0?'var(--gray-700)':'var(--gray-300)'}}>{v>0?fmtR(v):'—'}</span>
                               }
                               {mostrarPct && v>0 && base>0 && <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmtPct(pct(v,base))}</div>}
                             </td>
                           )
                         })}
-                        <td style={{textAlign:'right',padding:'7px 10px',fontWeight:nivel===1?700:600,color:'var(--gray-600)',background:bgCor}}>{fmtR(totCat)}</td>
+                        <td style={{textAlign:'right',padding:'7px 10px',fontWeight:nivel===1?700:600,color:'var(--gray-600)',background:bgCor}}>
+                          {fmtR(meses.reduce((s,m)=>s+totalComCanais(dados[m]||{},dadosCanal[m]),0))}
+                        </td>
                       </tr>
                     )
 
@@ -337,31 +403,44 @@ export default function FinDRE() {
                       linhas.push(<tr key={`${cat.id}__sep`}><td colSpan={meses.length+2} style={{height:1,background:'var(--gray-200)'}}/></tr>)
                     }
 
-                    // Expansão por canal (só folhas)
-                    if (expandido && temCanais && !temFilhos) {
-                      for (const canalNome of canaisNestaCat) {
-                        const totC = meses.reduce((s,m)=>s+(dadosCanal[m]?.[cat.nome]?.[canalNome]||0),0)
+                    // Expansão por canal — SEMPRE mostra todos os canais finais como linhas editáveis
+                    if (expandido && !temFilhos) {
+                      // Header da expansão
+                      linhas.push(
+                        <tr key={`${cat.id}__chanhead`}>
+                          <td colSpan={meses.length+2} style={{padding:'4px 14px 4px '+(indent+18)+'px',background:'#f0ebf7',fontSize:10,fontWeight:700,color:'var(--purple)',letterSpacing:'.05em'}}>
+                            DETALHAMENTO POR CANAL — clique nos valores para editar
+                          </td>
+                        </tr>
+                      )
+                      for (const canal of canaisFinais) {
+                        const totC = meses.reduce((s,m)=>s+(dadosCanal[m]?.[cat.nome]?.[canal.nome]||0),0)
                         linhas.push(
-                          <tr key={`${cat.id}__${canalNome}`} style={{borderBottom:'1px solid var(--gray-50)',background:'var(--gray-50)'}}>
-                            <td style={{padding:`5px 14px 5px ${indent+18}px`,color:'var(--gray-500)',fontSize:11,position:'sticky',left:0,background:'var(--gray-50)'}}>
-                              <span style={{display:'inline-block',width:5,height:5,borderRadius:'50%',background:'var(--purple)',marginRight:5,opacity:.4}}/>
-                              {canalNome}
+                          <tr key={`${cat.id}__${canal.id}`} style={{borderBottom:'1px solid #ede9f4',background:'#f8f5fc'}}>
+                            <td style={{padding:`5px 14px 5px ${indent+18}px`,color:'var(--gray-600)',fontSize:11,position:'sticky',left:0,background:'#f8f5fc'}}>
+                              <span style={{display:'inline-block',width:6,height:6,borderRadius:2,background:canal.cor||'var(--purple)',marginRight:5,opacity:.7}}/>
+                              {canal.nome}
                             </td>
                             {meses.map(m=>{
-                              const v = dadosCanal[m]?.[cat.nome]?.[canalNome]||0
-                              const tot = somaTotal(dados[m]||{},cat)||1
+                              const v = dadosCanal[m]?.[cat.nome]?.[canal.nome]||0
+                              const tot = totalComCanais(dados[m]||{},dadosCanal[m])||1
                               return (
-                                <td key={m} style={{textAlign:'right',padding:'5px 10px',fontSize:11,color:v>0?'var(--gray-600)':'var(--gray-300)'}}>
-                                  {v>0?fmtR(v):'—'}
-                                  {mostrarPct && v>0 && tot>0 && <div style={{fontSize:10,color:'var(--gray-300)'}}>{fmtPct(pct(v,tot))}</div>}
+                                <td key={m} style={{padding:'4px 8px',textAlign:'right',background:'#f8f5fc'}}>
+                                  <CelulaEditavel
+                                    valor={v}
+                                    onSave={val=>salvarAjuste(m, cat.nome, val, canal.id)}
+                                  />
+                                  {mostrarPct && v>0 && tot>0 && <div style={{fontSize:9,color:'var(--gray-300)'}}>{fmtPct(pct(v,tot))}</div>}
                                 </td>
                               )
                             })}
-                            <td style={{textAlign:'right',padding:'5px 10px',fontSize:11,color:'var(--gray-500)',fontWeight:600}}>{fmtR(totC)}</td>
+                            <td style={{textAlign:'right',padding:'4px 8px',fontSize:11,color:'var(--purple)',fontWeight:600,background:'#f8f5fc'}}>
+                              {totC>0?fmtR(totC):'—'}
+                            </td>
                           </tr>
                         )
                       }
-                      linhas.push(<tr key={`${cat.id}__cansep`}><td colSpan={meses.length+2} style={{height:1,background:'var(--gray-200)'}}/></tr>)
+                      linhas.push(<tr key={`${cat.id}__cansep`}><td colSpan={meses.length+2} style={{height:2,background:'var(--gray-200)'}}/></tr>)
                     }
                   }
 
