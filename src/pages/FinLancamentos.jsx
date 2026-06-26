@@ -104,7 +104,17 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
     return [{ numero:'1', vencimento: nf.data_emissao, valor: nf.valor_total }]
   })
 
-  const catsDespesa = categorias.filter(c => c.tipo === 'despesa' && c.nivel === 1)
+  const catsDespesa = (() => {
+    const todas = categorias.filter(c => c.tipo === 'despesa')
+    const result = []
+    function addNivel(parentId, indent) {
+      todas.filter(c=>(c.parent_id||null)===(parentId||null))
+        .sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
+        .forEach(c=>{ result.push({...c,_indent:indent}); addNivel(c.id,indent+1) })
+    }
+    addNivel(null, 0)
+    return result
+  })()
 
   function setDupField(idx, campo, valor) {
     setDuplicatas(prev => prev.map((d,i) => i===idx ? {...d,[campo]:valor} : d))
@@ -244,7 +254,11 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
                         value={itensCategoria[i]||''}
                         onChange={e=>setItensCategoria(prev=>({...prev,[i]:e.target.value}))}>
                         <option value="">Selecione...</option>
-                        {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                        {catsDespesa.map(c=>(
+                      <option key={c.id} value={c.id}>
+                        {'　'.repeat(c._indent||0)}{(c._indent||0)>0?'└ ':''}{c.nome}
+                      </option>
+                    ))}
                       </select>
                     </td>
                   )}
@@ -277,7 +291,11 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
                   <label className="form-label">Categoria da NF</label>
                   <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
                     <option value="">Selecione...</option>
-                    {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                    {catsDespesa.map(c=>(
+                      <option key={c.id} value={c.id}>
+                        {'　'.repeat(c._indent||0)}{(c._indent||0)>0?'└ ':''}{c.nome}
+                      </option>
+                    ))}
                   </select>
                 </div>
               )}
