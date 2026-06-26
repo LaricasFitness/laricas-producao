@@ -141,7 +141,7 @@ export default function FinDRE() {
 
   // Calcula subtotais
   function calcSubtotais(mes) {
-    const st = {fb:0,fl:0,lb:0,mc:0,mcm:0,res:0}
+    const st = {fb:0,fl:0,lb:0,mc:0,mcm:0,res:0,lair:0,ll:0}
     let acum = 0
     for (const g of grupos.filter(x=>!x.parent_id).sort((a,b)=>a.ordem-b.ordem)) {
       const val = totalGrupo(mes, g)
@@ -156,7 +156,7 @@ export default function FinDRE() {
     const s=calcSubtotais(m)
     Object.entries(s).forEach(([k,v])=>{acc[k]=(acc[k]||0)+v})
     return acc
-  },{fb:0,fl:0,lb:0,mc:0,mcm:0,res:0})
+  },{fb:0,fl:0,lb:0,mc:0,mcm:0,res:0,lair:0,ll:0})
 
   async function salvarAjuste(mes, grupoId, valor) {
     const usuario = JSON.parse(sessionStorage.getItem('usuario')||'{}').nome
