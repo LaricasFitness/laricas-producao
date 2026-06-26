@@ -90,22 +90,26 @@ export async function consumoSemanal(embalagemId, semanas = 8) {
 // Calcula estoque cronologicamente:
 // pega o inventário mais recente como base, soma entradas depois, subtrai produções depois
 export async function calcularEstoqueCronologico(embalagemId, dataRef) {
-  // 1. Busca o inventário mais recente (ou a referência da embalagem)
+  if (!embalagemId) return 0
+
+  // 1. Busca o inventário mais recente para ESSA embalagem
   const { data: invs } = await supabase
     .from('inventarios')
-    .select('quantidade, data_inventario')
+    .select('quantidade, data_inventario, criado_em')
     .eq('embalagem_id', embalagemId)
-    .order('data_inventario', { ascending: false })
+    .order('criado_em', { ascending: false })  // usa criado_em para pegar o mais recente mesmo com mesma data
     .limit(1)
 
   let base = 0
   let dataBase = null
+  let tsBase = null
 
   if (invs?.length) {
     base = invs[0].quantidade
     dataBase = invs[0].data_inventario
+    tsBase = invs[0].criado_em
   } else {
-    // Usa o estoque_referencia da embalagem
+    // Usa o estoque_referencia da embalagem como fallback
     const { data: emb } = await supabase
       .from('embalagens')
       .select('estoque_referencia, estoque_referencia_data')
@@ -117,25 +121,30 @@ export async function calcularEstoqueCronologico(embalagemId, dataRef) {
 
   const limite = dataRef || new Date().toISOString().slice(0, 10)
 
-  // 2. Soma recebimentos depois da data base até hoje
+  // 2. Soma recebimentos APÓS a data base (inclusive mesmo dia)
   const { data: recebimentos } = await supabase
     .from('recebimento_itens')
-    .select('quantidade_recebida, recebimentos(data_recebimento)')
+    .select('quantidade_recebida, recebimentos(data_recebimento, criado_em)')
     .eq('embalagem_id', embalagemId)
-  
+
   const entradas = (recebimentos || [])
     .filter(r => {
       const d = r.recebimentos?.data_recebimento
-      return d && d > dataBase && d <= limite
+      // Se temos timestamp do inventário, usa para distinguir eventos do mesmo dia
+      if (tsBase && d === dataBase) {
+        const tsRec = r.recebimentos?.criado_em
+        return tsRec && tsRec > tsBase
+      }
+      return d && d >= dataBase && d <= limite
     })
     .reduce((s, r) => s + (r.quantidade_recebida || 0), 0)
 
-  // 3. Subtrai produções depois da data base até hoje
+  // 3. Subtrai produções APÓS a data base (inclusive mesmo dia, mas posteriores ao inventário)
   const { data: producoes } = await supabase
     .from('producao_diaria')
     .select('quantidade, data_producao')
     .eq('embalagem_id', embalagemId)
-    .gt('data_producao', dataBase)
+    .gte('data_producao', dataBase)
     .lte('data_producao', limite)
 
   const saidas = (producoes || []).reduce((s, r) => s + r.quantidade, 0)
