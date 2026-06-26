@@ -84,6 +84,8 @@ export default function FinDashboard() {
   const [alertas, setAlertas] = useState([])
   const [projecao, setProjecao] = useState(null)
   const [saldoContas, setSaldoContas] = useState([])
+  const [cashPeriodo, setCashPeriodo] = useState('Mês')
+  const [cashMetrics, setCashMetrics] = useState({ entradas:0, saidas:0, resultado:0 })
   const [loading, setLoading] = useState(true)
 
   async function calcKpis(ini, fim) {
@@ -111,6 +113,30 @@ export default function FinDashboard() {
 
     return { recTotal, recPago, recVencido, desTotal, desPago, resultado, margem, marginBruta }
   }
+
+  // Recalcula métricas de caixa quando muda período
+  useEffect(() => {
+    if (!saldoContas.length && cashPeriodo) return
+    async function calcCash() {
+      const periodoIni = {
+        '7d':  () => { const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10) },
+        '30d': () => { const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10) },
+        'Mês': () => `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`,
+        'Ano': () => `${hoje.getFullYear()}-01-01`,
+      }[cashPeriodo]?.() || ini
+
+      const { data } = await supabase.from('fin_parcelas')
+        .select('valor, fin_lancamentos(tipo)')
+        .eq('status','pago')
+        .gte('data_pagamento', periodoIni)
+        .lte('data_pagamento', hoje.toISOString().slice(0,10))
+
+      const entradas = (data||[]).filter(p=>p.fin_lancamentos?.tipo==='receita').reduce((s,p)=>s+p.valor,0)
+      const saidas   = (data||[]).filter(p=>p.fin_lancamentos?.tipo==='despesa').reduce((s,p)=>s+p.valor,0)
+      setCashMetrics({ entradas, saidas, resultado: entradas - saidas })
+    }
+    calcCash()
+  }, [cashPeriodo, saldoContas])
 
   useEffect(() => {
     async function load() {
@@ -187,23 +213,60 @@ export default function FinDashboard() {
 
       {/* 💰 Posição de Caixa — FOCO PRINCIPAL */}
       <div style={{ background:'var(--purple-dark)', borderRadius:12, padding:'18px 20px', color:'#fff' }}>
-        <div style={{ fontWeight:800, fontSize:15, marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span>💰 Posição de Caixa</span>
-          <span style={{ fontSize:22, fontWeight:900, color:'var(--gold)' }}>
-            {fmtR(saldoContas.reduce((s,c)=>s+c.saldo,0))}
-          </span>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:10 }}>
+          <div style={{ fontWeight:800, fontSize:15 }}>💰 Posição de Caixa</div>
+          <div style={{ display:'flex', gap:6 }}>
+            {[
+              { l:'7d',  fn:() => { const d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10) } },
+              { l:'30d', fn:() => { const d=new Date(); d.setDate(d.getDate()-30); return d.toISOString().slice(0,10) } },
+              { l:'Mês', fn:() => `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01` },
+              { l:'Ano', fn:() => `${hoje.getFullYear()}-01-01` },
+            ].map(p => (
+              <button key={p.l}
+                className="btn btn-sm"
+                onClick={() => setCashPeriodo(p.l)}
+                style={{
+                  background: cashPeriodo===p.l ? 'rgba(255,255,255,.25)' : 'rgba(255,255,255,.1)',
+                  color:'#fff', border:'none', fontSize:12, padding:'4px 10px', borderRadius:6, cursor:'pointer',
+                }}>
+                {p.l}
+              </button>
+            ))}
+          </div>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:10 }}>
-          {saldoContas.map(c => (
-            <div key={c.id} style={{ background:'rgba(255,255,255,.1)', borderRadius:8, padding:'10px 14px' }}>
-              <div style={{ fontSize:11, opacity:.7, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>{c.nome}</div>
-              <div style={{ fontSize:18, fontWeight:800, color: c.saldo >= 0 ? 'var(--gold)' : '#ff8080', marginTop:4 }}>{fmtR(c.saldo)}</div>
-              <div style={{ fontSize:10, opacity:.5, marginTop:2 }}>{c.tipo}</div>
+
+        {/* Entradas / Saídas / Resultado do período */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginBottom:16 }}>
+          <div style={{ background:'rgba(255,255,255,.08)', borderRadius:8, padding:'10px 14px' }}>
+            <div style={{ fontSize:11, opacity:.6, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>Entradas pagas</div>
+            <div style={{ fontSize:20, fontWeight:800, color:'#7ddc9b', marginTop:4 }}>{fmtR(cashMetrics.entradas)}</div>
+          </div>
+          <div style={{ background:'rgba(255,255,255,.08)', borderRadius:8, padding:'10px 14px' }}>
+            <div style={{ fontSize:11, opacity:.6, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>Saídas pagas</div>
+            <div style={{ fontSize:20, fontWeight:800, color:'#ff8080', marginTop:4 }}>{fmtR(cashMetrics.saidas)}</div>
+          </div>
+          <div style={{ background:'rgba(255,255,255,.12)', borderRadius:8, padding:'10px 14px' }}>
+            <div style={{ fontSize:11, opacity:.6, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>Resultado período</div>
+            <div style={{ fontSize:20, fontWeight:800, color: cashMetrics.resultado>=0?'var(--gold)':'#ff8080', marginTop:4 }}>{fmtR(cashMetrics.resultado)}</div>
+          </div>
+        </div>
+
+        {/* Saldo por conta */}
+        <div style={{ borderTop:'1px solid rgba(255,255,255,.15)', paddingTop:12 }}>
+          <div style={{ fontSize:11, opacity:.5, fontWeight:700, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:8 }}>Saldo atual por conta</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:8 }}>
+            {saldoContas.map(c => (
+              <div key={c.id} style={{ background:'rgba(255,255,255,.08)', borderRadius:7, padding:'8px 12px' }}>
+                <div style={{ fontSize:11, opacity:.6, fontWeight:600 }}>{c.nome}</div>
+                <div style={{ fontSize:16, fontWeight:800, color: c.saldo>=0?'var(--gold)':'#ff8080', marginTop:3 }}>{fmtR(c.saldo)}</div>
+              </div>
+            ))}
+            {/* Saldo Total Consolidado */}
+            <div style={{ background:'rgba(255,255,255,.18)', borderRadius:7, padding:'8px 12px', border:'1px solid rgba(255,255,255,.3)' }}>
+              <div style={{ fontSize:11, opacity:.8, fontWeight:700 }}>TOTAL CONSOLIDADO</div>
+              <div style={{ fontSize:18, fontWeight:900, color:'var(--gold)', marginTop:3 }}>{fmtR(saldoContas.reduce((s,c)=>s+c.saldo,0))}</div>
             </div>
-          ))}
-          {saldoContas.length === 0 && (
-            <div style={{ opacity:.5, fontSize:13 }}>Nenhuma conta cadastrada</div>
-          )}
+          </div>
         </div>
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
