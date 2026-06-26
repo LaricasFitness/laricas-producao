@@ -122,9 +122,11 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
         fornecedorId = forn?.id
       }
 
+      let lancId = null
+
       if (lancarContas) {
         // 2. Cria lançamento
-        const { data: lanc } = await supabase.from('fin_lancamentos').insert({
+        const { data: lanc, error: lancErr } = await supabase.from('fin_lancamentos').insert({
           tipo: 'despesa',
           descricao: `NF ${nf.numero} — ${nf.fornecedor.razao_social || nf.fornecedor.nome_fantasia}`,
           valor_total: nf.valor_total,
@@ -137,46 +139,53 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
           total_parcelas: duplicatas.length,
           criado_por: JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
         }).select().single()
+        if (lancErr) throw new Error('Erro ao criar lançamento: ' + lancErr.message)
+        lancId = lanc.id
 
         // 3. Parcelas — uma por duplicata
-        await supabase.from('fin_parcelas').insert(
+        const { error: parcErr } = await supabase.from('fin_parcelas').insert(
           duplicatas.map((d, i) => ({
-            lancamento_id: lanc.id,
+            lancamento_id: lancId,
             numero_parcela: i + 1,
-            valor: d.valor,
+            valor: parseFloat(d.valor) || 0,
             data_vencimento: d.vencimento,
-            data_competencia: competencia,
+            data_competencia: competencia || nf.data_emissao,
             status: 'em_aberto',
             conta_id: conta_id || null,
           }))
         )
+        if (parcErr) throw new Error('Erro ao criar parcelas: ' + parcErr.message)
       }
 
-      // 4. Itens da NF — independente de lançar ou não
-      if (nf.itens.length) {
-        const itensInsert = []
-        for (let idx = 0; idx < nf.itens.length; idx++) {
-          const item = nf.itens[idx]
-          let insumo_id = null
-          if (salvarInsumos) {
-            const { data: ins } = await supabase.from('fin_insumos')
-              .upsert({
-                descricao: item.descricao,
-                ncm: item.ncm,
-                unidade: item.unidade,
-                preco_medio: item.valor_unitario,
-                fornecedor_id: fornecedorId,
-              }, { onConflict: 'descricao' })
-              .select().single()
-            insumo_id = ins?.id
-          }
+      // 4. Itens da NF
+      if (nf.itens.length && lancId) {
+        const itensInsert = nf.itens.map((item, idx) => {
           const catItem = catUnica ? null : (itensCategoria[idx] || null)
-          itensInsert.push({ ...item, insumo_id, categoria_id: catItem })
+          return {
+            lancamento_id: lancId,
+            descricao: item.descricao,
+            ncm: item.ncm || null,
+            quantidade: item.quantidade,
+            unidade: item.unidade,
+            valor_unitario: item.valor_unitario,
+            valor_total: item.valor_total,
+          }
+        })
+        if (itensInsert.length > 0) {
+          await supabase.from('fin_nf_itens').insert(itensInsert)
         }
-        // Só salva fin_nf_itens se lançou (para vincular ao lancamento_id)
-        // Se não lançou, salva só insumos
-        if (!lancarContas) {
-          // insumos já foram upsertados acima
+      }
+
+      // 5. Salvar insumos (independente de lançar)
+      if (salvarInsumos && nf.itens.length) {
+        for (const item of nf.itens) {
+          await supabase.from('fin_insumos').upsert({
+            descricao: item.descricao,
+            ncm: item.ncm || null,
+            unidade: item.unidade || 'UN',
+            preco_medio: item.valor_unitario || 0,
+            fornecedor_id: fornecedorId,
+          }, { onConflict: 'descricao' })
         }
       }
 
