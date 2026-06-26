@@ -82,6 +82,7 @@ function ModalNovaCategoria({ tipo, onClose, onSaved }) {
 // ── Modal confirmação XML ─────────────────────────────────────────────────────
 function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved }) {
   const [categoria_id, setCategoria] = useState('')
+  const [itensCategoria, setItensCategoria] = useState({}) // { idx: categoria_id }
   const [conta_id, setConta] = useState(contas[0]?.id || '')
   const [forma_id, setForma] = useState('')
   const [vencimento, setVencimento] = useState(nf.data_emissao)
@@ -124,17 +125,17 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
         valor: nf.valor_total,
         data_vencimento: vencimento,
         data_competencia: nf.data_emissao,
-        status: 'pendente',
+        status: 'em_aberto',
         conta_id: conta_id || null,
       })
 
-      // 4. Itens da NF
+      // 4. Itens da NF — cada item com sua própria categoria
       if (nf.itens.length) {
         const itensInsert = []
-        for (const item of nf.itens) {
+        for (let idx = 0; idx < nf.itens.length; idx++) {
+          const item = nf.itens[idx]
           let insumo_id = null
           if (salvarInsumos) {
-            // Upsert insumo por descrição
             const { data: ins } = await supabase.from('fin_insumos')
               .upsert({
                 descricao: item.descricao,
@@ -146,7 +147,9 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
               .select().single()
             insumo_id = ins?.id
           }
-          itensInsert.push({ ...item, lancamento_id: lanc.id, insumo_id })
+          // Usa categoria por item se definida, senão usa a categoria global
+          const catItem = itensCategoria[idx] || categoria_id || null
+          itensInsert.push({ ...item, lancamento_id: lanc.id, insumo_id, categoria_id: catItem })
         }
         await supabase.from('fin_nf_itens').insert(itensInsert)
       }
@@ -172,10 +175,29 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
             <div style={{fontWeight:800,color:'var(--purple)',fontSize:16,marginTop:6}}>Total: {fmtR(nf.valor_total)}</div>
           </div>
 
-          <div style={{maxHeight:160,overflowY:'auto',marginBottom:14,border:'1px solid var(--gray-200)',borderRadius:8}}>
+          <div style={{maxHeight:200,overflowY:'auto',marginBottom:14,border:'1px solid var(--gray-200)',borderRadius:8}}>
             <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
-              <thead><tr><th style={{textAlign:'left',padding:'6px 10px',background:'var(--gray-50)'}}>Produto</th><th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Qtd</th><th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Total</th></tr></thead>
-              <tbody>{nf.itens.map((it,i)=><tr key={i} style={{borderTop:'1px solid var(--gray-100)'}}><td style={{padding:'5px 10px'}}>{it.descricao}</td><td style={{textAlign:'right',padding:'5px 10px'}}>{it.quantidade} {it.unidade}</td><td style={{textAlign:'right',padding:'5px 10px',fontWeight:600}}>{fmtR(it.valor_total)}</td></tr>)}</tbody>
+              <thead><tr>
+                <th style={{textAlign:'left',padding:'6px 10px',background:'var(--gray-50)'}}>Produto</th>
+                <th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Qtd</th>
+                <th style={{textAlign:'right',padding:'6px 10px',background:'var(--gray-50)'}}>Total</th>
+                <th style={{padding:'6px 10px',background:'var(--gray-50)',minWidth:140}}>Categoria</th>
+              </tr></thead>
+              <tbody>{nf.itens.map((it,i)=>(
+                <tr key={i} style={{borderTop:'1px solid var(--gray-100)'}}>
+                  <td style={{padding:'5px 10px'}}>{it.descricao}</td>
+                  <td style={{textAlign:'right',padding:'5px 10px'}}>{it.quantidade} {it.unidade}</td>
+                  <td style={{textAlign:'right',padding:'5px 10px',fontWeight:600}}>{fmtR(it.valor_total)}</td>
+                  <td style={{padding:'3px 6px'}}>
+                    <select className="form-input" style={{padding:'3px 6px',fontSize:11}}
+                      value={itensCategoria[i]||categoria_id}
+                      onChange={e=>setItensCategoria(prev=>({...prev,[i]:e.target.value}))}>
+                      <option value="">— padrão —</option>
+                      {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
 
@@ -224,21 +246,22 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
   )
 }
 
-function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasPag, onClose, onSaved }) {
+function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasPag, fornecedores, onClose, onSaved }) {
   const isNew = !lancamento?.id
   const [f, setF] = useState({
-    descricao:        lancamento?.descricao || '',
-    valor_total:      lancamento?.valor_total || '',
-    categoria_id:     lancamento?.categoria_id || '',
-    canal_id:         lancamento?.canal_id || '',
-    conta_id:         lancamento?.conta_id || (contas[0]?.id || ''),
+    descricao:          lancamento?.descricao || '',
+    valor_parcela:      lancamento ? (lancamento.valor_total / (lancamento.total_parcelas||1)).toFixed(2) : '',
+    categoria_id:       lancamento?.categoria_id || '',
+    canal_id:           lancamento?.canal_id || '',
+    conta_id:           lancamento?.conta_id || (contas[0]?.id || ''),
     forma_pagamento_id: lancamento?.forma_pagamento_id || '',
-    total_parcelas:   lancamento?.total_parcelas || 1,
-    recorrente:       lancamento?.recorrente || false,
-    observacao:       lancamento?.observacao || '',
-    data_vencimento:  lancamento?.fin_parcelas?.[0]?.data_vencimento || new Date().toISOString().slice(0,10),
-    data_competencia: lancamento?.fin_parcelas?.[0]?.data_competencia || '',
-    status:           lancamento?.fin_parcelas?.[0]?.status || 'pendente',
+    fornecedor_id:      lancamento?.fornecedor_id || '',
+    total_parcelas:     lancamento?.total_parcelas || 1,
+    recorrente:         lancamento?.recorrente || false,
+    observacao:         lancamento?.observacao || '',
+    data_vencimento:    lancamento?.fin_parcelas?.[0]?.data_vencimento || new Date().toISOString().slice(0,10),
+    data_competencia:   lancamento?.fin_parcelas?.[0]?.data_competencia || '',
+    status:             lancamento?.fin_parcelas?.[0]?.status || 'em_aberto',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
@@ -247,16 +270,18 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
 
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
 
+  const nParcelas = parseInt(f.total_parcelas) || 1
+  const valorParcela = parseFloat(f.valor_parcela) || 0
+  const valorTotal = valorParcela * nParcelas
+
   function gerarParcelas() {
-    const n = parseInt(f.total_parcelas) || 1
-    const valorParcela = (parseFloat(f.valor_total) || 0) / n
     const base = new Date(f.data_vencimento + 'T12:00:00')
-    return Array.from({ length: n }, (_, i) => {
+    return Array.from({ length: nParcelas }, (_, i) => {
       const d = new Date(base)
       d.setMonth(d.getMonth() + i)
       return {
         numero_parcela: i + 1,
-        valor: Math.round(valorParcela * 100) / 100,
+        valor: valorParcela,
         data_vencimento: d.toISOString().slice(0, 10),
         data_competencia: f.data_competencia || null,
         status: f.status,
@@ -266,18 +291,19 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
 
   async function salvar() {
     if (!f.descricao.trim()) { setErr('Descrição obrigatória.'); return }
-    if (!f.valor_total || parseFloat(f.valor_total) <= 0) { setErr('Valor deve ser maior que zero.'); return }
+    if (!valorParcela || valorParcela <= 0) { setErr('Valor da parcela deve ser maior que zero.'); return }
     if (!f.categoria_id) { setErr('Selecione uma categoria.'); return }
     setSaving(true); setErr('')
     try {
       const payload = {
         tipo, descricao: f.descricao.trim(),
-        valor_total: parseFloat(f.valor_total),
+        valor_total: valorTotal,
         categoria_id: f.categoria_id,
         canal_id: f.canal_id || null,
         conta_id: f.conta_id || null,
         forma_pagamento_id: f.forma_pagamento_id || null,
-        total_parcelas: parseInt(f.total_parcelas) || 1,
+        fornecedor_id: f.fornecedor_id || null,
+        total_parcelas: nParcelas,
         recorrente: f.recorrente,
         observacao: f.observacao || null,
         criado_por: JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
@@ -285,8 +311,7 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
       if (isNew) {
         const { data: l, error } = await supabase.from('fin_lancamentos').insert(payload).select().single()
         if (error) throw error
-        const parcelas = gerarParcelas().map(p => ({ ...p, lancamento_id: l.id }))
-        await supabase.from('fin_parcelas').insert(parcelas)
+        await supabase.from('fin_parcelas').insert(gerarParcelas().map(p => ({ ...p, lancamento_id: l.id })))
       } else {
         await supabase.from('fin_lancamentos').update(payload).eq('id', lancamento.id)
       }
@@ -296,8 +321,6 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
   }
 
   const catsFiltradas = catsLocais.filter(c => c.tipo === tipo && c.nivel === 1)
-  const nParcelas = parseInt(f.total_parcelas) || 1
-  const valorParcela = nParcelas > 1 ? ((parseFloat(f.valor_total) || 0) / nParcelas) : null
 
   return (
     <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
@@ -319,15 +342,16 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
 
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">Valor total (R$) *</label>
-              <input className="form-input" type="number" min={0} step={0.01} value={f.valor_total}
-                onChange={e=>set('valor_total',e.target.value)} placeholder="0,00"/>
+              <label className="form-label">Valor por parcela (R$) *</label>
+              <input className="form-input" type="number" min={0} step={0.01} value={f.valor_parcela}
+                onChange={e=>set('valor_parcela',e.target.value)} placeholder="0,00"/>
+              {nParcelas > 1 && valorParcela > 0 && <span className="form-hint">Total: {fmtR(valorTotal)}</span>}
             </div>
             <div className="form-group">
               <label className="form-label">Parcelas</label>
               <input className="form-input" type="number" min={1} max={48} value={f.total_parcelas}
                 onChange={e=>set('total_parcelas',e.target.value)} disabled={f.recorrente}/>
-              {valorParcela && <span className="form-hint">{nParcelas}x de {fmtR(valorParcela)}</span>}
+              {nParcelas === 1 && valorParcela > 0 && <span className="form-hint">Total: {fmtR(valorTotal)}</span>}
             </div>
           </div>
 
@@ -394,15 +418,22 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
             <div className="form-group">
               <label className="form-label">Status inicial</label>
               <select className="form-input" value={f.status} onChange={e=>set('status',e.target.value)}>
-                <option value="pendente">Pendente</option>
+                <option value="em_aberto">Em aberto</option>
                 <option value="agendado">Agendado</option>
                 <option value="pago">Pago</option>
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">Observação</label>
-              <input className="form-input" value={f.observacao} onChange={e=>set('observacao',e.target.value)} placeholder="Opcional"/>
+              <label className="form-label">Fornecedor (opcional)</label>
+              <select className="form-input" value={f.fornecedor_id} onChange={e=>set('fornecedor_id',e.target.value)}>
+                <option value="">Sem fornecedor</option>
+                {fornecedores.map(forn=><option key={forn.id} value={forn.id}>{forn.nome_fantasia||forn.razao_social}</option>)}
+              </select>
             </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={f.observacao} onChange={e=>set('observacao',e.target.value)} placeholder="Opcional"/>
           </div>
         </div>
         <div className="modal-footer">
@@ -450,7 +481,8 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
           <div className="form-group">
             <label className="form-label">Status</label>
             <select className="form-input" value={status} onChange={e => setStatus(e.target.value)}>
-              <option value="pendente">Pendente</option>
+              <option value="em_aberto">Em aberto</option>
+              <option value="pendente">Pendente (legado)</option>
               <option value="agendado">Agendado</option>
               <option value="pago">Pago</option>
               <option value="cancelado">Cancelado</option>
@@ -496,6 +528,7 @@ export default function FinLancamentos({ tipo }) {
   const [canais, setCanais] = useState([])
   const [contas, setContas] = useState([])
   const [formasPag, setFormasPag] = useState([])
+  const [fornecedores, setFornecedores] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
   const [modalParcela, setModalParcela] = useState(null)
@@ -509,11 +542,13 @@ export default function FinLancamentos({ tipo }) {
       supabase.from('fin_canais').select('*').eq('ativo',true).order('ordem'),
       supabase.from('fin_contas').select('*').eq('ativo',true),
       supabase.from('fin_formas_pagamento').select('*').eq('ativo',true).order('ordem'),
-    ]).then(([{data:cats},{data:cans},{data:conts},{data:fps}]) => {
+      supabase.from('fin_fornecedores').select('*').eq('ativo',true).order('razao_social'),
+    ]).then(([{data:cats},{data:cans},{data:conts},{data:fps},{data:forns}]) => {
       setCategorias(cats||[])
       setCanais(cans||[])
       setContas(conts||[])
       setFormasPag(fps||[])
+      setFornecedores(forns||[])
     })
   }, [])
 
@@ -581,7 +616,8 @@ export default function FinLancamentos({ tipo }) {
             <label className="form-label">Status</label>
             <select className="form-input" value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)}>
               <option value="todos">Todos</option>
-              <option value="pendente">Pendente</option>
+              <option value="em_aberto">Em aberto</option>
+              <option value="pendente">Pendente (legado)</option>
               <option value="agendado">Agendado</option>
               <option value="pago">Pago</option>
               <option value="vencido">Vencido</option>
@@ -743,9 +779,17 @@ export default function FinLancamentos({ tipo }) {
                                       <td><span className={`pill ${scfg.cls}`} style={{ fontSize: 10 }}>{scfg.label}</span></td>
                                       <td>{fmtData(p.data_pagamento) || '—'}</td>
                                       <td>
-                                        <button className="btn btn-ghost btn-xs" onClick={() => setModalParcela(p)}>
-                                          Atualizar
-                                        </button>
+                                        <div style={{display:'flex',gap:4}}>
+                                          <button className="btn btn-ghost btn-xs" onClick={() => setModalParcela(p)}>
+                                            Editar
+                                          </button>
+                                          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
+                                            onClick={async () => {
+                                              if (!window.confirm('Excluir esta parcela?')) return
+                                              await supabase.from('fin_parcelas').delete().eq('id', p.id)
+                                              load()
+                                            }}>✕</button>
+                                        </div>
                                       </td>
                                     </tr>
                                   )
@@ -767,7 +811,7 @@ export default function FinLancamentos({ tipo }) {
       {modal && (
         <ModalLancamento
           lancamento={modal === 'new' ? null : modal}
-          tipo={tipo} categorias={categorias} canais={canais} contas={contas} formasPag={formasPag}
+          tipo={tipo} categorias={categorias} canais={canais} contas={contas} formasPag={formasPag} fornecedores={fornecedores}
           onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }}
         />
       )}
