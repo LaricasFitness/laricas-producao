@@ -83,6 +83,7 @@ export default function FinDashboard() {
   const [kpisAnt, setKpisAnt] = useState(null)
   const [alertas, setAlertas] = useState([])
   const [projecao, setProjecao] = useState(null)
+  const [saldoContas, setSaldoContas] = useState([])
   const [loading, setLoading] = useState(true)
 
   async function calcKpis(ini, fim) {
@@ -118,7 +119,6 @@ export default function FinDashboard() {
       const [k, ka] = await Promise.all([calcKpis(ini, fim), calcKpis(iniA, fimA)])
       setKpis(k); setKpisAnt(ka)
 
-      // Projeção do mês baseada nos dias passados
       const diaAtual = hoje.getDate()
       const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate()
       const fatorProj = diasNoMes / diaAtual
@@ -126,32 +126,42 @@ export default function FinDashboard() {
         receita: k.recPago * fatorProj,
         despesa: k.desPago * fatorProj,
         resultado: (k.recPago - k.desPago) * fatorProj,
-        diasPassados: diaAtual,
-        diasNoMes,
+        diasPassados: diaAtual, diasNoMes,
       })
 
-      // Alertas — próximos 10 dias + vencidos
+      // Saldo de cada conta
+      const { data: contas } = await supabase.from('fin_contas').select('*').eq('ativo', true)
+      const { data: pagas } = await supabase.from('fin_parcelas')
+        .select('valor, conta_id, fin_lancamentos(tipo)')
+        .eq('status', 'pago')
+      const saldoMap = {}
+      for (const c of (contas||[])) {
+        saldoMap[c.id] = { ...c, saldo: c.saldo_inicial || 0 }
+      }
+      for (const p of (pagas||[])) {
+        const cid = p.conta_id
+        if (!cid || !saldoMap[cid]) continue
+        if (p.fin_lancamentos?.tipo === 'receita') saldoMap[cid].saldo += p.valor
+        else saldoMap[cid].saldo -= p.valor
+      }
+      setSaldoContas(Object.values(saldoMap).sort((a,b)=>a.nome.localeCompare(b.nome)))
+
       const em10 = new Date(); em10.setDate(em10.getDate()+10)
       const ha30 = new Date(); ha30.setDate(ha30.getDate()-30)
-      const { data: pends } = await supabase
-        .from('fin_parcelas')
+      const { data: pends } = await supabase.from('fin_parcelas')
         .select('*, fin_lancamentos(tipo, descricao)')
         .in('status', ['pendente','agendado','vencido'])
         .gte('data_vencimento', ha30.toISOString().slice(0,10))
         .lte('data_vencimento', em10.toISOString().slice(0,10))
-        .order('data_vencimento')
-        .limit(20)
+        .order('data_vencimento').limit(20)
 
       const hojeStr = hoje.toISOString().slice(0,10)
-      const alertasFormatados = (pends||[]).map(p => {
+      setAlertas((pends||[]).map(p => {
         const diasAte = Math.ceil((new Date(p.data_vencimento+'T12:00:00') - new Date()) / 86400000)
-        const tipo = p.status === 'vencido' ? 'vencido'
-          : p.data_vencimento === hojeStr ? 'hoje'
-          : p.fin_lancamentos?.tipo === 'receita' ? 'receber' : 'proximo'
+        const tipo = p.status==='vencido' ? 'vencido' : p.data_vencimento===hojeStr ? 'hoje' : p.fin_lancamentos?.tipo==='receita' ? 'receber' : 'proximo'
         return { ...p, diasAte, tipo }
-      }).sort((a,b) => a.diasAte - b.diasAte)
+      }).sort((a,b)=>a.diasAte-b.diasAte))
 
-      setAlertas(alertasFormatados)
       setLoading(false)
     }
     load()
@@ -175,7 +185,27 @@ export default function FinDashboard() {
         </div>
       </div>
 
-      {/* KPIs receita */}
+      {/* 💰 Posição de Caixa — FOCO PRINCIPAL */}
+      <div style={{ background:'var(--purple-dark)', borderRadius:12, padding:'18px 20px', color:'#fff' }}>
+        <div style={{ fontWeight:800, fontSize:15, marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span>💰 Posição de Caixa</span>
+          <span style={{ fontSize:22, fontWeight:900, color:'var(--gold)' }}>
+            {fmtR(saldoContas.reduce((s,c)=>s+c.saldo,0))}
+          </span>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:10 }}>
+          {saldoContas.map(c => (
+            <div key={c.id} style={{ background:'rgba(255,255,255,.1)', borderRadius:8, padding:'10px 14px' }}>
+              <div style={{ fontSize:11, opacity:.7, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>{c.nome}</div>
+              <div style={{ fontSize:18, fontWeight:800, color: c.saldo >= 0 ? 'var(--gold)' : '#ff8080', marginTop:4 }}>{fmtR(c.saldo)}</div>
+              <div style={{ fontSize:10, opacity:.5, marginTop:2 }}>{c.tipo}</div>
+            </div>
+          ))}
+          {saldoContas.length === 0 && (
+            <div style={{ opacity:.5, fontSize:13 }}>Nenhuma conta cadastrada</div>
+          )}
+        </div>
+      </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
         <KPICard label="Receita recebida" value={kpis.recPago} anterior={kpisAnt?.recPago}
           cor="var(--ok)" icon="✅" sub={`de ${fmtR(kpis.recTotal)} previsto`} />
