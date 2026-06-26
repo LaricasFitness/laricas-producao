@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { Plus, Pencil, Save, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
+import FinConfigCanais from './FinConfigCanais'
+import FinConfigDRE from './FinConfigDRE'
 
 const CORES = ['#e74c3c','#9b59b6','#2980b9','#27ae60','#f39c12','#1abc9c','#e67e22','#8e44ad','#16a085','#7f8c8d','#673f7c','#eab782','#c0392b','#2c3e50','#1abc9c']
 
@@ -265,6 +267,7 @@ export default function FinConfig() {
           {id:'contas',label:'🏦 Contas'},
           {id:'formas',label:'💳 Formas de Pagamento'},
           {id:'fornecedores',label:'🏭 Fornecedores'},
+          {id:'dre',label:'📋 Cascata DRE'},
         ].map(t=>(
           <button key={t.id} className={`btn ${aba===t.id?'btn-primary':'btn-ghost'}`} style={{fontSize:13}} onClick={()=>setAba(t.id)}>
             {t.label}
@@ -279,8 +282,10 @@ export default function FinConfig() {
         </>
       )}
 
-      {aba==='canais' && (
-        <SecaoSimples titulo="🏷️ Canais / Origens" tabela="fin_canais" orderBy="ordem"
+      {aba==='canais' && <FinConfigCanais/>}
+
+      {aba==='contas' && (
+        <SecaoSimples titulo="🏦 Contas bancárias / Caixas" tabela="fin_contas" orderBy="nome"
           campos={[
             {key:'nome',label:'Nome'},
             {key:'cor',label:'Cor'},
@@ -343,6 +348,8 @@ export default function FinConfig() {
           defaults={{razao_social:'',nome_fantasia:'',cnpj:'',cidade:'',uf:'SP',ativo:true}}
         />
       )}
+
+      {aba==='dre' && <FinConfigDRE/>}
     </>
   )
 }
