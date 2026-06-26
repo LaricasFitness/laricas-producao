@@ -190,6 +190,18 @@ function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
 
   function RowEdit({item,onSave,onCancel}) {
     const [f,setF] = useState({...item})
+
+    function handleSave() {
+      // Converte campos numéricos antes de salvar
+      const converted = {...f}
+      for (const c of campos) {
+        if (c.type === 'number' && converted[c.key] !== undefined) {
+          converted[c.key] = parseFloat(converted[c.key]) || 0
+        }
+      }
+      onSave(converted)
+    }
+
     return (
       <tr style={{background:'var(--purple-ghost)'}}>
         {campos.map(c=>(
@@ -200,12 +212,14 @@ function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
               ? <select className="form-input" style={{padding:'4px 8px',fontSize:12}} value={f[c.key]||''} onChange={e=>setF(p=>({...p,[c.key]:e.target.value}))}>
                   {c.options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
-              : <input className="form-input" style={{padding:'4px 8px',fontSize:12}} value={f[c.key]||''} onChange={e=>setF(p=>({...p,[c.key]:e.target.value}))}/>}
+              : <input className="form-input" style={{padding:'4px 8px',fontSize:12}}
+                  type={c.type||'text'}
+                  value={f[c.key]??''} onChange={e=>setF(p=>({...p,[c.key]:e.target.value}))}/>}
           </td>
         ))}
         <td style={{padding:'6px 10px'}}>
           <div style={{display:'flex',gap:4}}>
-            <button className="btn btn-primary btn-xs" onClick={()=>onSave(f)}><Save size={11}/></button>
+            <button className="btn btn-primary btn-xs" onClick={handleSave}><Save size={11}/></button>
             <button className="btn btn-ghost btn-xs" onClick={onCancel}>✕</button>
           </div>
         </td>
@@ -296,7 +310,7 @@ export default function FinConfig() {
               {value:'investimento',label:'Investimento'},
             ]},
             {key:'descricao',label:'Descrição'},
-            {key:'saldo_inicial',label:'Saldo inicial'},
+            {key:'saldo_inicial',label:'Saldo inicial',type:'number'},
             {key:'ativo',label:'Ativo'},
           ]}
           defaults={{nome:'',tipo:'corrente',descricao:'',saldo_inicial:0,ativo:true}}
