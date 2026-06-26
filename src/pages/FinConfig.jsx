@@ -21,12 +21,20 @@ function ModalCategoria({ cat, categorias, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const set = (k,v) => setF(p=>({...p,[k]:v}))
 
-  const pais = categorias.filter(c => c.nivel < f.nivel && c.tipo === f.tipo)
-  const nivelLabel = ['Grupo principal','Subcategoria','Sub-subcategoria'][f.nivel-1] || 'Categoria'
+  const pais = categorias.filter(c => c.nivel < (f.nivel||2) && c.tipo === f.tipo && c.id !== cat?.id)
+  const nivelLabel = ['Grupo principal','Subcategoria','Sub-subcategoria'][(f.nivel||1)-1] || 'Categoria'
 
   async function salvar() {
     setSaving(true)
-    const payload = { ...f, parent_id: f.parent_id || null, nivel: f.parent_id ? 2 : 1 }
+    const payload = {
+      nome: f.nome,
+      tipo: f.tipo,
+      cor: f.cor,
+      ordem: f.ordem,
+      parent_id: f.parent_id || null,
+      nivel: f.parent_id ? (pais.find(p=>p.id===f.parent_id)?.nivel||1)+1 : 1,
+      ativo: f.ativo,
+    }
     if (isNew) await supabase.from('fin_categorias').insert(payload)
     else await supabase.from('fin_categorias').update(payload).eq('id', cat.id)
     onSaved(); setSaving(false)
