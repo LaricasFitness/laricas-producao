@@ -231,7 +231,7 @@ export default function FinDRE() {
           </div>
           <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, cursor:'pointer', marginBottom:6 }}>
             <input type="checkbox" checked={mostrarPct} onChange={e=>setMostrarPct(e.target.checked)} style={{accentColor:'var(--purple)'}} />
-            % s/ Fat. Bruto
+            % (s/ Fat. Bruto para ded./imp. · s/ Fat. Líquido demais)
           </label>
           <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
             <button className="btn btn-ghost" onClick={carregar}><RefreshCw size={14}/></button>
@@ -290,15 +290,17 @@ export default function FinDRE() {
                         <td style={{ padding:'7px 14px 7px 24px', color:'var(--gray-700)', position:'sticky', left:0, background:'var(--white)' }}>{cat}</td>
                         {meses.map(m => {
                           const v = dados[m]?.[cat] || 0
-                          const fb = calcSubtotais(dados[m]||{}).fb
+                          const s = calcSubtotais(dados[m]||{})
+                          // Deduções e Impostos: % s/ Fat. Bruto; resto: % s/ Fat. Líquido
+                          const base = (grupo.key==='deducoes'||grupo.key==='impostos') ? s.fb : s.fl
                           return (
                             <td key={m} style={{ padding:'7px 10px', textAlign:'right' }}>
                               <CelulaEditavel
                                 valor={v}
                                 onSave={novoVal => salvarAjuste(m, cat, novoVal)}
                               />
-                              {mostrarPct && v>0 && fb>0 && (
-                                <div style={{ fontSize:10, color:'var(--gray-400)' }}>{fmtPct(pct(v,fb))}</div>
+                              {mostrarPct && v>0 && base>0 && (
+                                <div style={{ fontSize:10, color:'var(--gray-400)' }}>{fmtPct(pct(v,base))}</div>
                               )}
                             </td>
                           )
@@ -319,17 +321,21 @@ export default function FinDRE() {
                         {meses.map(m => {
                           const s = calcSubtotais(dados[m]||{})
                           const v = s[chave]||0
-                          const fb = s.fb
+                          const base = (chave==='fb'||chave==='fl') ? s.fb : s.fl
                           return (
                             <td key={m} style={{ textAlign:'right', padding:'10px 10px', fontWeight:800, fontSize:13, color:v>=0?(grupo.subtotal==='Resultado Operacional'?'var(--purple)':'var(--ok)'):'var(--danger)' }}>
                               {fmtR(v)}
-                              {mostrarPct && fb>0 && <div style={{ fontSize:10, fontWeight:400, color:'var(--gray-400)' }}>{fmtPct(pct(v,fb))}</div>}
+                              {mostrarPct && base>0 && <div style={{ fontSize:10, fontWeight:400, color:'var(--gray-400)' }}>{fmtPct(pct(v,base))}</div>}
                             </td>
                           )
                         })}
                         <td style={{ textAlign:'right', padding:'10px 10px', fontWeight:800, fontSize:13, color:totVal>=0?(grupo.subtotal==='Resultado Operacional'?'var(--purple)':'var(--ok)'):'var(--danger)' }}>
                           {fmtR(totVal)}
-                          {mostrarPct && totSub.fb>0 && <div style={{ fontSize:10, fontWeight:400, color:'var(--gray-400)' }}>{fmtPct(pct(totVal,totSub.fb||1))}</div>}
+                          {mostrarPct && (chave==='fb'||chave==='fl' ? totSub.fb : totSub.fl) > 0 && (
+                            <div style={{ fontSize:10, fontWeight:400, color:'var(--gray-400)' }}>
+                              {fmtPct(pct(totVal, (chave==='fb'||chave==='fl' ? totSub.fb : totSub.fl)||1))}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )
