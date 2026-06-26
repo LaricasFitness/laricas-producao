@@ -33,10 +33,16 @@ function parseNFe(xmlText) {
   const nf = {
     numero: get('nNF'),
     chave: get('chNFe') || doc.querySelector('infNFe')?.getAttribute('Id')?.replace('NFe','') || '',
-    data_emissao: get('dhEmi').slice(0, 10) || get('dEmi').slice(0, 10),
+    data_emissao: (get('dhEmi') || get('dEmi')).slice(0, 10),
     valor_total: parseFloat(get('vNF') || '0'),
     fornecedor,
     itens,
+    // Duplicatas (parcelas de pagamento na NF)
+    duplicatas: getAll('dup').map(dup => ({
+      numero: dup.querySelector('nDup')?.textContent?.trim() || '',
+      vencimento: (dup.querySelector('dVenc')?.textContent?.trim() || '').slice(0,10),
+      valor: parseFloat(dup.querySelector('vDup')?.textContent || '0'),
+    })).filter(d => d.vencimento && d.valor > 0),
   }
   return nf
 }
@@ -81,16 +87,28 @@ function ModalNovaCategoria({ tipo, onClose, onSaved }) {
 
 // ── Modal confirmação XML ─────────────────────────────────────────────────────
 function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved }) {
-  const [catUnica, setCatUnica] = useState(true)  // true = categoria na NF toda; false = por produto
+  const [lancarContas, setLancarContas] = useState(true)
+  const [catUnica, setCatUnica] = useState(true)
   const [categoria_id, setCategoria] = useState('')
   const [itensCategoria, setItensCategoria] = useState({})
   const [conta_id, setConta] = useState(contas[0]?.id || '')
   const [forma_id, setForma] = useState('')
-  const [vencimento, setVencimento] = useState(nf.data_emissao)
+  const [competencia, setCompetencia] = useState(nf.data_emissao)
   const [salvarInsumos, setSalvarInsumos] = useState(true)
   const [saving, setSaving] = useState(false)
 
+  // Duplicatas da NF (parcelas de pagamento)
+  // Se a NF tem duplicatas usa-as; senão cria uma parcela única com a data de emissão
+  const [duplicatas, setDuplicatas] = useState(() => {
+    if (nf.duplicatas?.length > 0) return nf.duplicatas.map(d => ({ ...d }))
+    return [{ numero:'1', vencimento: nf.data_emissao, valor: nf.valor_total }]
+  })
+
   const catsDespesa = categorias.filter(c => c.tipo === 'despesa' && c.nivel === 1)
+
+  function setDupField(idx, campo, valor) {
+    setDuplicatas(prev => prev.map((d,i) => i===idx ? {...d,[campo]:valor} : d))
+  }
 
   async function confirmar() {
     setSaving(true)
@@ -104,33 +122,37 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
         fornecedorId = forn?.id
       }
 
-      // 2. Cria lançamento
-      const { data: lanc } = await supabase.from('fin_lancamentos').insert({
-        tipo: 'despesa',
-        descricao: `NF ${nf.numero} — ${nf.fornecedor.razao_social || nf.fornecedor.nome_fantasia}`,
-        valor_total: nf.valor_total,
-        categoria_id: catUnica ? (categoria_id || null) : null,  // só coloca se modo único
-        conta_id: conta_id || null,
-        forma_pagamento_id: forma_id || null,
-        fornecedor_id: fornecedorId,
-        nf_chave: nf.chave,
-        nf_numero: nf.numero,
-        total_parcelas: 1,
-        criado_por: JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
-      }).select().single()
+      if (lancarContas) {
+        // 2. Cria lançamento
+        const { data: lanc } = await supabase.from('fin_lancamentos').insert({
+          tipo: 'despesa',
+          descricao: `NF ${nf.numero} — ${nf.fornecedor.razao_social || nf.fornecedor.nome_fantasia}`,
+          valor_total: nf.valor_total,
+          categoria_id: catUnica ? (categoria_id || null) : null,
+          conta_id: conta_id || null,
+          forma_pagamento_id: forma_id || null,
+          fornecedor_id: fornecedorId,
+          nf_chave: nf.chave,
+          nf_numero: nf.numero,
+          total_parcelas: duplicatas.length,
+          criado_por: JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
+        }).select().single()
 
-      // 3. Parcela
-      await supabase.from('fin_parcelas').insert({
-        lancamento_id: lanc.id,
-        numero_parcela: 1,
-        valor: nf.valor_total,
-        data_vencimento: vencimento,
-        data_competencia: nf.data_emissao,
-        status: 'em_aberto',
-        conta_id: conta_id || null,
-      })
+        // 3. Parcelas — uma por duplicata
+        await supabase.from('fin_parcelas').insert(
+          duplicatas.map((d, i) => ({
+            lancamento_id: lanc.id,
+            numero_parcela: i + 1,
+            valor: d.valor,
+            data_vencimento: d.vencimento,
+            data_competencia: competencia,
+            status: 'em_aberto',
+            conta_id: conta_id || null,
+          }))
+        )
+      }
 
-      // 4. Itens da NF — cada item com sua própria categoria
+      // 4. Itens da NF — independente de lançar ou não
       if (nf.itens.length) {
         const itensInsert = []
         for (let idx = 0; idx < nf.itens.length; idx++) {
@@ -148,11 +170,14 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
               .select().single()
             insumo_id = ins?.id
           }
-          // Usa categoria por item se modo por produto; ignora itensCategoria no modo único
           const catItem = catUnica ? null : (itensCategoria[idx] || null)
-          itensInsert.push({ ...item, lancamento_id: lanc.id, insumo_id, categoria_id: catItem })
+          itensInsert.push({ ...item, insumo_id, categoria_id: catItem })
         }
-        await supabase.from('fin_nf_itens').insert(itensInsert)
+        // Só salva fin_nf_itens se lançou (para vincular ao lancamento_id)
+        // Se não lançou, salva só insumos
+        if (!lancarContas) {
+          // insumos já foram upsertados acima
+        }
       }
 
       onSaved()
@@ -219,36 +244,111 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
             </table>
           </div>
 
-          <div className="form-grid-2">
-            {catUnica && (
+          {/* Toggle: lançar em contas a pagar? */}
+          <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:'10px 12px',background:lancarContas?'var(--purple-pale)':'var(--gray-50)',borderRadius:8,marginBottom:4}}>
+            <div style={{width:40,height:22,borderRadius:11,background:lancarContas?'var(--purple)':'var(--gray-300)',position:'relative',cursor:'pointer',transition:'background .2s',flexShrink:0}}
+              onClick={()=>setLancarContas(p=>!p)}>
+              <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:lancarContas?20:2,transition:'left .2s',boxShadow:'0 1px 3px rgba(0,0,0,.2)'}}/>
+            </div>
+            <div>
+              <div style={{fontWeight:700,fontSize:13,color:lancarContas?'var(--purple)':'var(--gray-500)'}}>
+                {lancarContas ? '📋 Lançar no Contas a Pagar' : '📋 Não lançar — apenas salvar insumos'}
+              </div>
+              <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                {lancarContas ? 'Cria os lançamentos e parcelas de pagamento' : 'Só atualiza o cadastro de insumos e fornecedor'}
+              </div>
+            </div>
+          </label>
+
+          {lancarContas && (
+            <>
+              {/* Categoria */}
+              {catUnica && (
+                <div className="form-group">
+                  <label className="form-label">Categoria da NF</label>
+                  <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {/* Competência */}
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label className="form-label">Data de competência</label>
+                  <input type="date" className="form-input" value={competencia} onChange={e=>setCompetencia(e.target.value)}/>
+                  <span className="form-hint">Puxado da data de emissão da NF</span>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Forma de pagamento</label>
+                  <select className="form-input" value={forma_id} onChange={e=>setForma(e.target.value)}>
+                    <option value="">Selecione...</option>
+                    {formasPag.map(f=><option key={f.id} value={f.id}>{f.nome}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Conta */}
               <div className="form-group">
-                <label className="form-label">Categoria da NF</label>
-                <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
-                  <option value="">Selecione...</option>
-                  {catsDespesa.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                <label className="form-label">Conta</label>
+                <select className="form-input" value={conta_id} onChange={e=>setConta(e.target.value)}>
+                  {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
                 </select>
               </div>
-            )}
-            <div className="form-group">
-              <label className="form-label">Vencimento</label>
-              <input type="date" className="form-input" value={vencimento} onChange={e=>setVencimento(e.target.value)} />
-            </div>
-          </div>
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">Conta</label>
-              <select className="form-input" value={conta_id} onChange={e=>setConta(e.target.value)}>
-                {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Forma de pagamento</label>
-              <select className="form-input" value={forma_id} onChange={e=>setForma(e.target.value)}>
-                <option value="">Selecione...</option>
-                {formasPag.map(f=><option key={f.id} value={f.id}>{f.nome}</option>)}
-              </select>
-            </div>
-          </div>
+
+              {/* Duplicatas / Vencimentos */}
+              <div className="form-group">
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <label className="form-label" style={{marginBottom:0}}>
+                    Vencimentos {nf.duplicatas?.length > 0 ? <span className="pill ok" style={{fontSize:10,marginLeft:4}}>Puxado da NF</span> : <span className="pill neutral" style={{fontSize:10,marginLeft:4}}>Manual</span>}
+                  </label>
+                  <button className="btn btn-ghost btn-xs" onClick={()=>setDuplicatas(prev=>[...prev,{numero:String(prev.length+1),vencimento:nf.data_emissao,valor:0}])}>
+                    + Parcela
+                  </button>
+                </div>
+                <div style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
+                  <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                    <thead><tr>
+                      <th style={{padding:'6px 10px',background:'var(--gray-50)',textAlign:'center',width:50}}>Parc.</th>
+                      <th style={{padding:'6px 10px',background:'var(--gray-50)'}}>Vencimento</th>
+                      <th style={{padding:'6px 10px',background:'var(--gray-50)',textAlign:'right'}}>Valor</th>
+                      <th style={{width:30,padding:'6px 10px',background:'var(--gray-50)'}}></th>
+                    </tr></thead>
+                    <tbody>
+                      {duplicatas.map((d,i)=>(
+                        <tr key={i} style={{borderTop:'1px solid var(--gray-100)'}}>
+                          <td style={{padding:'4px 10px',textAlign:'center',color:'var(--gray-500)'}}>{i+1}</td>
+                          <td style={{padding:'4px 8px'}}>
+                            <input type="date" className="form-input" style={{padding:'3px 6px',fontSize:12}}
+                              value={d.vencimento} onChange={e=>setDupField(i,'vencimento',e.target.value)}/>
+                          </td>
+                          <td style={{padding:'4px 8px'}}>
+                            <input type="number" className="form-input" style={{padding:'3px 6px',fontSize:12,textAlign:'right'}}
+                              value={d.valor} onChange={e=>setDupField(i,'valor',parseFloat(e.target.value)||0)}/>
+                          </td>
+                          <td style={{padding:'4px 6px',textAlign:'center'}}>
+                            {duplicatas.length > 1 && (
+                              <button style={{background:'none',border:'none',cursor:'pointer',color:'var(--danger)',fontSize:13,lineHeight:1}}
+                                onClick={()=>setDuplicatas(prev=>prev.filter((_,j)=>j!==i))}>✕</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {duplicatas.length > 1 && (
+                    <div style={{padding:'6px 10px',background:'var(--gray-50)',borderTop:'1px solid var(--gray-200)',fontSize:11,textAlign:'right',fontWeight:700}}>
+                      Total: {fmtR(duplicatas.reduce((s,d)=>s+d.valor,0))}
+                      {Math.abs(duplicatas.reduce((s,d)=>s+d.valor,0) - nf.valor_total) > 0.02 && (
+                        <span style={{color:'var(--danger)',marginLeft:8}}>⚠️ Difere do total da NF ({fmtR(nf.valor_total)})</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
           <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13,cursor:'pointer',fontWeight:600}}>
             <input type="checkbox" checked={salvarInsumos} onChange={e=>setSalvarInsumos(e.target.checked)}
               style={{width:16,height:16,accentColor:'var(--purple)'}}/>
@@ -258,7 +358,7 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn btn-primary" onClick={confirmar} disabled={saving}>
-            {saving?<RefreshCw size={14} className="spin"/>:<><Save size={14}/> Lançar no Contas a Pagar</>}
+            {saving?<RefreshCw size={14} className="spin"/>:<><Save size={14}/> {lancarContas?'Lançar no Contas a Pagar':'Salvar insumos'}</>}
           </button>
         </div>
       </div>
