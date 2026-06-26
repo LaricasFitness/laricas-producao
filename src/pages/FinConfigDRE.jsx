@@ -120,7 +120,7 @@ function GrupoNode({ grupo, todos, categorias, vinculos, gi, total, onEdit, onAd
   const filhos = todos.filter(g=>g.parent_id===grupo.id).sort((a,b)=>a.ordem-b.ordem||a.nome.localeCompare(b.nome))
   const cats = vinculos[grupo.id]||[]
   const [catNova, setCatNova] = useState('')
-  const catsSemVinculo = categorias.filter(c=>!cats.find(x=>x.id===c.id))
+  const catsSemVinculo = categorias.filter(c=>!cats.find(x=>x.id===c.id) && c.nivel===1)
 
   return (
     <div style={{marginBottom: grupo.nivel===1?12:4}}>
