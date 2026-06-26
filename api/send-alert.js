@@ -32,7 +32,7 @@ export default async function handler(req) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Laricas Fitness <alertas@laricasfitness.com.br>',
+        from: 'Laricas Fitness <onboarding@resend.dev>',
         to: Array.isArray(to) ? to : [to],
         subject,
         html,
