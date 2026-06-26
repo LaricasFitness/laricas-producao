@@ -703,7 +703,16 @@ export default function FinLancamentos({ tipo }) {
                         </span>
                       </td>
                       <td onClick={e => e.stopPropagation()}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => setModal(l)}><Pencil size={11} /></button>
+                        <div style={{ display:'flex', gap:4 }}>
+                          <button className="btn btn-ghost btn-xs" onClick={() => setModal(l)} title="Editar"><Pencil size={11} /></button>
+                          <button className="btn btn-ghost btn-xs" title="Excluir"
+                            style={{ color:'var(--danger)' }}
+                            onClick={async () => {
+                              if (!window.confirm(`Excluir "${l.descricao}"? Esta ação não pode ser desfeita.`)) return
+                              await supabase.from('fin_lancamentos').delete().eq('id', l.id)
+                              load()
+                            }}>✕</button>
+                        </div>
                       </td>
                     </tr>,
                     exp && (
