@@ -91,7 +91,9 @@ export default function FinDRE() {
   const [canais, setCanais] = useState([])
   const [categorias, setCategorias] = useState([])
   const [dados, setDados] = useState({})      // { mes: { cat: valor } }
+  const [dadosCanal, setDadosCanal] = useState({}) // { mes: { catNome: { canalNome: valor } } }
   const [ajustes, setAjustes] = useState({})  // { mes_catNome: valor }
+  const [expandidos, setExpandidos] = useState(new Set())
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -120,6 +122,7 @@ export default function FinDRE() {
     ])
 
     const mapa = {}
+    const mapaCanal = {} // { mes: { catNome: { canalNome: valor } } }
     for (const p of (parcelas||[])) {
       if (!canalId || p.fin_lancamentos?.canal_id === canalId) {
         const mes = (regime==='caixa' ? p.data_pagamento : p.data_competencia || p.data_vencimento)?.slice(0,7)
@@ -127,6 +130,13 @@ export default function FinDRE() {
         if (!mes || !cat) continue
         if (!mapa[mes]) mapa[mes] = {}
         mapa[mes][cat] = (mapa[mes][cat]||0) + p.valor
+        // Por canal
+        const canalNome = canais.find(c=>c.id===p.fin_lancamentos?.canal_id)?.nome
+        if (canalNome) {
+          if (!mapaCanal[mes]) mapaCanal[mes] = {}
+          if (!mapaCanal[mes][cat]) mapaCanal[mes][cat] = {}
+          mapaCanal[mes][cat][canalNome] = (mapaCanal[mes][cat][canalNome]||0) + p.valor
+        }
       }
     }
 
@@ -141,6 +151,7 @@ export default function FinDRE() {
     }
 
     setDados(mapa)
+    setDadosCanal(mapaCanal)
     setAjustes(ajMap)
     setLoading(false)
   }
@@ -285,20 +296,30 @@ export default function FinDRE() {
                   // Categorias
                   for (const cat of grupo.cats) {
                     const totCat = meses.reduce((s,m)=>s+(dados[m]?.[cat]||0),0)
+                    const canaisNestaCat = [...new Set(meses.flatMap(m=>Object.keys(dadosCanal[m]?.[cat]||{})))].filter(Boolean)
+                    const temCanais = canaisNestaCat.length > 0
+                    const expandido = expandidos.has(cat)
                     linhas.push(
-                      <tr key={cat} style={{ borderBottom:'1px solid var(--gray-100)' }}>
-                        <td style={{ padding:'7px 14px 7px 24px', color:'var(--gray-700)', position:'sticky', left:0, background:'var(--white)' }}>{cat}</td>
+                      <tr key={cat} style={{ borderBottom: expandido?'none':'1px solid var(--gray-100)' }}>
+                        <td style={{ padding:'7px 14px 7px 24px', color:'var(--gray-700)', position:'sticky', left:0, background:'var(--white)' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                            {temCanais && (
+                              <button onClick={()=>setExpandidos(prev=>{const n=new Set(prev);expandido?n.delete(cat):n.add(cat);return n})}
+                                style={{ background:'none', border:'none', cursor:'pointer', color:'var(--purple)', padding:'0 2px', fontSize:11, lineHeight:1 }}
+                                title={expandido?'Recolher':'Expandir por canal'}>
+                                {expandido?'▼':'▶'}
+                              </button>
+                            )}
+                            {cat}
+                          </div>
+                        </td>
                         {meses.map(m => {
                           const v = dados[m]?.[cat] || 0
                           const s = calcSubtotais(dados[m]||{})
-                          // Deduções e Impostos: % s/ Fat. Bruto; resto: % s/ Fat. Líquido
                           const base = (grupo.key==='deducoes'||grupo.key==='impostos') ? s.fb : s.fl
                           return (
                             <td key={m} style={{ padding:'7px 10px', textAlign:'right' }}>
-                              <CelulaEditavel
-                                valor={v}
-                                onSave={novoVal => salvarAjuste(m, cat, novoVal)}
-                              />
+                              <CelulaEditavel valor={v} onSave={novoVal => salvarAjuste(m, cat, novoVal)}/>
                               {mostrarPct && v>0 && base>0 && (
                                 <div style={{ fontSize:10, color:'var(--gray-400)' }}>{fmtPct(pct(v,base))}</div>
                               )}
@@ -308,6 +329,32 @@ export default function FinDRE() {
                         <td style={{ textAlign:'right', padding:'7px 10px', fontWeight:700, color:'var(--gray-600)' }}>{fmtR(totCat)}</td>
                       </tr>
                     )
+                    // Sub-linhas por canal
+                    if (expandido && temCanais) {
+                      for (const canalNome of canaisNestaCat) {
+                        const totCanal = meses.reduce((s,m)=>s+(dadosCanal[m]?.[cat]?.[canalNome]||0),0)
+                        linhas.push(
+                          <tr key={cat+'__'+canalNome} style={{ borderBottom:'1px solid var(--gray-50)', background:'var(--gray-50)' }}>
+                            <td style={{ padding:'5px 14px 5px 48px', color:'var(--gray-500)', fontSize:12, position:'sticky', left:0, background:'var(--gray-50)' }}>
+                              <span style={{ display:'inline-block', width:6, height:6, borderRadius:'50%', background:'var(--purple)', marginRight:6, opacity:.4 }}/>
+                              {canalNome}
+                            </td>
+                            {meses.map(m => {
+                              const v = dadosCanal[m]?.[cat]?.[canalNome] || 0
+                              const tot = dados[m]?.[cat] || 0
+                              return (
+                                <td key={m} style={{ textAlign:'right', padding:'5px 10px', fontSize:12, color:v>0?'var(--gray-600)':'var(--gray-300)' }}>
+                                  {v>0?fmtR(v):'—'}
+                                  {mostrarPct && v>0 && tot>0 && <div style={{ fontSize:10, color:'var(--gray-300)' }}>{fmtPct(pct(v,tot))} do cat.</div>}
+                                </td>
+                              )
+                            })}
+                            <td style={{ textAlign:'right', padding:'5px 10px', fontSize:12, color:'var(--gray-500)', fontWeight:600 }}>{fmtR(totCanal)}</td>
+                          </tr>
+                        )
+                      }
+                      linhas.push(<tr key={cat+'__sep'}><td colSpan={meses.length+2} style={{ height:1, background:'var(--gray-200)' }}/></tr>)
+                    }
                   }
                   // Subtotal
                   if (grupo.subtotal) {
