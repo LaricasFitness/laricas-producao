@@ -50,7 +50,6 @@ export default function FinDRE() {
   const anoAtual = hoje.getFullYear()
   const [anoMesIni, setAnoMesIni] = useState(`${anoAtual}-01`)
   const [anoMesFim, setAnoMesFim] = useState(`${anoAtual}-${String(hoje.getMonth()+1).padStart(2,'0')}`)
-  const [canalId, setCanalId] = useState('')
   const [regime, setRegime] = useState('competencia')
   const [mostrarPct, setMostrarPct] = useState(true)
   const [canais, setCanais] = useState([])
@@ -83,7 +82,7 @@ export default function FinDRE() {
     })
   }, [])
 
-  useEffect(() => { if(grupos.length) carregar() }, [anoMesIni, anoMesFim, canalId, regime, grupos])
+  useEffect(() => { if(grupos.length) carregar() }, [anoMesIni, anoMesFim, regime, grupos])
 
   async function carregar() {
     setLoading(true)
@@ -116,12 +115,6 @@ export default function FinDRE() {
 
     for (const p of (parcelas||[])) {
       const pCanalId = p.fin_lancamentos?.canal_id
-      // Filtra por canal selecionado (qualquer nível da hierarquia)
-      if (canalId) {
-        const ancestors = pCanalId ? getAncestors(pCanalId) : []
-        if (!ancestors.includes(canalId)) continue
-      }
-
       const mes = (regime==='caixa' ? p.data_pagamento : p.data_competencia || p.data_vencimento)?.slice(0,7)
       const cat = p.fin_lancamentos?.fin_categorias?.nome
       if (!mes || !cat) continue
@@ -129,7 +122,7 @@ export default function FinDRE() {
       if (!mapa[mes]) mapa[mes] = {}
       mapa[mes][cat] = (mapa[mes][cat]||0) + p.valor
 
-      // Por canal (usa nome do canal final)
+      // Por canal (para expansão na DRE)
       const canalNome = pCanalId ? canalMap[pCanalId]?.nome : null
       if (canalNome) {
         if (!mapaCanal[mes]) mapaCanal[mes] = {}
@@ -153,14 +146,36 @@ export default function FinDRE() {
 
   const meses = Object.keys(dados).sort()
 
-  // Calcula subtotais dinamicamente a partir dos grupos
+  // Soma categoria + todos os descendentes recursivamente
+  function somaComDesc(mesData, catNome) {
+    const direta = mesData[catNome] || 0
+    // Filtra descendentes pelo nome (simplificado — usa dados acumulados)
+    return direta
+  }
+
+  // Calcula subtotais dinamicamente — soma categoria + todos descendentes
   function calcSubtotais(mesData) {
-    const soma = (cats) => cats.reduce((s,c)=>(s+(mesData[c.nome]||0)),0)
+    // Coleta todos os nomes de categorias descendentes de uma lista
+    function somaGrupo(catsList) {
+      return catsList.reduce((s, c) => {
+        // Soma direta
+        let v = mesData[c.nome] || 0
+        // Soma descendentes (nível 2 e 3)
+        const filhos = categorias.filter(x => x.parent_id === c.id)
+        for (const f of filhos) {
+          v += mesData[f.nome] || 0
+          const netos = categorias.filter(x => x.parent_id === f.id)
+          for (const n of netos) v += mesData[n.nome] || 0
+        }
+        return s + v
+      }, 0)
+    }
+
     const subtotais = { fb:0, fl:0, lb:0, mc:0, mcm:0, res:0 }
     let acum = 0
     for (const g of grupos.sort((a,b)=>a.ordem-b.ordem)) {
       const cats = grupoCats[g.id]||[]
-      const val = soma(cats)
+      const val = somaGrupo(cats)
       if (g.operacao==='+') acum += val
       else acum -= val
       if (g.subtotal_key) subtotais[g.subtotal_key] = acum
@@ -178,21 +193,10 @@ export default function FinDRE() {
     const cat = categorias.find(c=>c.nome===catNome)
     if (!cat) return
     await supabase.from('fin_dre_ajustes').upsert({
-      ano_mes:mes, categoria_id:cat.id, canal_id:canalId||null, valor,
+      ano_mes:mes, categoria_id:cat.id, canal_id:null, valor,
       criado_por:JSON.parse(sessionStorage.getItem('usuario')||'{}').nome,
     },{onConflict:'ano_mes,categoria_id,canal_id'})
     setDados(prev=>{const n={...prev};if(!n[mes])n[mes]={};n[mes][catNome]=valor;return n})
-  }
-
-  // Filtro de canal — mostra hierarquia
-  const canaisL1 = canais.filter(c=>c.nivel===1)
-  const canaisL2 = canais.filter(c=>c.nivel===2)
-  const canaisL3 = canais.filter(c=>c.nivel===3)
-
-  const canalLabel = (id) => {
-    if (!id) return 'Todos os canais'
-    const c = canais.find(x=>x.id===id)
-    return c?.nome||id
   }
 
   return (
@@ -206,24 +210,6 @@ export default function FinDRE() {
           <div className="form-group">
             <label className="form-label">Até</label>
             <input type="month" className="form-input" value={anoMesFim} onChange={e=>setAnoMesFim(e.target.value)}/>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Canal</label>
-            <select className="form-input" value={canalId} onChange={e=>setCanalId(e.target.value)}>
-              <option value="">Todos os canais</option>
-              {canaisL1.map(c1=>[
-                <option key={c1.id} value={c1.id} style={{fontWeight:700}}>▶ {c1.nome}</option>,
-                ...canaisL2.filter(c2=>c2.parent_id===c1.id).flatMap(c2=>[
-                  <option key={c2.id} value={c2.id} style={{paddingLeft:16}}>　{c2.nome}</option>,
-                  ...canaisL3.filter(c3=>c3.parent_id===c2.id).map(c3=>(
-                    <option key={c3.id} value={c3.id} style={{paddingLeft:32}}>　　{c3.nome}</option>
-                  ))
-                ]),
-                ...canaisL3.filter(c3=>c3.parent_id===c1.id).map(c3=>(
-                  <option key={c3.id} value={c3.id} style={{paddingLeft:16}}>　{c3.nome}</option>
-                ))
-              ])}
-            </select>
           </div>
           <div className="form-group">
             <label className="form-label">Regime</label>
@@ -280,69 +266,107 @@ export default function FinDRE() {
                     </tr>
                   )
 
-                  // Categorias do grupo
-                  for (const cat of cats) {
-                    const totCat = meses.reduce((s,m)=>s+(dados[m]?.[cat.nome]||0),0)
-                    const canaisNestaCat = [...new Set(meses.flatMap(m=>Object.keys(dadosCanal[m]?.[cat.nome]||{})))].filter(Boolean)
-                    const temCanais = canaisNestaCat.length > 0
+                  // Categorias do grupo — renderiza recursivamente até 3 níveis
+                  function renderCat(cat, nivel=1) {
+                    const indent = 14 + (nivel-1)*16
+                    const filhos = categorias.filter(c=>c.parent_id===cat.id && c.tipo===cat.tipo)
+                      .sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
+
+                    // Soma o valor direto + todos descendentes para o total da linha
+                    function somaTotal(mesData, c) {
+                      let v = mesData[c.nome]||0
+                      const fs = categorias.filter(x=>x.parent_id===c.id)
+                      for (const f of fs) {
+                        v += mesData[f.nome]||0
+                        const ns = categorias.filter(x=>x.parent_id===f.id)
+                        for (const n of ns) v += mesData[n.nome]||0
+                      }
+                      return v
+                    }
+
+                    const totCat = meses.reduce((s,m)=>s+somaTotal(dados[m]||{},cat),0)
+                    const temFilhos = filhos.length > 0
                     const expandido = expandidos.has(cat.id)
                     const basePct = grupo.base_pct || 'fl'
 
+                    // Expansão por canal só nas folhas (sem filhos)
+                    const canaisNestaCat = !temFilhos
+                      ? [...new Set(meses.flatMap(m=>Object.keys(dadosCanal[m]?.[cat.nome]||{})))].filter(Boolean)
+                      : []
+                    const temCanais = canaisNestaCat.length > 0
+
+                    const bgCor = nivel===1?'var(--white)':nivel===2?'#fafafa':'#f5f5f5'
+                    const fontW = nivel===1?600:nivel===2?500:400
+                    const fontSize = nivel===1?13:12
+
                     linhas.push(
-                      <tr key={cat.id} style={{borderBottom:expandido?'none':'1px solid var(--gray-100)'}}>
-                        <td style={{padding:'7px 14px 7px 24px',color:'var(--gray-700)',position:'sticky',left:0,background:'var(--white)'}}>
-                          <div style={{display:'flex',alignItems:'center',gap:6}}>
-                            {temCanais && (
+                      <tr key={cat.id} style={{borderBottom:(expandido&&(temFilhos||temCanais))?'none':'1px solid var(--gray-100)'}}>
+                        <td style={{padding:`7px 14px 7px ${indent}px`,color:nivel===1?'var(--gray-700)':'var(--gray-600)',position:'sticky',left:0,background:bgCor}}>
+                          <div style={{display:'flex',alignItems:'center',gap:5}}>
+                            {(temFilhos||temCanais) && (
                               <button onClick={()=>setExpandidos(prev=>{const n=new Set(prev);expandido?n.delete(cat.id):n.add(cat.id);return n})}
-                                style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:'0 2px',fontSize:11,lineHeight:1}}>
+                                style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:'0 1px',fontSize:10,lineHeight:1,flexShrink:0}}>
                                 {expandido?'▼':'▶'}
                               </button>
                             )}
-                            {cat.nome}
+                            {nivel>1 && <span style={{width:5,height:5,borderRadius:'50%',background:cat.cor||'var(--gray-300)',flexShrink:0}}/>}
+                            <span style={{fontWeight:fontW,fontSize}}>{cat.nome}</span>
                           </div>
                         </td>
                         {meses.map(m=>{
-                          const v = dados[m]?.[cat.nome]||0
+                          const v = somaTotal(dados[m]||{}, cat)
                           const s = calcSubtotais(dados[m]||{})
                           const base = s[basePct]||s.fb||1
                           return (
-                            <td key={m} style={{padding:'7px 10px',textAlign:'right'}}>
-                              <CelulaEditavel valor={v} onSave={val=>salvarAjuste(m,cat.nome,val)}/>
+                            <td key={m} style={{padding:'7px 10px',textAlign:'right',background:bgCor}}>
+                              {!temFilhos
+                                ? <CelulaEditavel valor={v} onSave={val=>salvarAjuste(m,cat.nome,val)}/>
+                                : <span style={{fontWeight:600,color:v>0?'var(--gray-700)':'var(--gray-300)'}}>{v>0?fmtR(v):'—'}</span>
+                              }
                               {mostrarPct && v>0 && base>0 && <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmtPct(pct(v,base))}</div>}
                             </td>
                           )
                         })}
-                        <td style={{textAlign:'right',padding:'7px 10px',fontWeight:700,color:'var(--gray-600)'}}>{fmtR(totCat)}</td>
+                        <td style={{textAlign:'right',padding:'7px 10px',fontWeight:nivel===1?700:600,color:'var(--gray-600)',background:bgCor}}>{fmtR(totCat)}</td>
                       </tr>
                     )
 
-                    // Sub-linhas por canal
-                    if (expandido && temCanais) {
+                    // Filhos (subcategorias nível 2 e 3)
+                    if (expandido && temFilhos) {
+                      for (const filho of filhos) renderCat(filho, nivel+1)
+                      linhas.push(<tr key={`${cat.id}__sep`}><td colSpan={meses.length+2} style={{height:1,background:'var(--gray-200)'}}/></tr>)
+                    }
+
+                    // Expansão por canal (só folhas)
+                    if (expandido && temCanais && !temFilhos) {
                       for (const canalNome of canaisNestaCat) {
                         const totC = meses.reduce((s,m)=>s+(dadosCanal[m]?.[cat.nome]?.[canalNome]||0),0)
                         linhas.push(
                           <tr key={`${cat.id}__${canalNome}`} style={{borderBottom:'1px solid var(--gray-50)',background:'var(--gray-50)'}}>
-                            <td style={{padding:'5px 14px 5px 48px',color:'var(--gray-500)',fontSize:12,position:'sticky',left:0,background:'var(--gray-50)'}}>
-                              <span style={{display:'inline-block',width:6,height:6,borderRadius:'50%',background:'var(--purple)',marginRight:6,opacity:.4}}/>
+                            <td style={{padding:`5px 14px 5px ${indent+18}px`,color:'var(--gray-500)',fontSize:11,position:'sticky',left:0,background:'var(--gray-50)'}}>
+                              <span style={{display:'inline-block',width:5,height:5,borderRadius:'50%',background:'var(--purple)',marginRight:5,opacity:.4}}/>
                               {canalNome}
                             </td>
                             {meses.map(m=>{
                               const v = dadosCanal[m]?.[cat.nome]?.[canalNome]||0
-                              const tot = dados[m]?.[cat.nome]||0
+                              const tot = somaTotal(dados[m]||{},cat)||1
                               return (
-                                <td key={m} style={{textAlign:'right',padding:'5px 10px',fontSize:12,color:v>0?'var(--gray-600)':'var(--gray-300)'}}>
+                                <td key={m} style={{textAlign:'right',padding:'5px 10px',fontSize:11,color:v>0?'var(--gray-600)':'var(--gray-300)'}}>
                                   {v>0?fmtR(v):'—'}
                                   {mostrarPct && v>0 && tot>0 && <div style={{fontSize:10,color:'var(--gray-300)'}}>{fmtPct(pct(v,tot))}</div>}
                                 </td>
                               )
                             })}
-                            <td style={{textAlign:'right',padding:'5px 10px',fontSize:12,color:'var(--gray-500)',fontWeight:600}}>{fmtR(totC)}</td>
+                            <td style={{textAlign:'right',padding:'5px 10px',fontSize:11,color:'var(--gray-500)',fontWeight:600}}>{fmtR(totC)}</td>
                           </tr>
                         )
                       }
-                      linhas.push(<tr key={`${cat.id}__sep`}><td colSpan={meses.length+2} style={{height:1,background:'var(--gray-200)'}}/></tr>)
+                      linhas.push(<tr key={`${cat.id}__cansep`}><td colSpan={meses.length+2} style={{height:1,background:'var(--gray-200)'}}/></tr>)
                     }
                   }
+
+                  // Renderiza só categorias raiz do grupo (nível 1 relativo ao grupo)
+                  for (const cat of cats) renderCat(cat, 1)
 
                   // Subtotal após o grupo
                   if (grupo.subtotal_label && grupo.subtotal_key) {
