@@ -21,7 +21,8 @@ function ModalCategoria({ cat, categorias, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const set = (k,v) => setF(p=>({...p,[k]:v}))
 
-  const grupos = categorias.filter(c => c.nivel === 1 && c.tipo === f.tipo)
+  const pais = categorias.filter(c => c.nivel < f.nivel && c.tipo === f.tipo)
+  const nivelLabel = ['Grupo principal','Subcategoria','Sub-subcategoria'][f.nivel-1] || 'Categoria'
 
   async function salvar() {
     setSaving(true)
@@ -41,24 +42,39 @@ function ModalCategoria({ cat, categorias, onClose, onSaved }) {
         <div className="modal-body">
           <div className="form-group">
             <label className="form-label">Nome *</label>
-            <input className="form-input" value={f.nome} onChange={e=>set('nome',e.target.value)} autoFocus />
+            <input className="form-input" value={f.nome} onChange={e=>set('nome',e.target.value)} autoFocus
+              placeholder={`Nome d${f.nivel===1?'o grupo':f.nivel===2?'a subcategoria':'a sub-subcategoria'}`}/>
           </div>
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Tipo</label>
-              <select className="form-input" value={f.tipo} onChange={e=>set('tipo',e.target.value)}>
+              <select className="form-input" value={f.tipo} onChange={e=>set('tipo',e.target.value)} disabled={!!f.parent_id}>
                 <option value="receita">Receita</option>
                 <option value="despesa">Despesa</option>
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">Grupo pai (opcional)</label>
-              <select className="form-input" value={f.parent_id} onChange={e=>set('parent_id',e.target.value)}>
-                <option value="">Nenhum (grupo principal)</option>
-                {grupos.map(g=><option key={g.id} value={g.id}>{g.nome}</option>)}
+              <label className="form-label">Nível</label>
+              <select className="form-input" value={f.nivel} onChange={e=>set('nivel',parseInt(e.target.value))} disabled={!!f.parent_id}>
+                <option value={1}>1 — Grupo principal</option>
+                <option value={2}>2 — Subcategoria</option>
+                <option value={3}>3 — Sub-subcategoria</option>
               </select>
             </div>
           </div>
+          {f.nivel > 1 && (
+            <div className="form-group">
+              <label className="form-label">Categoria pai *</label>
+              <select className="form-input" value={f.parent_id||''} onChange={e=>set('parent_id',e.target.value)}>
+                <option value="">Selecione...</option>
+                {pais.map(p=>(
+                  <option key={p.id} value={p.id}>
+                    {'  '.repeat(p.nivel-1)}{p.nivel>1?'└ ':''}{p.nome}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Cor</label>
             <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}}>
@@ -94,10 +110,54 @@ function ModalCategoria({ cat, categorias, onClose, onSaved }) {
   )
 }
 
+function CatNode({ cat, todos, nivel=1, onEdit, onAdd, onDelete }) {
+  const [exp, setExp] = useState(nivel <= 1)
+  const filhos = todos.filter(c=>c.parent_id===cat.id).sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
+  const indent = 14 + (nivel-1)*20
+
+  return (
+    <div>
+      <div style={{
+        display:'flex', alignItems:'center', gap:8,
+        padding:`8px 14px 8px ${indent}px`,
+        borderTop: nivel>1?'1px solid var(--gray-100)':undefined,
+        background: nivel===1?'var(--gray-50)':nivel===2?'var(--white)':'#fafafa',
+        opacity: cat.ativo?1:.5,
+      }}>
+        {filhos.length>0
+          ? <button onClick={()=>setExp(!exp)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,width:14,flexShrink:0}}>
+              {exp?<ChevronDown size={13}/>:<ChevronRight size={13}/>}
+            </button>
+          : <span style={{width:14,flexShrink:0}}/>
+        }
+        <span style={{width:nivel===1?12:nivel===2?9:7,height:nivel===1?12:nivel===2?9:7,borderRadius:nivel===1?3:2,background:cat.cor,flexShrink:0}}/>
+        <span style={{flex:1,fontWeight:nivel===1?700:nivel===2?600:400,fontSize:nivel===1?13:12,color:nivel===3?'var(--gray-600)':'var(--gray-800)'}}>
+          {cat.nome}
+        </span>
+        <span style={{fontSize:10,color:'var(--gray-300)'}}>N{nivel}</span>
+        {!cat.ativo && <span className="pill neutral" style={{fontSize:9}}>Inativo</span>}
+        <div style={{display:'flex',gap:3}}>
+          <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(cat)} title="Editar"><Pencil size={11}/></button>
+          {nivel < 3 && (
+            <button className="btn btn-ghost btn-xs" title="Adicionar subcategoria"
+              onClick={()=>onAdd({tipo:cat.tipo, parent_id:cat.id, nivel:nivel+1, cor:cat.cor})}>
+              <Plus size={11}/>
+            </button>
+          )}
+          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} title="Excluir"
+            onClick={()=>onDelete(cat)}>✕</button>
+        </div>
+      </div>
+      {exp && filhos.map(f=>(
+        <CatNode key={f.id} cat={f} todos={todos} nivel={nivel+1} onEdit={onEdit} onAdd={onAdd} onDelete={onDelete}/>
+      ))}
+    </div>
+  )
+}
+
 function CategoriasSecao({ tipo }) {
   const [cats, setCats] = useState([])
   const [modal, setModal] = useState(null)
-  const [expandidos, setExpandidos] = useState(new Set())
 
   async function load() {
     const {data} = await supabase.from('fin_categorias').select('*').eq('tipo',tipo).order('nivel').order('ordem').order('nome')
@@ -105,8 +165,15 @@ function CategoriasSecao({ tipo }) {
   }
   useEffect(()=>{load()},[tipo])
 
-  const grupos = cats.filter(c=>c.nivel===1)
-  const subCats = cats.filter(c=>c.nivel===2)
+  async function excluir(cat) {
+    const filhos = cats.filter(c=>c.parent_id===cat.id)
+    if (filhos.length>0) { alert(`"${cat.nome}" tem ${filhos.length} subcategoria(s). Exclua primeiro.`); return }
+    if (!window.confirm(`Excluir "${cat.nome}"?`)) return
+    await supabase.from('fin_categorias').delete().eq('id',cat.id)
+    load()
+  }
+
+  const raiz = cats.filter(c=>!c.parent_id).sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
 
   return (
     <div style={{marginBottom:24}}>
@@ -114,47 +181,26 @@ function CategoriasSecao({ tipo }) {
         <div style={{fontWeight:800,fontSize:14,color:tipo==='receita'?'var(--ok)':'var(--danger)'}}>
           {tipo==='receita'?'📈 Receitas':'📉 Despesas'}
         </div>
-        <button className="btn btn-primary btn-sm" onClick={()=>setModal('new_'+tipo)}>
+        <button className="btn btn-primary btn-sm" onClick={()=>setModal({tipo, nivel:1})}>
           <Plus size={13}/> Novo grupo
         </button>
       </div>
-      <div style={{display:'flex',flexDirection:'column',gap:4}}>
-        {grupos.map(g=>{
-          const subs = subCats.filter(s=>s.parent_id===g.id)
-          const exp = expandidos.has(g.id)
-          return (
-            <div key={g.id} style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
-              <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'var(--gray-50)',cursor:'pointer'}}
-                onClick={()=>setExpandidos(prev=>{const n=new Set(prev);exp?n.delete(g.id):n.add(g.id);return n})}>
-                <span style={{width:12,height:12,borderRadius:3,background:g.cor,flexShrink:0}}/>
-                <span style={{fontWeight:700,flex:1,fontSize:13}}>{g.nome}</span>
-                <span style={{fontSize:11,color:'var(--gray-400)'}}>{subs.length} sub</span>
-                <span style={{opacity:.6}}>{exp?<ChevronDown size={14}/>:<ChevronRight size={14}/>}</span>
-                <button className="btn btn-ghost btn-xs" onClick={e=>{e.stopPropagation();setModal(g)}}><Pencil size={11}/></button>
-                <button className="btn btn-ghost btn-xs" onClick={e=>{e.stopPropagation();setModal({tipo:g.tipo,parent_id:g.id,nivel:2})}}
-                  title="Adicionar subcategoria"><Plus size={11}/></button>
-                <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
-                  onClick={async e=>{e.stopPropagation();if(!window.confirm(`Excluir "${g.nome}" e todas as subcategorias?`))return;await supabase.from('fin_categorias').delete().eq('id',g.id);load()}}
-                  title="Excluir grupo">✕</button>
-              </div>
-              {exp && subs.map(s=>(
-                <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px 8px 32px',borderTop:'1px solid var(--gray-100)',opacity:s.ativo?1:.5}}>
-                  <span style={{width:8,height:8,borderRadius:2,background:s.cor,flexShrink:0}}/>
-                  <span style={{flex:1,fontSize:13,color:'var(--gray-700)'}}>{s.nome}</span>
-                  <span className={`pill ${s.ativo?'ok':'neutral'}`} style={{fontSize:10}}>{s.ativo?'Ativo':'Inativo'}</span>
-                  <button className="btn btn-ghost btn-xs" onClick={()=>setModal(s)}><Pencil size={11}/></button>
-                  <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
-                    onClick={async()=>{if(!window.confirm(`Excluir "${s.nome}"?`))return;await supabase.from('fin_categorias').delete().eq('id',s.id);load()}}
-                    title="Excluir subcategoria">✕</button>
-                </div>
-              ))}
-            </div>
-          )
-        })}
+      <div style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
+        {raiz.map(g=>(
+          <CatNode key={g.id} cat={g} todos={cats} nivel={1}
+            onEdit={setModal}
+            onAdd={setModal}
+            onDelete={excluir}/>
+        ))}
+        {raiz.length===0 && (
+          <div style={{padding:20,textAlign:'center',color:'var(--gray-400)',fontSize:13}}>
+            Nenhum grupo cadastrado. Clique em "+ Novo grupo" para começar.
+          </div>
+        )}
       </div>
       {modal && (
         <ModalCategoria
-          cat={typeof modal==='string'?{tipo}:modal.parent_id?{tipo:modal.tipo,parent_id:modal.parent_id,nivel:2}:modal}
+          cat={modal?.id ? modal : { tipo:modal.tipo, nivel:modal.nivel||1, parent_id:modal.parent_id||null, cor:modal.cor||'#7f8c8d' }}
           categorias={cats}
           onClose={()=>setModal(null)}
           onSaved={()=>{setModal(null);load()}}
