@@ -131,6 +131,9 @@ function CategoriasSecao({ tipo }) {
                 <button className="btn btn-ghost btn-xs" onClick={e=>{e.stopPropagation();setModal(g)}}><Pencil size={11}/></button>
                 <button className="btn btn-ghost btn-xs" onClick={e=>{e.stopPropagation();setModal({tipo:g.tipo,parent_id:g.id,nivel:2})}}
                   title="Adicionar subcategoria"><Plus size={11}/></button>
+                <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
+                  onClick={async e=>{e.stopPropagation();if(!window.confirm(`Excluir "${g.nome}" e todas as subcategorias?`))return;await supabase.from('fin_categorias').delete().eq('id',g.id);load()}}
+                  title="Excluir grupo">✕</button>
               </div>
               {exp && subs.map(s=>(
                 <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 14px 8px 32px',borderTop:'1px solid var(--gray-100)',opacity:s.ativo?1:.5}}>
@@ -138,6 +141,9 @@ function CategoriasSecao({ tipo }) {
                   <span style={{flex:1,fontSize:13,color:'var(--gray-700)'}}>{s.nome}</span>
                   <span className={`pill ${s.ativo?'ok':'neutral'}`} style={{fontSize:10}}>{s.ativo?'Ativo':'Inativo'}</span>
                   <button className="btn btn-ghost btn-xs" onClick={()=>setModal(s)}><Pencil size={11}/></button>
+                  <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
+                    onClick={async()=>{if(!window.confirm(`Excluir "${s.nome}"?`))return;await supabase.from('fin_categorias').delete().eq('id',s.id);load()}}
+                    title="Excluir subcategoria">✕</button>
                 </div>
               ))}
             </div>
@@ -172,6 +178,12 @@ function SecaoSimples({ titulo, tabela, campos, defaults }) {
     if (item.id) await supabase.from(tabela).update(item).eq('id',item.id)
     else await supabase.from(tabela).insert({...defaults,...item})
     setEditId(null); setAdicionando(false); load()
+  }
+
+  async function excluir(item) {
+    if (!window.confirm(`Excluir "${item.nome}"? Esta ação não pode ser desfeita.`)) return
+    await supabase.from(tabela).delete().eq('id', item.id)
+    load()
   }
 
   function RowEdit({item,onSave,onCancel}) {
@@ -225,7 +237,13 @@ function SecaoSimples({ titulo, tabela, campos, defaults }) {
                         : String(item[c.key]??'—')}
                     </td>
                   ))}
-                  <td><button className="btn btn-ghost btn-xs" onClick={()=>setEditId(item.id)}><Pencil size={11}/></button></td>
+                  <td>
+                    <div style={{display:'flex',gap:4}}>
+                      <button className="btn btn-ghost btn-xs" onClick={()=>setEditId(item.id)}><Pencil size={11}/></button>
+                      <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
+                        onClick={()=>excluir(item)} title="Excluir">✕</button>
+                    </div>
+                  </td>
                 </tr>
               )
             )}
