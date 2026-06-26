@@ -163,13 +163,13 @@ function CategoriasSecao({ tipo }) {
 }
 
 // ── Seção genérica ────────────────────────────────────────────────────────────
-function SecaoSimples({ titulo, tabela, campos, defaults }) {
+function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
   const [items, setItems] = useState([])
   const [editId, setEditId] = useState(null)
   const [adicionando, setAdicionando] = useState(false)
 
   async function load() {
-    const {data} = await supabase.from(tabela).select('*').order('ordem').order('nome')
+    const {data} = await supabase.from(tabela).select('*').order(orderBy)
     setItems(data||[])
   }
   useEffect(()=>{load()},[])
@@ -280,7 +280,7 @@ export default function FinConfig() {
       )}
 
       {aba==='canais' && (
-        <SecaoSimples titulo="🏷️ Canais / Origens" tabela="fin_canais"
+        <SecaoSimples titulo="🏷️ Canais / Origens" tabela="fin_canais" orderBy="ordem"
           campos={[
             {key:'nome',label:'Nome'},
             {key:'cor',label:'Cor'},
@@ -311,7 +311,7 @@ export default function FinConfig() {
       )}
 
       {aba==='formas' && (
-        <SecaoSimples titulo="💳 Formas de Pagamento" tabela="fin_formas_pagamento"
+        <SecaoSimples titulo="💳 Formas de Pagamento" tabela="fin_formas_pagamento" orderBy="ordem"
           campos={[
             {key:'nome',label:'Nome'},
             {key:'tipo',label:'Tipo',options:[
