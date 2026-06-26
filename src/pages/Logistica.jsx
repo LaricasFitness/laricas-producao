@@ -107,6 +107,130 @@ function parsearLogisticaCSV(texto, dataFiltro) {
   return Object.values(pedidosMap)
 }
 
+function parsearTodosOsPedidos(texto, dataFiltro) {
+  const rows = parseCSVRobusto(texto)
+  if (rows.length<2) return {}
+  const header = rows[0].map(h=>h.replace(/^"|"$/g,'').trim())
+  const idx = n => header.indexOf(n)
+  const pedidosMap = {}
+  for (const cols of rows.slice(1)) {
+    const get = i => (i>=0&&i<cols.length ? cols[i] : '')
+    const dataPrev = get(idx('Data Prevista')).trim()
+    if (dataFiltro && dataPrev !== dataFiltro) continue
+    const numPedido = get(idx('Número pedido')).trim()
+    if (!numPedido) continue
+    const transportadora = get(idx('Transportadora')).trim() || 'Sem transportadora'
+    const sku = get(idx('SKU')).trim()
+    const qtd = parseFloat(get(idx('Quantidade')).replace(',','.')) || 0
+    if (!pedidosMap[numPedido]) {
+      pedidosMap[numPedido] = {
+        id: numPedido,
+        nome: get(idx('Nome Entrega')).trim() || get(idx('Nome Comprador')).trim(),
+        transportadora,
+        itens: [],
+      }
+    }
+    if (sku && qtd>0) pedidosMap[numPedido].itens.push({ sku, qtd: Math.round(qtd) })
+  }
+  return pedidosMap
+}
+
+function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
+  const pedidosMap = parsearTodosOsPedidos(csvTexto, dataFiltro)
+  const todos = Object.values(pedidosMap)
+  if (!todos.length) { alert('Nenhum pedido encontrado para esta data.'); return }
+
+  // Agrupa por transportadora
+  const porTransp = {}
+  for (const p of todos) {
+    const t = p.transportadora
+    if (!porTransp[t]) porTransp[t] = []
+    porTransp[t].push(p)
+  }
+
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const totalPedidos = todos.length
+  const totalItens = todos.reduce((s,p) => s + p.itens.reduce((si,i) => si+i.qtd, 0), 0)
+
+  // Header
+  doc.setFillColor(82, 46, 100)
+  doc.rect(0, 0, 210, 36, 'F')
+  doc.setTextColor(234, 183, 130)
+  doc.setFontSize(16); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness — Conferência de Expedição', 14, 14)
+  doc.setFontSize(9); doc.setFont(undefined, 'normal')
+  doc.setTextColor(255, 255, 255)
+  doc.text(`Data: ${dateStr}   |   ${totalPedidos} pedidos   |   ${totalItens} unidades no total`, 14, 22)
+  doc.text(`Impresso: ${agora}`, 14, 29)
+
+  let y = 42
+
+  for (const [transp, pedidos] of Object.entries(porTransp).sort()) {
+    const totalT = pedidos.reduce((s,p) => s + p.itens.reduce((si,i) => si+i.qtd, 0), 0)
+
+    // Header da transportadora
+    doc.setFillColor(50, 50, 50)
+    doc.rect(14, y, 182, 8, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(9); doc.setFont(undefined, 'bold')
+    doc.text(`${transp.toUpperCase()}   —   ${pedidos.length} pedido${pedidos.length>1?'s':''}   |   ${totalT} un.`, 17, y+5.5)
+    y += 10
+
+    const body = pedidos.map((p, i) => {
+      const totalQtd = p.itens.reduce((s,it) => s+it.qtd, 0)
+      const resumoItens = p.itens.length > 0
+        ? p.itens.map(it => `${it.sku}: ${it.qtd}`).join(', ')
+        : '—'
+      return [
+        { content: '☐', styles: { halign:'center', fontSize:11 } },
+        String(i+1),
+        `#${p.id}`,
+        p.nome || '—',
+        { content: String(totalQtd), styles: { halign:'center', fontStyle:'bold' } },
+        { content: resumoItens, styles: { fontSize:7, textColor:[100,100,100] } },
+      ]
+    })
+
+    autoTable(doc, {
+      startY: y,
+      head: [[
+        { content: '✓', styles:{ halign:'center', cellWidth:10 } },
+        { content: '#', styles:{ cellWidth:8 } },
+        { content: 'Pedido', styles:{ cellWidth:28 } },
+        { content: 'Cliente', styles:{ cellWidth:60 } },
+        { content: 'Un.', styles:{ halign:'center', cellWidth:14 } },
+        { content: 'Itens (SKU: qtd)', styles:{} },
+      ]],
+      body,
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold', fontSize:8 },
+      alternateRowStyles: { fillColor:[250,248,255] },
+      columnStyles: {
+        0: { cellWidth:10, halign:'center' },
+        1: { cellWidth:8 },
+        2: { cellWidth:28 },
+        3: { cellWidth:60 },
+        4: { cellWidth:14, halign:'center' },
+      },
+      margin: { left:14, right:14 },
+    })
+
+    y = doc.lastAutoTable.finalY + 8
+    if (y > 260) { doc.addPage(); y = 14 }
+  }
+
+  // Rodapé
+  const pageCount = doc.getNumberOfPages()
+  for (let i=1; i<=pageCount; i++) {
+    doc.setPage(i)
+    doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
+    doc.text(`Laricas Fitness · Conferência de Expedição · ${dateStr} · Página ${i}/${pageCount}`, 14, 291)
+  }
+
+  doc.save(`Conferencia_Expedicao_${dateStr.replace(/\//g,'-')}.pdf`)
+}
+
 function buildLalamoveCSV(route) {
   const esc = s => s&&s.includes(',') ? `"${s}"` : (s||'')
   const rows = [
@@ -202,6 +326,7 @@ export default function Logistica({ csvInicial }) {
   const [step, setStep] = useState('upload')
   const [orders, setOrders] = useState([])
   const [routes, setRoutes] = useState([])
+  const [csvRaw, setCsvRaw] = useState(null)
   const [manualAddr, setManualAddr] = useState({})
   const [enderecoCache, setEnderecoCache] = useState({})
   const [sugestoes, setSugestoes] = useState({})
@@ -218,7 +343,12 @@ export default function Logistica({ csvInicial }) {
     })
   }, [])
 
-  useEffect(() => { if (csvInicial) processarTextoCSV(csvInicial) }, [csvInicial])
+  useEffect(() => {
+    if (csvInicial) {
+      setCsvRaw(csvInicial)
+      processarTextoCSV(csvInicial)
+    }
+  }, [csvInicial])
 
   function processarTextoCSV(texto) {
     setImportando(true)
@@ -245,7 +375,10 @@ export default function Logistica({ csvInicial }) {
 
   function handleFile(file) {
     const reader = new FileReader()
-    reader.onload = e => { processarTextoCSV(e.target.result) }
+    reader.onload = e => {
+      setCsvRaw(e.target.result)
+      processarTextoCSV(e.target.result)
+    }
     reader.readAsText(file, 'UTF-8')
   }
 
@@ -533,6 +666,11 @@ export default function Logistica({ csvInicial }) {
               <button className="btn btn-gold" onClick={()=>exportarTudo(routes)}>
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
+              {csvRaw && (
+                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(csvRaw, dataFiltro, dateStr)}>
+                  <FileText size={14}/> PDF Conferência
+                </button>
+              )}
             </div>
           </div>
 
