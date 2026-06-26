@@ -449,7 +449,21 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
     setSaving(false)
   }
 
-  const catsFiltradas = catsLocais.filter(c => c.tipo === tipo && c.nivel === 1)
+  // Monta categorias em ordem hierárquica com indentação
+  const catsFiltradas = (() => {
+    const todas = catsLocais.filter(c => c.tipo === tipo)
+    const result = []
+    function addNivel(parentId, indent) {
+      todas.filter(c => (c.parent_id||null) === (parentId||null))
+        .sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
+        .forEach(c => {
+          result.push({ ...c, _indent: indent })
+          addNivel(c.id, indent + 1)
+        })
+    }
+    addNivel(null, 0)
+    return result
+  })()
 
   return (
     <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
@@ -503,7 +517,11 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
               </div>
               <select className="form-input" value={f.categoria_id} onChange={e=>set('categoria_id',e.target.value)}>
                 <option value="">Selecione...</option>
-                {catsFiltradas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                {catsFiltradas.map(c=>(
+                  <option key={c.id} value={c.id}>
+                    {'　'.repeat(c._indent)}{c._indent>0?'└ ':''}{c.nome}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="form-group">
