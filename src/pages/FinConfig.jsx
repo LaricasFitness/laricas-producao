@@ -3,6 +3,9 @@ import { supabase } from '../supabase'
 import { Plus, Pencil, Save, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react'
 import FinConfigCanais from './FinConfigCanais'
 import FinConfigDRE from './FinConfigDRE'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const CORES = ['#e74c3c','#9b59b6','#2980b9','#27ae60','#f39c12','#1abc9c','#e67e22','#8e44ad','#16a085','#7f8c8d','#673f7c','#eab782','#c0392b','#2c3e50','#1abc9c']
 
@@ -118,54 +121,49 @@ function ModalCategoria({ cat, categorias, onClose, onSaved }) {
   )
 }
 
-function CatNode({ cat, todos, nivel=1, onEdit, onAdd, onDelete }) {
+function SortableCatNode({ cat, todos, nivel=1, onEdit, onAdd, onDelete }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: cat.id })
   const [exp, setExp] = useState(nivel <= 1)
   const filhos = todos.filter(c=>c.parent_id===cat.id).sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
   const indent = 14 + (nivel-1)*20
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
 
   return (
-    <div>
-      <div style={{
-        display:'flex', alignItems:'center', gap:8,
-        padding:`8px 14px 8px ${indent}px`,
-        borderTop: nivel>1?'1px solid var(--gray-100)':undefined,
-        background: nivel===1?'var(--gray-50)':nivel===2?'var(--white)':'#fafafa',
-        opacity: cat.ativo?1:.5,
-      }}>
+    <div ref={setNodeRef} style={style}>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:`8px 14px 8px ${indent}px`,borderTop:nivel>1?'1px solid var(--gray-100)':undefined,background:nivel===1?'var(--gray-50)':nivel===2?'var(--white)':'#fafafa',opacity:cat.ativo?1:.5}}>
+        <span {...attributes} {...listeners} style={{cursor:'grab',color:'var(--gray-300)',fontSize:14,flexShrink:0,touchAction:'none'}}>⠿</span>
         {filhos.length>0
-          ? <button onClick={()=>setExp(!exp)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,width:14,flexShrink:0}}>
-              {exp?<ChevronDown size={13}/>:<ChevronRight size={13}/>}
-            </button>
-          : <span style={{width:14,flexShrink:0}}/>
-        }
+          ? <button onClick={()=>setExp(!exp)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,width:14,flexShrink:0}}>{exp?<ChevronDown size={13}/>:<ChevronRight size={13}/>}</button>
+          : <span style={{width:14,flexShrink:0}}/>}
         <span style={{width:nivel===1?12:nivel===2?9:7,height:nivel===1?12:nivel===2?9:7,borderRadius:nivel===1?3:2,background:cat.cor,flexShrink:0}}/>
-        <span style={{flex:1,fontWeight:nivel===1?700:nivel===2?600:400,fontSize:nivel===1?13:12,color:nivel===3?'var(--gray-600)':'var(--gray-800)'}}>
-          {cat.nome}
-        </span>
+        <span style={{flex:1,fontWeight:nivel===1?700:nivel===2?600:400,fontSize:nivel===1?13:12}}>{cat.nome}</span>
         <span style={{fontSize:10,color:'var(--gray-300)'}}>N{nivel}</span>
         {!cat.ativo && <span className="pill neutral" style={{fontSize:9}}>Inativo</span>}
         <div style={{display:'flex',gap:3}}>
-          <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(cat)} title="Editar"><Pencil size={11}/></button>
-          {nivel < 3 && (
-            <button className="btn btn-ghost btn-xs" title="Adicionar subcategoria"
-              onClick={()=>onAdd({tipo:cat.tipo, parent_id:cat.id, nivel:nivel+1, cor:cat.cor})}>
-              <Plus size={11}/>
-            </button>
-          )}
-          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} title="Excluir"
-            onClick={()=>onDelete(cat)}>✕</button>
+          <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(cat)}><Pencil size={11}/></button>
+          {nivel<3 && <button className="btn btn-ghost btn-xs" onClick={()=>onAdd({tipo:cat.tipo,parent_id:cat.id,nivel:nivel+1,cor:cat.cor})}><Plus size={11}/></button>}
+          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>onDelete(cat)}>✕</button>
         </div>
       </div>
-      {exp && filhos.map(f=>(
-        <CatNode key={f.id} cat={f} todos={todos} nivel={nivel+1} onEdit={onEdit} onAdd={onAdd} onDelete={onDelete}/>
-      ))}
+      {exp && filhos.length>0 && (
+        <SortableCatList cats={filhos} todos={todos} nivel={nivel+1} onEdit={onEdit} onAdd={onAdd} onDelete={onDelete}/>
+      )}
     </div>
+  )
+}
+
+function SortableCatList({ cats, todos, nivel, onEdit, onAdd, onDelete }) {
+  return (
+    <SortableContext items={cats.map(c=>c.id)} strategy={verticalListSortingStrategy}>
+      {cats.map(c=><SortableCatNode key={c.id} cat={c} todos={todos} nivel={nivel} onEdit={onEdit} onAdd={onAdd} onDelete={onDelete}/>)}
+    </SortableContext>
   )
 }
 
 function CategoriasSecao({ tipo }) {
   const [cats, setCats] = useState([])
   const [modal, setModal] = useState(null)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint:{ distance:5 } }))
 
   async function load() {
     const {data} = await supabase.from('fin_categorias').select('*').eq('tipo',tipo).order('nivel').order('ordem').order('nome')
@@ -181,44 +179,42 @@ function CategoriasSecao({ tipo }) {
     load()
   }
 
+  async function handleDragEnd(event) {
+    const {active, over} = event
+    if (!over || active.id===over.id) return
+    const activeItem = cats.find(c=>c.id===active.id)
+    const overItem = cats.find(c=>c.id===over.id)
+    if (!activeItem || !overItem || activeItem.parent_id !== overItem.parent_id) return
+    const siblings = cats.filter(c=>(c.parent_id||null)===(activeItem.parent_id||null))
+    const reordered = arrayMove(siblings, siblings.findIndex(c=>c.id===active.id), siblings.findIndex(c=>c.id===over.id))
+    await Promise.all(reordered.map((c,i)=>supabase.from('fin_categorias').update({ordem:i+1}).eq('id',c.id)))
+    load()
+  }
+
   const raiz = cats.filter(c=>!c.parent_id).sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
 
   return (
     <div style={{marginBottom:24}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
-        <div style={{fontWeight:800,fontSize:14,color:tipo==='receita'?'var(--ok)':'var(--danger)'}}>
-          {tipo==='receita'?'📈 Receitas':'📉 Despesas'}
-        </div>
-        <button className="btn btn-primary btn-sm" onClick={()=>setModal({tipo, nivel:1})}>
-          <Plus size={13}/> Novo grupo
-        </button>
+        <div style={{fontWeight:800,fontSize:14,color:tipo==='receita'?'var(--ok)':'var(--danger)'}}>{tipo==='receita'?'📈 Receitas':'📉 Despesas'}</div>
+        <button className="btn btn-primary btn-sm" onClick={()=>setModal({tipo,nivel:1})}><Plus size={13}/> Novo grupo</button>
       </div>
       <div style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
-        {raiz.map(g=>(
-          <CatNode key={g.id} cat={g} todos={cats} nivel={1}
-            onEdit={setModal}
-            onAdd={setModal}
-            onDelete={excluir}/>
-        ))}
-        {raiz.length===0 && (
-          <div style={{padding:20,textAlign:'center',color:'var(--gray-400)',fontSize:13}}>
-            Nenhum grupo cadastrado. Clique em "+ Novo grupo" para começar.
-          </div>
-        )}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableCatList cats={raiz} todos={cats} nivel={1} onEdit={setModal} onAdd={setModal} onDelete={excluir}/>
+        </DndContext>
+        {raiz.length===0 && <div style={{padding:20,textAlign:'center',color:'var(--gray-400)',fontSize:13}}>Nenhum grupo cadastrado.</div>}
       </div>
       {modal && (
         <ModalCategoria
-          cat={modal?.id ? modal : { tipo:modal.tipo, nivel:modal.nivel||1, parent_id:modal.parent_id||null, cor:modal.cor||'#7f8c8d' }}
-          categorias={cats}
-          onClose={()=>setModal(null)}
-          onSaved={()=>{setModal(null);load()}}
-        />
+          cat={modal?.id ? modal : {tipo:modal.tipo,nivel:modal.nivel||1,parent_id:modal.parent_id||null,cor:modal.cor||'#7f8c8d'}}
+          categorias={cats} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load()}}/>
       )}
     </div>
   )
 }
 
-// ── Seção genérica ────────────────────────────────────────────────────────────
+
 function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
   const [items, setItems] = useState([])
   const [editId, setEditId] = useState(null)
