@@ -52,6 +52,8 @@ export default function FinDRE() {
   const [expandidos, setExpandidos] = useState(new Set())
   const [loading, setLoading] = useState(true)
 
+  const [configLoaded, setConfigLoaded] = useState(false)
+
   useEffect(() => {
     Promise.all([
       supabase.from('fin_categorias').select('*').eq('ativo',true),
@@ -66,10 +68,11 @@ export default function FinDRE() {
         gcMap[gc.grupo_id].push({ id:gc.categoria_id, nome:gc.fin_categorias?.nome })
       }
       setGrupoCats(gcMap)
+      setConfigLoaded(true)
     })
   }, [])
 
-  useEffect(() => { if(grupos.length) carregar() }, [anoMesIni, anoMesFim, regime, grupos])
+  useEffect(() => { if(configLoaded) carregar() }, [anoMesIni, anoMesFim, regime, configLoaded])
 
   async function carregar() {
     setLoading(true)
@@ -120,13 +123,27 @@ export default function FinDRE() {
     return result
   })()
 
+  // Soma categoria + todos os descendentes dos lançamentos
+  function somaCategoria(mes, catId) {
+    const cat = categorias.find(c=>c.id===catId)
+    if (!cat) return 0
+    let v = dadosLanc[mes]?.[cat.nome] || 0
+    categorias.filter(c=>c.parent_id===catId).forEach(f => {
+      v += dadosLanc[mes]?.[f.nome] || 0
+      categorias.filter(c=>c.parent_id===f.id).forEach(n => {
+        v += dadosLanc[mes]?.[n.nome] || 0
+      })
+    })
+    return v
+  }
+
   // Valor de uma linha: ajuste manual se existir, senão soma de lançamentos
   function valorLinha(mes, grupoId, catNomes=[]) {
-    // Ajuste manual por grupo (sub-linha da DRE)
     const ajGrupo = ajustesMap[`${mes}__${grupoId}`]
     if (ajGrupo !== undefined) return ajGrupo
-    // Soma de lançamentos das categorias vinculadas
-    return catNomes.reduce((s,cat) => s+(dadosLanc[mes]?.[cat]||0), 0)
+    // Soma via categorias vinculadas (inclui subcategorias)
+    const cats = grupoCats[grupoId]||[]
+    return cats.reduce((s,c) => s + somaCategoria(mes, c.id), 0)
   }
 
   // Total de um grupo = soma dos filhos se tiver, senão valor direto
@@ -135,8 +152,7 @@ export default function FinDRE() {
     if (filhos.length > 0) {
       return filhos.reduce((s,f)=>s+totalGrupo(mes,f), 0)
     }
-    const cats = (grupoCats[grupo.id]||[]).map(c=>c.nome)
-    return valorLinha(mes, grupo.id, cats)
+    return valorLinha(mes, grupo.id)
   }
 
   // Calcula subtotais
