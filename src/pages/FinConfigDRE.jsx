@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { Plus, Save, RefreshCw, ChevronUp, ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const CORES = ['#166534','#991b1b','#7f1d1d','#5b21b6','#b45309','#0f766e','#1e40af','#374151','#6b21a8','#9f1239','#0369a1','#065f46']
 
@@ -115,93 +118,67 @@ function ModalGrupo({ grupo, grupos, onClose, onSaved }) {
   )
 }
 
-function GrupoNode({ grupo, todos, categorias, vinculos, gi, total, onEdit, onAdd, onAddCat, onRemoveCat, onDelete, onMover }) {
+function GrupoNode({ grupo, todos, categorias, vinculos, onEdit, onAdd, onAddCat, onRemoveCat, onDelete }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: grupo.id })
   const [exp, setExp] = useState(true)
   const filhos = todos.filter(g=>g.parent_id===grupo.id).sort((a,b)=>a.ordem-b.ordem||a.nome.localeCompare(b.nome))
   const cats = vinculos[grupo.id]||[]
   const [catNova, setCatNova] = useState('')
   const catsSemVinculo = categorias.filter(c=>!cats.find(x=>x.id===c.id) && c.nivel===1)
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging?0.5:1 }
 
   return (
-    <div style={{marginBottom: grupo.nivel===1?12:4}}>
-      {/* Header do grupo */}
-      <div style={{
-        display:'flex', alignItems:'center', gap:8,
-        padding: grupo.nivel===1?'10px 14px':'7px 14px 7px '+(14+16)+'px',
-        background: grupo.nivel===1?'var(--gray-50)':'var(--white)',
-        borderLeft: `4px solid ${grupo.cor||'var(--gray-300)'}`,
-        borderBottom:'1px solid var(--gray-100)',
-        borderTop: grupo.nivel===1?'1px solid var(--gray-200)':undefined,
-        borderRadius: grupo.nivel===1?'8px 8px 0 0':undefined,
-      }}>
-        <button onClick={()=>setExp(!exp)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,width:14,flexShrink:0}}>
-          {exp?'▼':'▶'}
-        </button>
+    <div ref={setNodeRef} style={{...style, marginBottom: grupo.nivel===1?12:4}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:grupo.nivel===1?'10px 14px':`7px 14px 7px ${14+16}px`,background:grupo.nivel===1?'var(--gray-50)':'var(--white)',borderLeft:`4px solid ${grupo.cor||'var(--gray-300)'}`,borderBottom:'1px solid var(--gray-100)',borderTop:grupo.nivel===1?'1px solid var(--gray-200)':undefined,borderRadius:grupo.nivel===1?'8px 8px 0 0':undefined}}>
+        <span {...attributes} {...listeners} style={{cursor:'grab',color:'var(--gray-300)',fontSize:14,flexShrink:0,touchAction:'none'}}>⠿</span>
+        <button onClick={()=>setExp(!exp)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,width:14,flexShrink:0}}>{exp?'▼':'▶'}</button>
         <span style={{width:10,height:10,borderRadius:2,background:grupo.cor,flexShrink:0}}/>
-        <span style={{flex:1,fontWeight:grupo.nivel===1?800:600,fontSize:grupo.nivel===1?13:12,color:grupo.nivel===1?grupo.cor:'var(--gray-700)'}}>
-          {grupo.nome}
-        </span>
-        {grupo.nivel===1 && grupo.operacao && (
-          <span className="pill neutral" style={{fontSize:10}}>{grupo.operacao==='+'?'soma':'subtrai'}</span>
-        )}
+        <span style={{flex:1,fontWeight:grupo.nivel===1?800:600,fontSize:grupo.nivel===1?13:12,color:grupo.nivel===1?grupo.cor:'var(--gray-700)'}}>{grupo.nome}</span>
+        {grupo.nivel===1 && grupo.operacao && <span className="pill neutral" style={{fontSize:10}}>{grupo.operacao==='+'?'soma':'subtrai'}</span>}
         {grupo.subtotal_label && <span className="pill purple" style={{fontSize:9}}>→ {grupo.subtotal_label}</span>}
         <div style={{display:'flex',gap:3}}>
-          {grupo.nivel===1 && (
-            <>
-              <button className="btn btn-ghost btn-xs" disabled={gi===0} onClick={()=>onMover(grupo,-1)}><ChevronUp size={11}/></button>
-              <button className="btn btn-ghost btn-xs" disabled={gi===total-1} onClick={()=>onMover(grupo,1)}><ChevronDown size={11}/></button>
-            </>
-          )}
-          <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(grupo)} title="Editar"><Pencil size={11}/></button>
-          <button className="btn btn-ghost btn-xs" onClick={()=>onAdd(grupo)} title="Adicionar sub-linha"><Plus size={11}/></button>
-          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>onDelete(grupo)} title="Excluir">✕</button>
+          <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(grupo)}><Pencil size={11}/></button>
+          <button className="btn btn-ghost btn-xs" onClick={()=>onAdd(grupo)}><Plus size={11}/></button>
+          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>onDelete(grupo)}>✕</button>
         </div>
       </div>
 
       {exp && (
-        <div style={{
-          border:'1px solid var(--gray-200)',
-          borderTop:'none',
-          borderRadius: grupo.nivel===1?'0 0 8px 8px':undefined,
-          overflow:'hidden',
-        }}>
-          {/* Sub-grupos */}
-          {filhos.map((f,fi)=>(
-            <GrupoNode key={f.id} grupo={f} todos={todos} categorias={categorias} vinculos={vinculos}
-              gi={fi} total={filhos.length}
-              onEdit={onEdit} onAdd={onAdd} onAddCat={onAddCat} onRemoveCat={onRemoveCat}
-              onDelete={onDelete} onMover={onMover}/>
-          ))}
-
-          {/* Categorias vinculadas */}
-          {cats.length > 0 && (
+        <div style={{border:'1px solid var(--gray-200)',borderTop:'none',borderRadius:grupo.nivel===1?'0 0 8px 8px':undefined,overflow:'hidden'}}>
+          {filhos.length > 0 && (
+            <DndContext collisionDetection={closestCenter}
+              onDragEnd={async({active,over})=>{
+                if(!over||active.id===over.id) return
+                const reordered = arrayMove(filhos, filhos.findIndex(x=>x.id===active.id), filhos.findIndex(x=>x.id===over.id))
+                await Promise.all(reordered.map((g,i)=>supabase.from('fin_dre_grupos').update({ordem:i+1}).eq('id',g.id)))
+              }}>
+              <SortableContext items={filhos.map(f=>f.id)} strategy={verticalListSortingStrategy}>
+                {filhos.map(f=>(
+                  <GrupoNode key={f.id} grupo={f} todos={todos} categorias={categorias} vinculos={vinculos}
+                    onEdit={onEdit} onAdd={onAdd} onAddCat={onAddCat} onRemoveCat={onRemoveCat} onDelete={onDelete}/>
+                ))}
+              </SortableContext>
+            </DndContext>
+          )}
+          {cats.length>0 && (
             <div style={{padding:'8px 14px',background:'#fafafa',borderTop:filhos.length>0?'1px solid var(--gray-200)':undefined}}>
-              <div style={{fontSize:11,fontWeight:700,color:'var(--gray-400)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.05em'}}>
-                Categorias vinculadas
-              </div>
+              <div style={{fontSize:11,fontWeight:700,color:'var(--gray-400)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.05em'}}>Categorias vinculadas</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
                 {cats.map(c=>(
                   <span key={c.id} style={{display:'inline-flex',alignItems:'center',gap:4,background:'var(--purple-pale)',color:'var(--purple)',padding:'2px 8px',borderRadius:999,fontSize:11,fontWeight:600}}>
                     {c.nome}
-                    <button onClick={()=>onRemoveCat(c.vincId)}
-                      style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,lineHeight:1,fontSize:11}}>×</button>
+                    <button onClick={()=>onRemoveCat(c.vincId)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--purple)',padding:0,lineHeight:1,fontSize:11}}>×</button>
                   </span>
                 ))}
               </div>
             </div>
           )}
-
-          {/* Adicionar categoria */}
           <div style={{padding:'8px 14px',borderTop:'1px solid var(--gray-100)',display:'flex',gap:8,alignItems:'center'}}>
-            <select className="form-input" style={{flex:1,padding:'4px 8px',fontSize:12}}
-              value={catNova} onChange={e=>setCatNova(e.target.value)}>
+            <select className="form-input" style={{flex:1,padding:'4px 8px',fontSize:12}} value={catNova} onChange={e=>setCatNova(e.target.value)}>
               <option value="">Vincular categoria existente...</option>
               {catsSemVinculo.map(c=><option key={c.id} value={c.id}>{c.nome} ({c.tipo})</option>)}
             </select>
-            <button className="btn btn-primary btn-xs" disabled={!catNova}
-              onClick={()=>{ onAddCat(grupo.id, catNova); setCatNova('') }}>
-              <Plus size={11}/> Vincular
-            </button>
+            <button className="btn btn-primary btn-xs" disabled={!catNova} onClick={()=>{onAddCat(grupo.id,catNova);setCatNova('')}}><Plus size={11}/> Vincular</button>
           </div>
         </div>
       )}
@@ -242,18 +219,6 @@ export default function FinConfigDRE() {
     load()
   }
 
-  async function mover(g, dir) {
-    const raiz = grupos.filter(x=>!x.parent_id).sort((a,b)=>a.ordem-b.ordem)
-    const idx = raiz.findIndex(x=>x.id===g.id)
-    const alvo = raiz[idx+dir]
-    if (!alvo) return
-    await Promise.all([
-      supabase.from('fin_dre_grupos').update({ordem:alvo.ordem}).eq('id',g.id),
-      supabase.from('fin_dre_grupos').update({ordem:g.ordem}).eq('id',alvo.id),
-    ])
-    load()
-  }
-
   async function addCat(grupoId, catId) {
     await supabase.from('fin_dre_grupo_cats').upsert(
       {grupo_id:grupoId, categoria_id:catId},
@@ -269,6 +234,15 @@ export default function FinConfigDRE() {
 
   const raiz = grupos.filter(g=>!g.parent_id).sort((a,b)=>a.ordem-b.ordem)
 
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint:{ distance:5 } }))
+
+  async function handleDragEnd({active, over}) {
+    if (!over || active.id===over.id) return
+    const reordered = arrayMove(raiz, raiz.findIndex(g=>g.id===active.id), raiz.findIndex(g=>g.id===over.id))
+    await Promise.all(reordered.map((g,i)=>supabase.from('fin_dre_grupos').update({ordem:i+1}).eq('id',g.id)))
+    load()
+  }
+
   if (loading) return <div className="loading"><RefreshCw size={14} className="spin"/></div>
 
   return (
@@ -276,45 +250,35 @@ export default function FinConfigDRE() {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <div>
           <div style={{fontWeight:700,fontSize:14}}>Cascata da DRE</div>
-          <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>
-            Monte os grupos, sub-grupos e linhas. Use ➕ para adicionar sub-linhas dentro de um grupo.
-          </div>
+          <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>⠿ Arraste para reordenar · ➕ Adiciona sub-linha · Configure grupos e categorias</div>
         </div>
-        <button className="btn btn-primary btn-sm" onClick={()=>setModal({nivel:1})}>
-          <Plus size={13}/> Novo grupo principal
-        </button>
+        <button className="btn btn-primary btn-sm" onClick={()=>setModal({nivel:1})}><Plus size={13}/> Novo grupo principal</button>
       </div>
 
-      {raiz.map((g,gi)=>(
-        <GrupoNode key={g.id} grupo={g} todos={grupos} categorias={categorias} vinculos={vinculos}
-          gi={gi} total={raiz.length}
-          onEdit={setModal}
-          onAdd={pai=>setModal({parent_id:pai.id, nivel:2, cor:pai.cor, operacao:pai.operacao, base_pct:pai.base_pct})}
-          onAddCat={addCat}
-          onRemoveCat={removeCat}
-          onDelete={excluir}
-          onMover={mover}/>
-      ))}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={raiz.map(g=>g.id)} strategy={verticalListSortingStrategy}>
+          {raiz.map(g=>(
+            <GrupoNode key={g.id} grupo={g} todos={grupos} categorias={categorias} vinculos={vinculos}
+              onEdit={setModal}
+              onAdd={pai=>setModal({parent_id:pai.id,nivel:2,cor:pai.cor,operacao:pai.operacao,base_pct:pai.base_pct})}
+              onAddCat={addCat} onRemoveCat={removeCat} onDelete={excluir}/>
+          ))}
+        </SortableContext>
+      </DndContext>
 
       {raiz.length===0 && (
         <div className="card card-pad empty">
           <div className="empty-icon">📋</div>
           <div className="empty-title">Nenhum grupo configurado</div>
-          <div className="empty-sub">Clique em "+ Novo grupo principal" para começar a montar a cascata</div>
+          <div className="empty-sub">Clique em "+ Novo grupo principal" para começar</div>
         </div>
       )}
 
       {modal!==null && (
-        <ModalGrupo
-          grupo={modal?.id?modal:null}
-          grupos={grupos}
-          onClose={()=>setModal(null)}
-          onSaved={()=>{setModal(null);load()}}/>
+        <ModalGrupo grupo={modal?.id?modal:null} grupos={grupos}
+          onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load()}}/>
       )}
-
-      <div style={{fontSize:12,color:'var(--gray-400)',marginTop:12}}>
-        💡 Grupos principais definem a cascata (operação +/−, subtotais). Sub-linhas são apenas linhas de detalhe dentro de cada grupo — você digita os valores manualmente na DRE.
-      </div>
+      <div style={{fontSize:12,color:'var(--gray-400)',marginTop:12}}>💡 Grupos principais definem a cascata (+/−, subtotais). Sub-linhas são linhas de detalhe — valores digitados manualmente na DRE.</div>
     </>
   )
 }
