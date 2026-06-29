@@ -45,7 +45,7 @@ function gerarPDF(numero, itens, obs) {
   doc.save(`Pedido_${numero}.pdf`)
 }
 
-function ModalNovoPedido({ onClose, onSaved }) {
+function ModalNovoPedido({ onClose, onSaved, tipo = 'rotulo' }) {
   const [status, setStatus] = useState([])
   const [qtds, setQtds] = useState({})
   const [obs, setObs] = useState('')
@@ -53,7 +53,7 @@ function ModalNovoPedido({ onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    carregarStatusCompleto().then(d => {
+    carregarStatusCompleto(tipo).then(d => {
       setStatus(d)
       const pre = {}
       d.filter(e => e.qtdPedido > 0).forEach(e => { pre[e.id] = e.qtdPedido })
@@ -269,7 +269,7 @@ const STATUS_LABEL = {
   recebido_parcial: { label: '⚠️ Recebido c/ diferença', cls: 'pill-danger' },
 }
 
-export default function Pedidos({ abrirNovo, onNovoClosed }) {
+export default function Pedidos({ abrirNovo, onNovoClosed, tipo = 'rotulo' }) {
   const [pedidos, setPedidos] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNovo, setShowNovo] = useState(false)
@@ -361,7 +361,7 @@ export default function Pedidos({ abrirNovo, onNovoClosed }) {
         ))}
       </div>
 
-      {showNovo && <ModalNovoPedido onClose={() => { setShowNovo(false); onNovoClosed?.() }} onSaved={() => { setShowNovo(false); onNovoClosed?.(); load() }} />}
+      {showNovo && <ModalNovoPedido tipo={tipo} onClose={() => { setShowNovo(false); onNovoClosed?.() }} onSaved={() => { setShowNovo(false); onNovoClosed?.(); load() }} />}
       {conferindo && <ModalConferencia pedido={conferindo} onClose={() => setConferindo(null)} onSaved={() => { setConferindo(null); load() }} />}
     </div>
   )
