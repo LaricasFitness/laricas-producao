@@ -228,7 +228,6 @@ export default function Producao() {
 
       if (fase1.length > 0) {
         const { data: inseridos } = await supabase.from('producao_diaria').insert(fase1).select()
-        // Não atualiza estoque_atual diretamente — calculado cronologicamente
         const nomes = fase1.map(r => { const e = embalagens.find(x => x.id === r.embalagem_id); return `${e?.nome}: ${r.quantidade}` }).join(', ')
         const ids = (inseridos || []).map(r => r.id)
         await registrarAcao({
@@ -238,6 +237,28 @@ export default function Producao() {
           dadosAnteriores: { ids },
           dadosNovos: { fase1 },
         })
+
+        // Auto-desconta embalagens primárias por categoria
+        const { data: vinculos } = await supabase.from('categoria_embalagem').select('*')
+        if (vinculos?.length) {
+          // Agrupa produção por embalagem primária
+          const descontos = {}
+          for (const r of fase1) {
+            const emb = embalagens.find(x => x.id === r.embalagem_id)
+            if (!emb) continue
+            const vinculo = vinculos.find(v => v.categoria === emb.categoria)
+            if (!vinculo?.embalagem_id) continue
+            descontos[vinculo.embalagem_id] = (descontos[vinculo.embalagem_id] || 0) + r.quantidade
+          }
+          // Insere em producao_diaria como desconto de embalagem primária
+          const embDescontos = Object.entries(descontos).map(([embalagem_id, quantidade]) => ({
+            embalagem_id, quantidade, data_producao: dataStr,
+            registrado_por: registradoPor + ' (auto-embalagem)',
+          }))
+          if (embDescontos.length > 0) {
+            await supabase.from('producao_diaria').insert(embDescontos)
+          }
+        }
       }
 
       // Fases internas (2, 3, 4, 5)
