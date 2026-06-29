@@ -15,6 +15,7 @@ function ModalEmb({ emb, onClose, onSaved }) {
   const [f, setF] = useState({
     codigo: emb?.codigo || '',
     nome: emb?.nome || '',
+    tipo: emb?.tipo || 'rotulo',
     categoria: emb?.categoria || 'Pão de Mel 100g',
     dias_producao: emb?.dias_producao || 15,
     estoque_atual: emb?.estoque_atual || 0,
@@ -73,6 +74,18 @@ function ModalEmb({ emb, onClose, onSaved }) {
         </div>
         <div className="modal-body">
           {err && <div className="alert alert-danger">{err}</div>}
+          <div className="form-group">
+            <label className="form-label">Tipo *</label>
+            <div style={{ display:'flex', gap:8 }}>
+              {[{v:'rotulo',l:'🏷️ Rótulo'},{v:'embalagem',l:'📦 Embalagem'}].map(opt=>(
+                <button key={opt.v} type="button"
+                  className={`btn btn-sm ${f.tipo===opt.v?'btn-primary':'btn-ghost'}`}
+                  onClick={()=>set('tipo',opt.v)}>
+                  {opt.l}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Código (SKU) *</label>
