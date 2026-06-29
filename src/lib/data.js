@@ -6,27 +6,26 @@ export function diasPorCategoria(cat) {
   return CATS_15.includes(cat) ? 15 : 7
 }
 
-export async function carregarEmbalagens() {
-  const { data, error } = await supabase
-    .from('embalagens').select('*')
-    .eq('visivel_producao', true)
-    .order('categoria').order('nome')
+export async function carregarEmbalagens(tipo = null) {
+  let q = supabase.from('embalagens').select('*').eq('visivel_producao', true)
+  if (tipo) q = q.eq('tipo', tipo)
+  const { data, error } = await q.order('categoria').order('nome')
   if (error) throw error
   return data || []
 }
 
-export async function carregarEmbalagenEstoque() {
-  const { data, error } = await supabase
-    .from('embalagens').select('*')
-    .eq('visivel_estoque', true)
-    .order('categoria').order('nome')
+export async function carregarEmbalagenEstoque(tipo = null) {
+  let q = supabase.from('embalagens').select('*').eq('visivel_estoque', true)
+  if (tipo) q = q.eq('tipo', tipo)
+  const { data, error } = await q.order('categoria').order('nome')
   if (error) throw error
   return data || []
 }
 
-export async function carregarTodasEmbalagens() {
-  const { data } = await supabase
-    .from('embalagens').select('*').order('categoria').order('nome')
+export async function carregarTodasEmbalagens(tipo = null) {
+  let q = supabase.from('embalagens').select('*')
+  if (tipo) q = q.eq('tipo', tipo)
+  const { data } = await q.order('categoria').order('nome')
   return data || []
 }
 
@@ -151,8 +150,8 @@ export async function calcularEstoqueCronologico(embalagemId, dataRef) {
 
   return Math.max(0, base + entradas - saidas)
 }
-export async function carregarStatusCompleto() {
-  const embs = await carregarEmbalagenEstoque()
+export async function carregarStatusCompleto(tipo = null) {
+  const embs = await carregarEmbalagenEstoque(tipo)
   const result = []
 
   for (const emb of embs) {
