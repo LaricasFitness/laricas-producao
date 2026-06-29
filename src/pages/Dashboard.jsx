@@ -45,7 +45,7 @@ function BarEstoque({ pct, status }) {
   )
 }
 
-export default function Dashboard({ onNovoPedido }) {
+export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [filtro, setFiltro] = useState('todos')
@@ -53,11 +53,11 @@ export default function Dashboard({ onNovoPedido }) {
 
   async function load() {
     setLoading(true)
-    try { setData(await carregarStatusCompleto()) } catch(e) { console.error(e) }
+    try { setData(await carregarStatusCompleto(tipo)) } catch(e) { console.error(e) }
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [tipo])
 
   const criticos  = data.filter(d => d.status === 'critico')
   const atencao   = data.filter(d => d.status === 'atencao')
