@@ -303,7 +303,7 @@ function gerarPDFCompras(recebimentos) {
   doc.save(`Compras_Embalagens_${hoje.toISOString().slice(0,10)}.pdf`)
 }
 
-export default function Compras() {
+export default function Compras({ tipo = 'rotulo' }) {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
   const [ini, setIni] = useState(mesIni)
@@ -324,7 +324,7 @@ export default function Compras() {
         .gte('data_recebimento', ini).lte('data_recebimento', fim)
         .order('data_recebimento', { ascending: false }),
       supabase.from('pedidos_grafica').select('id, numero, enviado_em, criado_em').order('criado_em', { ascending: false }).limit(20),
-      supabase.from('embalagens').select('id, nome, codigo').eq('ativo', true).order('nome'),
+      supabase.from('embalagens').select('id, nome, codigo').eq('ativo', true).eq('tipo', tipo).order('nome'),
     ])
     setRecebimentos(recs || [])
     setPedidos(peds || [])
