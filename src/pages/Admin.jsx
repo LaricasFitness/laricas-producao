@@ -281,6 +281,73 @@ function ModalExcluir({ emb, onClose, onSaved }) {
   )
 }
 
+function AdminCatEmbalagem() {
+  const [vinculos, setVinculos] = useState({})   // { categoria: embalagem_id }
+  const [embalagens, setEmbalagens] = useState([])
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from('categoria_embalagem').select('*'),
+      supabase.from('embalagens').select('id,nome,codigo').eq('tipo','embalagem').eq('ativo',true).order('nome'),
+    ]).then(([{data:v},{data:e}]) => {
+      const map = {}
+      for (const r of (v||[])) map[r.categoria] = r.embalagem_id
+      setVinculos(map)
+      setEmbalagens(e||[])
+    })
+  }, [])
+
+  async function salvar() {
+    setSaving(true)
+    for (const cat of CATEGORIAS) {
+      const embId = vinculos[cat] || null
+      await supabase.from('categoria_embalagem').upsert(
+        { categoria: cat, embalagem_id: embId },
+        { onConflict: 'categoria' }
+      )
+    }
+    setMsg('Vínculos salvos!')
+    setSaving(false)
+    setTimeout(() => setMsg(null), 3000)
+  }
+
+  return (
+    <div className="card card-pad">
+      <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>📦 Embalagem Primária por Categoria</div>
+      <div style={{ fontSize:13, color:'var(--gray-500)', marginBottom:16 }}>
+        Vincule uma embalagem a cada categoria de produto. A produção descontará automaticamente o estoque.
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {CATEGORIAS.map(cat => (
+          <div key={cat} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', background:'var(--gray-50)', borderRadius:8 }}>
+            <div style={{ fontWeight:600, fontSize:13, minWidth:160 }}>{cat}</div>
+            <div style={{ fontSize:20 }}>→</div>
+            <select className="form-input" style={{ flex:1, maxWidth:280 }}
+              value={vinculos[cat] || ''}
+              onChange={e => setVinculos(prev => ({ ...prev, [cat]: e.target.value || null }))}>
+              <option value="">Sem embalagem vinculada</option>
+              {embalagens.map(e => (
+                <option key={e.id} value={e.id}>{e.nome} ({e.codigo})</option>
+              ))}
+            </select>
+            {vinculos[cat] && (
+              <span className="pill ok" style={{ fontSize:11 }}>✓ vinculado</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {msg && <div className="alert-banner ok" style={{ marginTop:12 }}>✅ {msg}</div>}
+      <div style={{ marginTop:16 }}>
+        <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+          {saving ? <RefreshCw size={14} className="spin"/> : <Save size={14}/>} Salvar vínculos
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const [tab, setTab] = useState('embalagens')
   const [embs, setEmbs] = useState([])
@@ -339,10 +406,13 @@ export default function Admin() {
       {/* Tabs */}
       <div className="tabs">
         <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Embalagens</button>
+        <button className={`tab${tab === 'cat_embalagem' ? ' active' : ''}`} onClick={() => setTab('cat_embalagem')}>📦 Emb. por Categoria</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
 
       {tab === 'usuarios' && <Usuarios />}
+
+      {tab === 'cat_embalagem' && <AdminCatEmbalagem />}
 
       {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
