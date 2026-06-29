@@ -38,7 +38,8 @@ function ModalEmb({ emb, onClose, onSaved }) {
   }
 
   async function salvar() {
-    if (!f.codigo.trim() || !f.nome.trim()) { setErr('Código e nome são obrigatórios.'); return }
+    if (!f.nome.trim()) { setErr('Nome é obrigatório.'); return }
+    if (f.tipo === 'rotulo' && !f.codigo.trim()) { setErr('Código (SKU) é obrigatório para rótulos.'); return }
     setSaving(true)
     const payload = {
       ...f,
@@ -88,10 +89,10 @@ function ModalEmb({ emb, onClose, onSaved }) {
           </div>
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">Código (SKU) *</label>
+              <label className="form-label">Código (SKU) {f.tipo === 'rotulo' ? '*' : '(opcional)'}</label>
               <input className="form-input" value={f.codigo}
                 onChange={e => set('codigo', e.target.value.toUpperCase())}
-                placeholder="PM_BRI_100" />
+                placeholder={f.tipo === 'rotulo' ? 'PM_BRI_100' : 'Ex: VID_60G'} />
             </div>
             <div className="form-group">
               <label className="form-label">Categoria</label>
