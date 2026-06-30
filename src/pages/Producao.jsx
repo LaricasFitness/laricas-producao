@@ -6,7 +6,8 @@ import { Save, RefreshCw, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-
 
 // Itens fixos das fases internas
 const MASSAS = ['Massa - Pão de Mel', 'Massa - Bolo de Cenoura', 'Massa - Chocotone']
-const RECHEIOS = ['Brigadeiro de Whey','Beijinho de Whey','Cookies\'n Cream','Pistache Cremoso','Creme de Avelã Trufado','Romeu e Julieta','Avelã Crunch','Bueníssimo','Doce de Leite','Recheio de Amendoim']
+const RECHEIOS = ['Brigadeiro de Whey','Beijinho de Whey','Cookies\'n Cream','Pistache Cremoso','Creme de Avelã Trufado','Romeu e Julieta','Avelã Crunch','Bueníssimo','Doce de Leite']
+const RECHEIOS_FASE3_EXTRA = ['Amendoim']
 const COBERTURAS = ['Branca','Ao Leite']
 
 const FASES = [
@@ -100,14 +101,14 @@ function Fase2({ vals, setVals }) {
   )
 }
 
-// Fase 3 e 4 compartilham os mesmos recheios — label diferente
-function FaseRecheios({ vals, setVals, label }) {
+// Fase 3 e 4 compartilham os mesmos recheios — label diferente; itens permite lista customizada
+function FaseRecheios({ vals, setVals, label, itens = RECHEIOS }) {
   return (
     <div>
       <p style={{ fontSize: 14, color: 'var(--gray-600)', marginBottom: 16, lineHeight: 1.5 }}>
         Informe <strong>quantas receitas</strong> de cada {label} foram produzidas hoje.
       </p>
-      {RECHEIOS.map(item => {
+      {itens.map(item => {
         const val = vals[item] ?? ''
         const filled = val !== '' && parseFloat(val) > 0
         return (
@@ -363,7 +364,7 @@ export default function Producao() {
 
       {step === 1 && <Fase1 embalagens={embalagens} qtds={qtdsFase1} setQtds={setQtdsFase1} />}
       {step === 2 && <Fase2 vals={valsFase2} setVals={setValsFase2} />}
-      {step === 3 && <FaseRecheios vals={valsFase3} setVals={setValsFase3} label="recheio" />}
+      {step === 3 && <FaseRecheios vals={valsFase3} setVals={setValsFase3} label="recheio" itens={[...RECHEIOS, ...RECHEIOS_FASE3_EXTRA]} />}
       {step === 4 && <FaseRecheios vals={valsFase4} setVals={setValsFase4} label="recheio de potinho/potão" />}
       {step === 5 && <Fase5 vals={valsFase5} setVals={setValsFase5} />}
       {step === 6 && <Fase6 itens={desperdicio} setItens={setDesperdicio} />}
