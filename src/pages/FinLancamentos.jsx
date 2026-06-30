@@ -47,6 +47,68 @@ function parseNFe(xmlText) {
   return nf
 }
 
+// ── Modal criar fornecedor inline ─────────────────────────────────────────────
+function ModalNovoFornecedor({ onClose, onSaved }) {
+  const [f, setF] = useState({ razao_social:'', nome_fantasia:'', cnpj:'', cidade:'', uf:'SP' })
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setF(p=>({...p,[k]:v}))
+
+  async function salvar() {
+    if (!f.razao_social.trim()) return
+    setSaving(true)
+    const { data } = await supabase.from('fin_fornecedores')
+      .insert({ ...f, ativo: true })
+      .select().single()
+    onSaved(data)
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:400}}>
+        <div className="modal-header">
+          <div className="modal-title">Novo fornecedor</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label className="form-label">Razão Social *</label>
+            <input className="form-input" value={f.razao_social} onChange={e=>set('razao_social',e.target.value)}
+              autoFocus placeholder="Ex: Distribuidora ABC Ltda" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nome Fantasia</label>
+            <input className="form-input" value={f.nome_fantasia} onChange={e=>set('nome_fantasia',e.target.value)}
+              placeholder="Opcional" />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">CNPJ</label>
+              <input className="form-input" value={f.cnpj} onChange={e=>set('cnpj',e.target.value)}
+                placeholder="00.000.000/0000-00" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Cidade/UF</label>
+              <div style={{ display:'flex', gap:6 }}>
+                <input className="form-input" value={f.cidade} onChange={e=>set('cidade',e.target.value)}
+                  placeholder="Cidade" style={{ flex:1 }} />
+                <input className="form-input" value={f.uf} onChange={e=>set('uf',e.target.value.toUpperCase())}
+                  placeholder="UF" maxLength={2} style={{ width:56 }} />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||!f.razao_social.trim()}>
+            {saving?<RefreshCw size={14} className="spin"/>:<><Plus size={14}/> Criar</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Modal criar categoria inline ──────────────────────────────────────────────
 function ModalNovaCategoria({ tipo, onClose, onSaved }) {
   const [nome, setNome] = useState('')
@@ -414,6 +476,8 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
   const [err, setErr] = useState('')
   const [showNovaCategoria, setShowNovaCategoria] = useState(false)
   const [catsLocais, setCatsLocais] = useState(categorias)
+  const [showNovoFornecedor, setShowNovoFornecedor] = useState(false)
+  const [fornecedoresLocais, setFornecedoresLocais] = useState(fornecedores)
 
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
 
@@ -625,10 +689,15 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
               </select>
             </div>
             <div className="form-group">
-              <label className="form-label">Fornecedor (opcional)</label>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                <label className="form-label" style={{ marginBottom:0 }}>Fornecedor (opcional)</label>
+                <button className="btn btn-ghost btn-xs" onClick={()=>setShowNovoFornecedor(true)}>
+                  <Plus size={11}/> Novo
+                </button>
+              </div>
               <select className="form-input" value={f.fornecedor_id} onChange={e=>set('fornecedor_id',e.target.value)}>
                 <option value="">Sem fornecedor</option>
-                {fornecedores.map(forn=><option key={forn.id} value={forn.id}>{forn.nome_fantasia||forn.razao_social}</option>)}
+                {fornecedoresLocais.map(forn=><option key={forn.id} value={forn.id}>{forn.nome_fantasia||forn.razao_social}</option>)}
               </select>
             </div>
           </div>
@@ -647,6 +716,10 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
       {showNovaCategoria && (
         <ModalNovaCategoria tipo={tipo} onClose={()=>setShowNovaCategoria(false)}
           onSaved={nova=>{setCatsLocais(prev=>[...prev,nova]);set('categoria_id',nova.id);setShowNovaCategoria(false)}}/>
+      )}
+      {showNovoFornecedor && (
+        <ModalNovoFornecedor onClose={()=>setShowNovoFornecedor(false)}
+          onSaved={novo=>{setFornecedoresLocais(prev=>[...prev,novo]);set('fornecedor_id',novo.id);setShowNovoFornecedor(false)}}/>
       )}
     </div>
   )
