@@ -176,7 +176,7 @@ export default function FinDashboard() {
       const ha30 = new Date(); ha30.setDate(ha30.getDate()-30)
       const { data: pends } = await supabase.from('fin_parcelas')
         .select('*, fin_lancamentos(tipo, descricao)')
-        .in('status', ['pendente','agendado','vencido'])
+        .in('status', ['pendente','em_aberto','agendado','vencido'])
         .gte('data_vencimento', ha30.toISOString().slice(0,10))
         .lte('data_vencimento', em10.toISOString().slice(0,10))
         .order('data_vencimento').limit(20)
