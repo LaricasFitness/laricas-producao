@@ -127,7 +127,7 @@ export default function FinReconciliacao() {
     const { data: parcelas } = await supabase.from('fin_parcelas')
       .select('*, fin_lancamentos(tipo, descricao)')
       .gte('data_vencimento', ini).lte('data_vencimento', fim)
-      .in('status', ['pendente','agendado','vencido'])
+      .in('status', ['pendente','em_aberto','agendado','vencido'])
 
     // Auto-match por valor exato ±R$0,02 e data ±5 dias
     const autoMatches = {}
