@@ -1101,7 +1101,7 @@ export default function FinLancamentos({ tipo }) {
                   const parcelas = l.fin_parcelas || []
                   const pago = parcelas.filter(p => p.status === 'pago').reduce((s, p) => s + p.valor, 0)
                   const vencidas = parcelas.filter(p => p.status === 'vencido').length
-                  const pendentes = parcelas.filter(p => ['pendente','agendado'].includes(p.status)).length
+                  const pendentes = parcelas.filter(p => ['pendente','agendado','em_aberto'].includes(p.status)).length
                   const exp = expandido === l.id
                   const situacao = vencidas > 0 ? 'danger' : pendentes > 0 ? 'warning' : 'ok'
                   return [
