@@ -347,17 +347,13 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
                   <td style={{textAlign:'right',padding:'5px 10px'}}>{it.quantidade} {it.unidade}</td>
                   <td style={{textAlign:'right',padding:'5px 10px',fontWeight:600}}>{fmtR(it.valor_total)}</td>
                   {!catUnica && (
-                    <td style={{padding:'3px 6px'}}>
-                      <select className="form-input" style={{padding:'3px 6px',fontSize:11}}
+                    <td style={{padding:'3px 6px', minWidth:160}}>
+                      <ComboboxCategoria
                         value={itensCategoria[i]||''}
-                        onChange={e=>setItensCategoria(prev=>({...prev,[i]:e.target.value}))}>
-                        <option value="">Selecione...</option>
-                        {catsDespesa.map(c=>(
-                      <option key={c.id} value={c.id}>
-                        {'　'.repeat(c._indent||0)}{(c._indent||0)>0?'└ ':''}{c.nome}
-                      </option>
-                    ))}
-                      </select>
+                        onChange={id=>setItensCategoria(prev=>({...prev,[i]:id}))}
+                        opcoes={catsDespesa}
+                        placeholder="Selecione..."
+                      />
                     </td>
                   )}
                 </tr>
@@ -387,14 +383,12 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
               {catUnica && (
                 <div className="form-group">
                   <label className="form-label">Categoria da NF</label>
-                  <select className="form-input" value={categoria_id} onChange={e=>setCategoria(e.target.value)}>
-                    <option value="">Selecione...</option>
-                    {catsDespesa.map(c=>(
-                      <option key={c.id} value={c.id}>
-                        {'　'.repeat(c._indent||0)}{(c._indent||0)>0?'└ ':''}{c.nome}
-                      </option>
-                    ))}
-                  </select>
+                  <ComboboxCategoria
+                    value={categoria_id}
+                    onChange={setCategoria}
+                    opcoes={catsDespesa}
+                    placeholder="Selecione..."
+                  />
                 </div>
               )}
 
@@ -487,6 +481,104 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Combobox com busca para categorias ────────────────────────────────────────
+function ComboboxCategoria({ value, onChange, opcoes, placeholder = 'Selecione...' }) {
+  const [aberto, setAberto] = useState(false)
+  const [busca, setBusca] = useState('')
+  const [highlightIdx, setHighlightIdx] = useState(0)
+  const wrapRef = useRef()
+  const inputRef = useRef()
+  const listRef = useRef()
+
+  const selecionada = opcoes.find(o => o.id === value)
+
+  const filtradas = busca.trim()
+    ? opcoes.filter(o => o.nome.toLowerCase().includes(busca.toLowerCase()))
+    : opcoes
+
+  useEffect(() => {
+    function onClickFora(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setAberto(false); setBusca('')
+      }
+    }
+    document.addEventListener('mousedown', onClickFora)
+    return () => document.removeEventListener('mousedown', onClickFora)
+  }, [])
+
+  useEffect(() => { if (aberto) { setHighlightIdx(0); setTimeout(()=>inputRef.current?.focus(), 30) } }, [aberto])
+
+  useEffect(() => {
+    if (aberto && listRef.current) {
+      const el = listRef.current.querySelector(`[data-idx="${highlightIdx}"]`)
+      el?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [highlightIdx, aberto])
+
+  function escolher(opt) {
+    onChange(opt.id)
+    setAberto(false); setBusca('')
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIdx(i => Math.min(i+1, filtradas.length-1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIdx(i => Math.max(i-1, 0)) }
+    else if (e.key === 'Enter') { e.preventDefault(); if (filtradas[highlightIdx]) escolher(filtradas[highlightIdx]) }
+    else if (e.key === 'Escape') { setAberto(false); setBusca('') }
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position:'relative' }}>
+      <div className="form-input" style={{ cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+        onClick={()=>setAberto(p=>!p)}>
+        <span style={{ color: selecionada ? 'inherit' : 'var(--gray-400)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          {selecionada
+            ? `${'　'.repeat(selecionada._indent||0)}${(selecionada._indent||0)>0?'└ ':''}${selecionada.nome}`
+            : placeholder}
+        </span>
+        <span style={{ color:'var(--gray-400)', fontSize:11, marginLeft:6 }}>▾</span>
+      </div>
+
+      {aberto && (
+        <div style={{
+          position:'absolute', top:'calc(100% + 4px)', left:0, right:0, zIndex:50,
+          background:'var(--white)', border:'1px solid var(--gray-200)', borderRadius:8,
+          boxShadow:'0 8px 24px rgba(0,0,0,.12)', overflow:'hidden',
+        }}>
+          <input
+            ref={inputRef}
+            className="form-input"
+            style={{ border:'none', borderBottom:'1px solid var(--gray-200)', borderRadius:0 }}
+            placeholder="Digite para buscar..."
+            value={busca}
+            onChange={e=>{ setBusca(e.target.value); setHighlightIdx(0) }}
+            onKeyDown={onKeyDown}
+          />
+          <div ref={listRef} style={{ maxHeight:240, overflowY:'auto' }}>
+            {filtradas.length === 0 && (
+              <div style={{ padding:'10px 12px', fontSize:13, color:'var(--gray-400)' }}>Nenhuma categoria encontrada</div>
+            )}
+            {filtradas.map((o, idx) => (
+              <div key={o.id} data-idx={idx}
+                onMouseEnter={()=>setHighlightIdx(idx)}
+                onClick={()=>escolher(o)}
+                style={{
+                  padding:'8px 12px', fontSize:13, cursor:'pointer',
+                  background: idx===highlightIdx ? 'var(--purple-pale)' : 'transparent',
+                  color: idx===highlightIdx ? 'var(--purple)' : 'inherit',
+                  fontWeight: o.id===value ? 700 : 400,
+                  whiteSpace:'nowrap',
+                }}>
+                {'　'.repeat(o._indent||0)}{(o._indent||0)>0?'└ ':''}{o.nome}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -646,14 +738,12 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
                   <Plus size={11}/> Nova
                 </button>
               </div>
-              <select className="form-input" value={f.categoria_id} onChange={e=>set('categoria_id',e.target.value)}>
-                <option value="">Selecione...</option>
-                {catsFiltradas.map(c=>(
-                  <option key={c.id} value={c.id}>
-                    {'　'.repeat(c._indent)}{c._indent>0?'└ ':''}{c.nome}
-                  </option>
-                ))}
-              </select>
+              <ComboboxCategoria
+                value={f.categoria_id}
+                onChange={id=>set('categoria_id',id)}
+                opcoes={catsFiltradas}
+                placeholder="Selecione..."
+              />
             </div>
             <div className="form-group">
               <label className="form-label">Canal / origem</label>
