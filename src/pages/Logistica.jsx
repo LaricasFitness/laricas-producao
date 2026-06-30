@@ -182,37 +182,32 @@ function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
 
     const body = pedidos.map((p, i) => {
       const totalQtd = p.itens.reduce((s,it) => s+it.qtd, 0)
-      const resumoItens = p.itens.length > 0
-        ? p.itens.map(it => `${it.sku}: ${it.qtd}`).join(', ')
-        : '—'
       return [
         { content: '☐', styles: { halign:'center', fontSize:11 } },
         String(i+1),
         `#${p.id}`,
         p.nome || '—',
-        { content: String(totalQtd), styles: { halign:'center', fontStyle:'bold' } },
-        { content: resumoItens, styles: { fontSize:7, textColor:[100,100,100] } },
+        { content: String(totalQtd), styles: { halign:'center', fontStyle:'bold', fontSize:11 } },
       ]
     })
 
     autoTable(doc, {
       startY: y,
       head: [[
-        { content: '✓', styles:{ halign:'center', cellWidth:10 } },
-        { content: '#', styles:{ cellWidth:8 } },
-        { content: 'Pedido', styles:{ cellWidth:28 } },
-        { content: 'Cliente', styles:{ cellWidth:60 } },
-        { content: 'Un.', styles:{ halign:'center', cellWidth:14 } },
-        { content: 'Itens (SKU: qtd)', styles:{} },
+        { content: '✓', styles:{ halign:'center', cellWidth:12 } },
+        { content: '#', styles:{ cellWidth:10 } },
+        { content: 'Pedido', styles:{ cellWidth:32 } },
+        { content: 'Cliente', styles:{ cellWidth:100 } },
+        { content: 'Total Itens', styles:{ halign:'center', cellWidth:28 } },
       ]],
       body,
-      styles: { fontSize: 8, cellPadding: 3 },
-      headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold', fontSize:8 },
+      styles: { fontSize: 9, cellPadding: 4 },
+      headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold', fontSize:9 },
       alternateRowStyles: { fillColor:[250,248,255] },
       columnStyles: {
-        0: { cellWidth:10, halign:'center' },
-        1: { cellWidth:8 },
-        2: { cellWidth:28 },
+        0: { cellWidth:12, halign:'center' },
+        1: { cellWidth:10 },
+        2: { cellWidth:32 },
         3: { cellWidth:60 },
         4: { cellWidth:14, halign:'center' },
       },
@@ -750,7 +745,7 @@ export default function Logistica({ csvInicial }) {
                       onDragEnd={e => { e.currentTarget.style.opacity = '1' }}
                       style={{
                         padding:'9px 14px', borderBottom:'1px solid var(--gray-100)',
-                        display:'grid', gridTemplateColumns:'20px 20px 80px 160px 1fr',
+                        display:'grid', gridTemplateColumns:'20px 20px 80px 160px 1fr 28px',
                         gap:8, alignItems:'center',
                         background: idx%2===0 ? '#fff' : '#f9f8ff',
                         fontSize:13, cursor:'grab',
@@ -763,6 +758,19 @@ export default function Logistica({ csvInicial }) {
                       <span style={{ color:'var(--gray-600)', fontSize:12 }}>
                         {stop.rua}, {stop.numero}{stop.complemento?` - ${stop.complemento}`:''} · {stop.bairro} · {stop.cidade}/{stop.uf}
                       </span>
+                      <button
+                        onClick={() => {
+                          if (!window.confirm(`Excluir pedido #${stop.id} desta rota?`)) return
+                          setRoutes(prev => prev
+                            .map((rt,i) => i===rIdx ? { ...rt, stops: rt.stops.filter(s=>s.id!==stop.id) } : rt)
+                            .filter(rt => rt.stops.length > 0)
+                            .map((rt,i) => ({ ...rt, code: String(i+1).padStart(2,'0') }))
+                          )
+                        }}
+                        title="Excluir pedido da rota"
+                        style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)', fontSize:14, padding:2 }}>
+                        ✕
+                      </button>
                     </div>
                   ))}
                   {/* Drop zone visual quando a rota está vazia de paradas */}
