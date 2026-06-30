@@ -141,12 +141,20 @@ export async function calcularEstoqueCronologico(embalagemId, dataRef) {
   // 3. Subtrai produções APÓS a data base (inclusive mesmo dia, mas posteriores ao inventário)
   const { data: producoes } = await supabase
     .from('producao_diaria')
-    .select('quantidade, data_producao')
+    .select('quantidade, data_producao, criado_em')
     .eq('embalagem_id', embalagemId)
     .gte('data_producao', dataBase)
     .lte('data_producao', limite)
 
-  const saidas = (producoes || []).reduce((s, r) => s + r.quantidade, 0)
+  const saidas = (producoes || [])
+    .filter(p => {
+      // Se a produção foi no mesmo dia do snapshot, só conta se foi DEPOIS do snapshot
+      if (tsBase && p.data_producao === dataBase) {
+        return p.criado_em && p.criado_em > tsBase
+      }
+      return true
+    })
+    .reduce((s, r) => s + r.quantidade, 0)
 
   return Math.max(0, base + entradas - saidas)
 }
