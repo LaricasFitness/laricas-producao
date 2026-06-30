@@ -49,10 +49,24 @@ function ModalEmb({ emb, onClose, onSaved }) {
       estoque_atual: parseInt(f.estoque_atual || 0),
       unidade_minima_grafica: parseInt(f.unidade_minima_grafica),
     }
-    const { error } = isNew
-      ? await supabase.from('embalagens').insert(payload)
-      : await supabase.from('embalagens').update(payload).eq('id', emb.id)
+    const { data: savedRows, error } = isNew
+      ? await supabase.from('embalagens').insert(payload).select()
+      : await supabase.from('embalagens').update(payload).eq('id', emb.id).select()
     if (error) { setErr(error.message); setSaving(false); return }
+
+    // Se editou o estoque atual, cria um snapshot em inventarios para refletir no cálculo cronológico
+    const embId = isNew ? savedRows?.[0]?.id : emb.id
+    const hoje = new Date().toISOString().slice(0,10)
+    if (isNew && parseInt(f.estoque_atual || 0) > 0 && embId) {
+      await supabase.from('inventarios').insert({
+        embalagem_id: embId, quantidade: parseInt(f.estoque_atual || 0), data_inventario: hoje,
+      })
+    } else if (!isNew && parseInt(f.estoque_atual || 0) !== (emb.estoque_atual || 0)) {
+      await supabase.from('inventarios').insert({
+        embalagem_id: emb.id, quantidade: parseInt(f.estoque_atual || 0), data_inventario: hoje,
+      })
+    }
+
     if (!isNew) {
       await registrarAcao({
         acao: 'editar_embalagem',
