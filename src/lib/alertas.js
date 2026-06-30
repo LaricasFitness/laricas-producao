@@ -62,12 +62,12 @@ async function buscarDadosEmail() {
   const { data: parcelasHoje } = await supabase.from('fin_parcelas')
     .select('*, fin_lancamentos(tipo, descricao)')
     .eq('data_vencimento', hojeStr)
-    .in('status', ['pendente','agendado','vencido'])
+    .in('status', ['pendente','em_aberto','agendado','vencido'])
 
   const { data: parcelasAmanha } = await supabase.from('fin_parcelas')
     .select('*, fin_lancamentos(tipo, descricao)')
     .eq('data_vencimento', amanhaStr)
-    .in('status', ['pendente','agendado'])
+    .in('status', ['pendente','em_aberto','agendado'])
 
   // Movimentações do dia (pagas hoje)
   const { data: pagasHoje } = await supabase.from('fin_parcelas')
