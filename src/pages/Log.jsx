@@ -45,7 +45,8 @@ export default function Log() {
 
       const { data } = await supabase
         .from('producao_diaria')
-        .select('data_producao, registrado_por, quantidade, embalagem_id')
+        .select('data_producao, registrado_por, quantidade, embalagem_id, embalagens!inner(tipo)')
+        .eq('embalagens.tipo', 'rotulo')
         .gte('data_producao', ini)
         .lte('data_producao', fim)
 
@@ -65,7 +66,8 @@ export default function Log() {
     setLoadingDetalhe(true)
     const { data } = await supabase
       .from('producao_diaria')
-      .select('embalagem_id, quantidade, registrado_por')
+      .select('embalagem_id, quantidade, registrado_por, embalagens!inner(tipo)')
+      .eq('embalagens.tipo', 'rotulo')
       .eq('data_producao', dateStr)
       .order('quantidade', { ascending: false })
     setDetalhe(data || [])
