@@ -264,8 +264,9 @@ export default function Analise() {
 
   // carrega embalagens visíveis na análise (respeita toggle do Admin)
   useEffect(() => {
-    supabase.from('embalagens').select('id,codigo,nome,categoria')
+    supabase.from('embalagens').select('id,codigo,nome,categoria,tipo')
       .neq('visivel_analise', false)
+      .eq('tipo', 'rotulo')
       .order('categoria').order('nome')
       .then(({ data }) => {
         setEmbs(data || [])
@@ -296,20 +297,22 @@ export default function Analise() {
           .select('embalagem_id, quantidade_total, planejamento_id')
           .in('planejamento_id', planIds)
 
-        // Busca produção real no mesmo período
+        // Busca embalagens (só rótulos — produtos acabados)
+        const { data: embsData } = await supabase
+          .from('embalagens')
+          .select('id, nome, codigo, categoria, tipo')
+          .eq('tipo', 'rotulo')
+
+        const embMap = {}
+        ;(embsData || []).forEach(e => { embMap[e.id] = e })
+
+        // Busca produção real no mesmo período (só rótulos)
         const { data: prodReal } = await supabase
           .from('producao_diaria')
           .select('embalagem_id, quantidade, data_producao')
           .gte('data_producao', pvrIni)
           .lte('data_producao', pvrFim)
-
-        // Busca embalagens
-        const { data: embsData } = await supabase
-          .from('embalagens')
-          .select('id, nome, codigo, categoria')
-
-        const embMap = {}
-        ;(embsData || []).forEach(e => { embMap[e.id] = e })
+          .in('embalagem_id', Object.keys(embMap))
 
         // Agrega por embalagem
         const planejadoMap = {}
@@ -358,12 +361,14 @@ export default function Analise() {
   // Evolução diária — período independente
   useEffect(() => {
     async function loadEvo() {
+      if (!embs.length) return
       setEvoLoading(true)
       const { data } = await supabase
         .from('producao_diaria')
         .select('data_producao, quantidade')
         .gte('data_producao', evoIni)
         .lte('data_producao', evoFim)
+        .in('embalagem_id', embs.map(e=>e.id))
         .order('data_producao')
       // Agrupa por dia
       const map = {}
@@ -374,18 +379,17 @@ export default function Analise() {
       setEvoLoading(false)
     }
     loadEvo()
-  }, [evoIni, evoFim])
+  }, [evoIni, evoFim, embs])
 
   const carregar = useCallback(async () => {
     setLoading(true)
     try {
-      const embIds = catFiltro === 'todas' ? null : embs.filter(e => e.categoria === catFiltro).map(e => e.id)
+      const embIds = catFiltro === 'todas' ? embs.map(e => e.id) : embs.filter(e => e.categoria === catFiltro).map(e => e.id)
 
       let q = supabase.from('producao_diaria')
         .select('embalagem_id, quantidade, data_producao, registrado_por')
         .gte('data_producao', ini).lte('data_producao', fim)
-
-      if (embIds) q = q.in('embalagem_id', embIds)
+        .in('embalagem_id', embIds)
       if (respFiltro !== 'todos') q = q.eq('registrado_por', respFiltro)
 
       const { data: rows } = await q
@@ -409,7 +413,7 @@ export default function Analise() {
       const [iniAnt, fimAnt] = resolveCompPeriod(compMode, ini, fim, iniComp, fimComp)
       let qAnt = supabase.from('producao_diaria').select('quantidade, embalagem_id')
         .gte('data_producao', iniAnt).lte('data_producao', fimAnt)
-      if (embIds) qAnt = qAnt.in('embalagem_id', embIds)
+        .in('embalagem_id', embIds)
       if (respFiltro !== 'todos') qAnt = qAnt.eq('registrado_por', respFiltro)
       const { data: rowsAnt } = await qAnt
       const totalAnterior = (rowsAnt || []).reduce((s, r) => s + r.quantidade, 0)
@@ -508,6 +512,7 @@ export default function Analise() {
           .select('quantidade')
           .gte('data_producao', t.ini)
           .lte('data_producao', t.fim)
+          .in('embalagem_id', embs.map(e=>e.id))
         const total = (d || []).reduce((s, r) => s + r.quantidade, 0)
         return { ...t, total }
       }))
