@@ -49,16 +49,33 @@ function parseNFe(xmlText) {
 
 // ── Modal criar fornecedor inline ─────────────────────────────────────────────
 function ModalNovoFornecedor({ onClose, onSaved }) {
-  const [f, setF] = useState({ razao_social:'', nome_fantasia:'', cnpj:'', cidade:'', uf:'SP' })
+  const [f, setF] = useState({ tipo_pessoa:'pj', razao_social:'', nome_fantasia:'', cnpj:'', cidade:'', uf:'SP' })
   const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
   const set = (k,v) => setF(p=>({...p,[k]:v}))
 
   async function salvar() {
     if (!f.razao_social.trim()) return
-    setSaving(true)
-    const { data } = await supabase.from('fin_fornecedores')
-      .insert({ ...f, ativo: true })
+    setSaving(true); setErr('')
+    const payload = {
+      tipo_pessoa: f.tipo_pessoa,
+      razao_social: f.razao_social.trim(),
+      nome_fantasia: f.nome_fantasia.trim() || null,
+      cnpj: f.cnpj.trim() || null, // null em vez de '' evita conflito com UNIQUE
+      cidade: f.cidade.trim() || null,
+      uf: f.uf.trim() || null,
+      ativo: true,
+    }
+    const { data, error } = await supabase.from('fin_fornecedores')
+      .insert(payload)
       .select().single()
+    if (error) {
+      setErr(error.code === '23505'
+        ? 'Já existe um fornecedor cadastrado com esse CNPJ/CPF.'
+        : 'Erro ao salvar: ' + error.message)
+      setSaving(false)
+      return
+    }
     onSaved(data)
     setSaving(false)
   }
@@ -71,21 +88,40 @@ function ModalNovoFornecedor({ onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
+          {err && <div style={{color:'var(--danger)',fontSize:13,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:6,marginBottom:10}}>{err}</div>}
+
           <div className="form-group">
-            <label className="form-label">Razão Social *</label>
+            <label className="form-label">Tipo *</label>
+            <div style={{ display:'flex', gap:8 }}>
+              {[{v:'pj',l:'🏢 Pessoa Jurídica'},{v:'pf',l:'👤 Pessoa Física'}].map(opt=>(
+                <button key={opt.v} type="button"
+                  className={`btn btn-sm ${f.tipo_pessoa===opt.v?'btn-primary':'btn-ghost'}`}
+                  onClick={()=>set('tipo_pessoa',opt.v)}>
+                  {opt.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">{f.tipo_pessoa==='pf' ? 'Nome completo *' : 'Razão Social *'}</label>
             <input className="form-input" value={f.razao_social} onChange={e=>set('razao_social',e.target.value)}
-              autoFocus placeholder="Ex: Distribuidora ABC Ltda" />
+              autoFocus placeholder={f.tipo_pessoa==='pf' ? 'Ex: João da Silva' : 'Ex: Distribuidora ABC Ltda'} />
           </div>
-          <div className="form-group">
-            <label className="form-label">Nome Fantasia</label>
-            <input className="form-input" value={f.nome_fantasia} onChange={e=>set('nome_fantasia',e.target.value)}
-              placeholder="Opcional" />
-          </div>
+
+          {f.tipo_pessoa==='pj' && (
+            <div className="form-group">
+              <label className="form-label">Nome Fantasia</label>
+              <input className="form-input" value={f.nome_fantasia} onChange={e=>set('nome_fantasia',e.target.value)}
+                placeholder="Opcional" />
+            </div>
+          )}
+
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">CNPJ</label>
+              <label className="form-label">{f.tipo_pessoa==='pf' ? 'CPF' : 'CNPJ'}</label>
               <input className="form-input" value={f.cnpj} onChange={e=>set('cnpj',e.target.value)}
-                placeholder="00.000.000/0000-00" />
+                placeholder={f.tipo_pessoa==='pf' ? '000.000.000-00' : '00.000.000/0000-00'} />
             </div>
             <div className="form-group">
               <label className="form-label">Cidade/UF</label>
@@ -719,7 +755,7 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
       )}
       {showNovoFornecedor && (
         <ModalNovoFornecedor onClose={()=>setShowNovoFornecedor(false)}
-          onSaved={novo=>{setFornecedoresLocais(prev=>[...prev,novo]);set('fornecedor_id',novo.id);setShowNovoFornecedor(false)}}/>
+          onSaved={novo=>{ if(!novo) return; setFornecedoresLocais(prev=>[...prev,novo]);set('fornecedor_id',novo.id);setShowNovoFornecedor(false)}}/>
       )}
     </div>
   )
