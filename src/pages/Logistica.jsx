@@ -69,17 +69,18 @@ function parseCSVRobusto(texto) {
   return rows
 }
 
-function parsearLogisticaCSV(texto, dataFiltro) {
+function parsearLogisticaCSV(texto, datasFiltro) {
   const rows = parseCSVRobusto(texto)
   if (rows.length<2) return []
   const header = rows[0].map(h=>h.replace(/^"|"$/g,'').trim())
   const idx = n => header.indexOf(n)
   const pedidosMap = {}
+  const datas = Array.isArray(datasFiltro) ? datasFiltro : (datasFiltro ? [datasFiltro] : [])
   for (const cols of rows.slice(1)) {
     const get = i => (i>=0&&i<cols.length ? cols[i] : '')
     if (!get(idx('Transportadora')).toUpperCase().includes('LALAMOVE')) continue
     const dataPrev = get(idx('Data Prevista')).trim()
-    if (dataFiltro && dataPrev !== dataFiltro) continue
+    if (datas.length && !datas.includes(dataPrev)) continue
     const numPedido = get(idx('Número pedido')).trim()
     if (!numPedido) continue
     const sku = get(idx('SKU')).trim()
@@ -99,6 +100,7 @@ function parsearLogisticaCSV(texto, dataFiltro) {
         cep: formatCEP(cepRaw), cepNum,
         tel: formatTel(get(idx('Celular Comprador'))),
         cpfCnpj: get(idx('CPF/CNPJ Comprador')).trim(),
+        dataPrevista: dataPrev,
         itens: [], excluir: false,
       }
     }
@@ -107,16 +109,17 @@ function parsearLogisticaCSV(texto, dataFiltro) {
   return Object.values(pedidosMap)
 }
 
-function parsearTodosOsPedidos(texto, dataFiltro) {
+function parsearTodosOsPedidos(texto, datasFiltro) {
   const rows = parseCSVRobusto(texto)
   if (rows.length<2) return {}
   const header = rows[0].map(h=>h.replace(/^"|"$/g,'').trim())
   const idx = n => header.indexOf(n)
   const pedidosMap = {}
+  const datas = Array.isArray(datasFiltro) ? datasFiltro : (datasFiltro ? [datasFiltro] : [])
   for (const cols of rows.slice(1)) {
     const get = i => (i>=0&&i<cols.length ? cols[i] : '')
     const dataPrev = get(idx('Data Prevista')).trim()
-    if (dataFiltro && dataPrev !== dataFiltro) continue
+    if (datas.length && !datas.includes(dataPrev)) continue
     const numPedido = get(idx('Número pedido')).trim()
     if (!numPedido) continue
     const transportadora = get(idx('Transportadora')).trim() || 'Sem transportadora'
@@ -322,7 +325,8 @@ async function salvarHistorico(routes, dateStr) {
 // ── Componente ────────────────────────────────────────────────────────────────
 export default function Logistica({ csvInicial }) {
   const amanha = new Date(); amanha.setDate(amanha.getDate()+1)
-  const [dataFiltro, setDataFiltro] = useState(amanha.toLocaleDateString('pt-BR'))
+  const [datasFiltro, setDatasFiltro] = useState([amanha.toLocaleDateString('pt-BR')])
+  const [novaData, setNovaData] = useState('')
   const [step, setStep] = useState('upload')
   const [orders, setOrders] = useState([])
   const [routes, setRoutes] = useState([])
@@ -336,6 +340,15 @@ export default function Logistica({ csvInicial }) {
   const [resultadoBusca, setResultadoBusca] = useState(null)
   const [buscando, setBuscando] = useState(false)
   const fileRef = useRef()
+
+  function addData() {
+    if (!novaData.trim()) return
+    if (!datasFiltro.includes(novaData)) setDatasFiltro(prev => [...prev, novaData].sort())
+    setNovaData('')
+  }
+  function removeData(d) {
+    setDatasFiltro(prev => prev.filter(x => x !== d))
+  }
 
   useEffect(() => {
     supabase.from('enderecos_cache').select('*').then(({ data }) => {
@@ -353,7 +366,7 @@ export default function Logistica({ csvInicial }) {
   function processarTextoCSV(texto) {
     setImportando(true)
     try {
-      const parsed = parsearLogisticaCSV(texto, dataFiltro)
+      const parsed = parsearLogisticaCSV(texto, datasFiltro)
       aplicarParsed(parsed)
     } catch(e) { alert('Erro: '+e.message) }
     setImportando(false)
@@ -462,7 +475,7 @@ export default function Logistica({ csvInicial }) {
   const missingOrders = orders.filter(o=>!o.rua&&!sugestoes[o.id])
   const allFilled = missingOrders.every(o=>manualAddr[o.id]?.rua?.trim()&&manualAddr[o.id]?.cep?.trim())
   const pendingSugestoes = Object.keys(sugestoes).length>0
-  const dateStr = dataFiltro
+  const dateStr = datasFiltro.length === 1 ? datasFiltro[0] : datasFiltro.join(' + ')
   const totalParadas = routes.reduce((s,r)=>s+r.stops.length,0)
 
   return (
@@ -471,13 +484,26 @@ export default function Logistica({ csvInicial }) {
       <div className="card card-pad">
         <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end' }}>
           <div className="form-group">
-            <label className="form-label">Data do roteiro (DD/MM/AAAA)</label>
-            <input className="form-input" value={dataFiltro} onChange={e=>setDataFiltro(e.target.value)}
-              placeholder="24/06/2026" style={{ width:160 }} />
+            <label className="form-label">Datas do roteiro (DD/MM/AAAA)</label>
+            <div style={{ display:'flex', gap:6 }}>
+              <input className="form-input" value={novaData} onChange={e=>setNovaData(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&addData()}
+                placeholder="24/06/2026" style={{ width:140 }} />
+              <button className="btn btn-ghost btn-sm" onClick={addData}>+ Adicionar</button>
+            </div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:8 }}>
+              {datasFiltro.map(d => (
+                <span key={d} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'var(--purple-pale)', color:'var(--purple)', padding:'4px 10px', borderRadius:999, fontSize:12, fontWeight:600 }}>
+                  {d}
+                  <button onClick={()=>removeData(d)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--purple)', padding:0, lineHeight:1 }}>✕</button>
+                </span>
+              ))}
+              {datasFiltro.length===0 && <span style={{ fontSize:12, color:'var(--gray-300)' }}>Nenhuma data selecionada</span>}
+            </div>
           </div>
           <div>
             <label className="form-label" style={{ marginBottom:5, display:'block' }}>CSV do Bling</label>
-            <button className="btn btn-primary" onClick={()=>fileRef.current?.click()} disabled={importando}>
+            <button className="btn btn-primary" onClick={()=>fileRef.current?.click()} disabled={importando || datasFiltro.length===0}>
               {importando?<><RefreshCw size={14} className="spin"/> Processando...</>:<><Upload size={14}/> Importar CSV</>}
             </button>
             <input ref={fileRef} type="file" accept=".csv" style={{ display:'none' }}
@@ -485,7 +511,7 @@ export default function Logistica({ csvInicial }) {
           </div>
           {orders.length>0&&(
             <div className="alert-banner ok" style={{ flex:1 }}>
-              <CheckCircle size={14}/> <strong>{orders.length} pedidos LALAMOVE</strong> encontrados para {dataFiltro}
+              <CheckCircle size={14}/> <strong>{orders.length} pedidos LALAMOVE</strong> encontrados para {datasFiltro.join(', ')}
             </div>
           )}
         </div>
@@ -667,7 +693,7 @@ export default function Logistica({ csvInicial }) {
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
               {csvRaw && (
-                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(csvRaw, dataFiltro, dateStr)}>
+                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(csvRaw, datasFiltro, dateStr)}>
                   <FileText size={14}/> PDF Conferência
                 </button>
               )}
