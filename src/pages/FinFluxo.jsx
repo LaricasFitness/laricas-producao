@@ -53,7 +53,7 @@ export default function FinFluxo() {
       .select('valor, data_vencimento, status, fin_lancamentos(tipo, descricao)')
       .gte('data_vencimento', ini)
       .lte('data_vencimento', fim)
-      .in('status', ['pendente','agendado','vencido'])
+      .in('status', ['pendente','em_aberto','agendado','vencido'])
       .order('data_vencimento')
 
     // 3. Monta mapa diário
