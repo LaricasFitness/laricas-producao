@@ -6,7 +6,7 @@ import { Save, RefreshCw, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-
 
 // Itens fixos das fases internas
 const MASSAS = ['Massa - Pão de Mel', 'Massa - Bolo de Cenoura', 'Massa - Chocotone']
-const RECHEIOS = ['Brigadeiro de Whey','Beijinho de Whey','Cookies\'n Cream','Pistache Cremoso','Creme de Avelã Trufado','Romeu e Julieta','Avelã Crunch','Bueníssimo','Doce de Leite']
+const RECHEIOS = ['Brigadeiro de Whey','Beijinho de Whey','Cookies\'n Cream','Pistache Cremoso','Creme de Avelã Trufado','Romeu e Julieta','Avelã Crunch','Bueníssimo','Doce de Leite','Recheio de Amendoim']
 const COBERTURAS = ['Branca','Ao Leite']
 
 const FASES = [
