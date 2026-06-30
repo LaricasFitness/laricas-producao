@@ -523,14 +523,27 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
 
   function gerarParcelas() {
     const base = new Date(f.data_vencimento + 'T12:00:00')
+    const baseComp = f.data_competencia ? new Date(f.data_competencia + 'T12:00:00') : null
     return Array.from({ length: nParcelas }, (_, i) => {
       const d = new Date(base)
       d.setMonth(d.getMonth() + i)
+      // Recorrente: cada parcela é um fato novo → competência avança junto com o vencimento
+      // Parcelado (não recorrente): é uma compra única dividida em vencimentos → competência fixa
+      let competencia = null
+      if (baseComp) {
+        if (f.recorrente) {
+          const dc = new Date(baseComp)
+          dc.setMonth(dc.getMonth() + i)
+          competencia = dc.toISOString().slice(0, 10)
+        } else {
+          competencia = baseComp.toISOString().slice(0, 10)
+        }
+      }
       return {
         numero_parcela: i + 1,
         valor: valorParcela,
         data_vencimento: d.toISOString().slice(0, 10),
-        data_competencia: f.data_competencia || null,
+        data_competencia: competencia,
         status: f.status,
       }
     })
