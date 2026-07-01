@@ -195,6 +195,7 @@ export default function Planejamento({ onIrLogistica }) {
   const [loading, setLoading] = useState(true)
   const [importando, setImportando] = useState(false)
   const [diasBling, setDiasBling] = useState({})
+  const [pedidosPorDia, setPedidosPorDia] = useState({})
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
   const [datasAtivas, setDatasAtivas] = useState([])
@@ -217,12 +218,42 @@ export default function Planejamento({ onIrLogistica }) {
       setCsvRaw(texto)
       const parsed = parsearCSV(texto)
       const novosBling = {}
+      const pedidosPorDia = {} // { data: Set<numeroPedido> }
+
+      // Tenta extrair número de pedido para contar pedidos distintos
+      const rows = texto.split('\n').map(r => r.replace(/\r$/,''))
+      const header = rows[0]?.split(';').map(h=>h.replace(/^"|"$/g,'').trim()) || []
+      const idxPed = header.indexOf('Número pedido')
+      const idxData = header.indexOf('Data Prevista')
+
       for (const { sku, qtd, data } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
         novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
       }
+
+      // Conta pedidos distintos por dia
+      if (idxPed >= 0 && idxData >= 0) {
+        for (const row of rows.slice(1)) {
+          const cols = row.split(';').map(c=>c.replace(/^"|"$/g,'').trim())
+          const numPed = cols[idxPed]?.trim()
+          const dataBr = cols[idxData]?.trim()
+          if (!numPed || !dataBr) continue
+          // Converte data pt-BR para ISO
+          const parts = dataBr.split('/')
+          const iso = parts.length===3 ? `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}` : null
+          if (!iso) continue
+          if (!pedidosPorDia[iso]) pedidosPorDia[iso] = new Set()
+          pedidosPorDia[iso].add(numPed)
+        }
+      }
+
+      // Converte Sets para contagens
+      const countsPorDia = {}
+      for (const [d, set] of Object.entries(pedidosPorDia)) countsPorDia[d] = set.size
+
       const datas = Object.keys(novosBling).sort()
       setDiasBling(novosBling)
+      setPedidosPorDia(countsPorDia)
       setDiasOrdenados(datas)
       setDatasAtivas([])
       setDiasDelivery({})
@@ -236,7 +267,7 @@ export default function Planejamento({ onIrLogistica }) {
   }
 
   function limpar() {
-    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([])
+    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({})
   }
 
   const diasVisiveis = diasOrdenados.filter(d => datasAtivas.includes(d))
@@ -341,10 +372,19 @@ export default function Planejamento({ onIrLogistica }) {
             {diasOrdenados.map(d => {
               const ativa = datasAtivas.includes(d)
               const idx = datasAtivas.indexOf(d)
+              const nPed = pedidosPorDia[d] || 0
               return (
                 <button key={d} className={`btn btn-sm ${ativa ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => toggleData(d)} style={{ fontSize: 12 }}>
+                  onClick={() => toggleData(d)} style={{ fontSize: 12, display:'flex', alignItems:'center', gap:5 }}>
                   {ativa && idx === 0 ? '🎯 ' : ''}{headerDia(d)}
+                  {nPed > 0 && (
+                    <span style={{
+                      background: ativa ? 'rgba(255,255,255,.3)' : 'var(--purple-pale)',
+                      color: ativa ? '#fff' : 'var(--purple)',
+                      fontSize: 10, fontWeight: 700,
+                      padding: '1px 5px', borderRadius: 999, lineHeight: 1.6,
+                    }}>{nPed}</span>
+                  )}
                 </button>
               )
             })}
@@ -353,6 +393,14 @@ export default function Planejamento({ onIrLogistica }) {
                 Selecione pelo menos uma data para ver a tabela
               </span>
             )}
+            {datasAtivas.length > 0 && (() => {
+              const totalPed = datasAtivas.reduce((s,d) => s + (pedidosPorDia[d]||0), 0)
+              return totalPed > 0 ? (
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple)', marginLeft: 4, padding:'4px 10px', background:'var(--purple-pale)', borderRadius:999 }}>
+                  📦 {totalPed} pedido{totalPed!==1?'s':''} selecionado{totalPed!==1?'s':''}
+                </span>
+              ) : null
+            })()}
           </div>
         )}
 
