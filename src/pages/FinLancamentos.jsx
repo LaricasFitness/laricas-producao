@@ -867,17 +867,48 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
 function ModalParcela({ parcela, contas, onClose, onSaved }) {
   const [status, setStatus] = useState(parcela.status)
   const [dataPag, setDataPag] = useState(parcela.data_pagamento || new Date().toISOString().slice(0,10))
-  const [contaId, setContaId] = useState(parcela.conta_id || '')
+  const [contaId, setContaId] = useState(parcela.conta_id || (contas[0]?.id || ''))
   const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const jaEraPago = ['pago','cancelado'].includes(parcela.status)
 
   async function salvar() {
-    setSaving(true)
-    await supabase.from('fin_parcelas').update({
-      status,
-      data_pagamento: status === 'pago' ? dataPag : null,
-      conta_id: contaId || null,
-    }).eq('id', parcela.id)
-    onSaved()
+    if (status === 'pago' && !contaId) { setErr('Selecione a conta utilizada.'); return }
+    setSaving(true); setErr('')
+    try {
+      const statusAnterior = parcela.status
+      const contaAnterior = parcela.conta_id
+
+      await supabase.from('fin_parcelas').update({
+        status,
+        data_pagamento: status === 'pago' ? dataPag : null,
+        conta_id: contaId || null,
+      }).eq('id', parcela.id)
+
+      // Atualiza saldo da conta automaticamente
+      const tipo = parcela._tipo // 'receita' ou 'despesa' passado pelo parent
+
+      // Se estava pago antes e agora não está → estorna da conta anterior
+      if (statusAnterior === 'pago' && status !== 'pago' && contaAnterior) {
+        const { data: contaAnt } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaAnterior).single()
+        if (contaAnt) {
+          const delta = tipo === 'receita' ? -parcela.valor : +parcela.valor
+          await supabase.from('fin_contas').update({ saldo_atual: (contaAnt.saldo_atual||0) + delta }).eq('id', contaAnterior)
+        }
+      }
+
+      // Se está sendo marcado como pago agora → debita/credita na conta selecionada
+      if (status === 'pago' && statusAnterior !== 'pago' && contaId) {
+        const { data: conta } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaId).single()
+        if (conta) {
+          const delta = tipo === 'receita' ? +parcela.valor : -parcela.valor
+          await supabase.from('fin_contas').update({ saldo_atual: (conta.saldo_atual||0) + delta }).eq('id', contaId)
+        }
+      }
+
+      onSaved()
+    } catch(e) { setErr(e.message) }
     setSaving(false)
   }
 
@@ -889,6 +920,7 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
+          {err && <div style={{color:'var(--danger)',fontSize:13,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:6,marginBottom:10}}>{err}</div>}
           <div style={{ fontWeight: 700, fontSize: 18, color: 'var(--purple)', marginBottom: 4 }}>{fmtR(parcela.valor)}</div>
           <div style={{ fontSize: 13, color: 'var(--gray-500)', marginBottom: 14 }}>Vencimento: {fmtData(parcela.data_vencimento)}</div>
           <div className="form-group">
@@ -1317,7 +1349,7 @@ export default function FinLancamentos({ tipo }) {
                                       <td>{fmtData(p.data_pagamento) || '—'}</td>
                                       <td>
                                         <div style={{display:'flex',gap:4}}>
-                                          <button className="btn btn-ghost btn-xs" onClick={() => setModalParcela(p)}>
+                                          <button className="btn btn-ghost btn-xs" onClick={() => setModalParcela({...p, _tipo: tipo})}>
                                             Editar
                                           </button>
                                           <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
