@@ -36,30 +36,60 @@ function parseInterCSV(texto) {
   }).filter(Boolean) }
 }
 
-function parseC6CSV(texto) {
+function parseC6CSV(texto, cartaoFiltro=null) {
+  // C6 formato novo: Data de Compra;Nome no Cartão;Final do Cartão;Categoria;Descrição;Parcela;Valor (em US$);Cotação (em R$);Valor (em R$)
   const linhas = texto.replace(/^\uFEFF/,'').split('\n').filter(l=>l.trim())
-  return { banco:'C6', transacoes: linhas.slice(1).map(linha => {
+  const header = linhas[0]?.split(';').map(c=>c.trim()) || []
+  const idxData  = header.findIndex(h=>h.includes('Data'))
+  const idxNome  = header.findIndex(h=>h.includes('Nome'))
+  const idxFinal = header.findIndex(h=>h.includes('Final'))
+  const idxDesc  = header.findIndex(h=>h.includes('Descri'))
+  const idxValorBrl = header.length - 1
+
+  // Extrai cartões disponíveis
+  const cartoesMap = {}
+  for (const linha of linhas.slice(1)) {
+    const cols = linha.split(';').map(c=>c.trim().replace(/^"|"$/g,''))
+    if (cols.length < 3) continue
+    const nome  = idxNome>=0  ? cols[idxNome]  : cols[1]
+    const final = idxFinal>=0 ? cols[idxFinal] : cols[2]
+    if (!nome) continue
+    const key = nome+';'+final
+    if (!cartoesMap[key]) cartoesMap[key] = { nome, final, label:nome+' (final '+final+')', count:0 }
+    cartoesMap[key].count++
+  }
+  const cartoes = Object.values(cartoesMap).sort((a,b)=>a.label.localeCompare(b.label))
+
+  const transacoes = linhas.slice(1).map(linha => {
     const cols = linha.split(';').map(c=>c.trim().replace(/^"|"$/g,''))
     if (cols.length < 5) return null
-    const [dataRaw,hist,,,debRaw] = cols
+    const dataRaw  = idxData>=0  ? cols[idxData]     : cols[0]
+    const nome     = idxNome>=0  ? cols[idxNome]     : cols[1]
+    const final    = idxFinal>=0 ? cols[idxFinal]    : cols[2]
+    const desc     = idxDesc>=0  ? cols[idxDesc]     : cols[4]
+    const valorRaw = cols[idxValorBrl] || cols[cols.length-1]
+    if (cartaoFiltro && (nome+';'+final) !== cartaoFiltro) return null
     const m = dataRaw.match(/(\d{2})\/(\d{2})\/(\d{4})/)
     if (!m) return null
-    const deb = parseFloat((debRaw||'0').replace(/\./g,'').replace(',','.')) || 0
-    if (deb <= 0) return null
-    return { data:`${m[3]}-${m[2]}-${m[1]}`, valor:deb, memo:hist||'', fitid:`${dataRaw}-${deb}-${hist}` }
-  }).filter(Boolean) }
+    const data = m[3]+'-'+m[2]+'-'+m[1]
+    const valor = parseFloat((valorRaw||'0').replace(/\./g,'').replace(',','.')) || 0
+    if (valor <= 0) return null
+    return { data, valor, memo:desc||'', cartao:nome+' (final '+final+')', fitid:data+'-'+nome+'-'+final+'-'+valor+'-'+desc }
+  }).filter(Boolean)
+
+  return { transacoes, banco:'C6', cartoes }
 }
 
-function detectarEParsar(texto, filename) {
+function detectarEParsar(texto, filename, cartaoFiltro=null) {
   const fn = (filename||'').toLowerCase()
   if (fn.endsWith('.ofx') || texto.includes('OFXHEADER') || texto.includes('<OFX>')) {
     const res = parseOFX(texto)
-    if (fn.includes('itau') || texto.includes('ITAU')) return {...res, banco:'Itaú'}
-    return res
+    if (fn.includes('itau') || texto.includes('ITAU')) return {...res, banco:'Itaú', cartoes:[]}
+    return {...res, cartoes:[]}
   }
-  if (texto.includes('Crédito;Débito;Saldo') || fn.includes('c6')) return parseC6CSV(texto)
-  if (texto.includes('Título;Descrição') || fn.includes('inter')) return parseInterCSV(texto)
-  return parseOFX(texto)
+  if (texto.includes('Nome no Cart') || fn.includes('c6')) return parseC6CSV(texto, cartaoFiltro)
+  if (texto.includes('Título;Descrição') || fn.includes('inter')) return {...parseInterCSV(texto), cartoes:[]}
+  return {...parseOFX(texto), cartoes:[]}
 }
 
 // Normaliza memo para matching (remove números, datas, valores)
@@ -118,11 +148,15 @@ function ComboboxCat({ value, onChange, opcoes, placeholder='Categoria...' }) {
 
 // ── Componente principal ──────────────────────────────────────────────────────
 export default function FinImportarFatura() {
-  const [step, setStep] = useState('upload')
+  const [step, setStep] = useState('upload') // upload | selecionarCartao | revisar | concluido
   const [banco, setBanco] = useState('')
-  const [itens, setItens] = useState([]) // todos os itens com sugestão + form
+  const [cartoes, setCartoes] = useState([])
+  const [cartaoFiltro, setCartaoFiltro] = useState(null)
+  const [textoRaw, setTextoRaw] = useState('')
+  const [filenameRaw, setFilenameRaw] = useState('')
+  const [itens, setItens] = useState([])
   const [idxAtual, setIdxAtual] = useState(0)
-  const [modo, setModo] = useState('revisar') // 'revisar' (um a um) | 'lista' (visão geral)
+  const [modo, setModo] = useState('lista')
   const [salvando, setSalvando] = useState(false)
   const [resultado, setResultado] = useState({salvos:0,pulados:0,total:0})
   const fileRef = useRef()
@@ -160,12 +194,32 @@ export default function FinImportarFatura() {
     const reader = new FileReader()
     reader.onload = e => {
       const texto = e.target.result
-      const { transacoes, banco:b } = detectarEParsar(texto, file.name)
-      if (!transacoes.length) { alert('Nenhuma transação encontrada.'); return }
+      setTextoRaw(texto)
+      setFilenameRaw(file.name)
+      const { transacoes, banco:b, cartoes:cs } = detectarEParsar(texto, file.name)
       setBanco(b)
-      // Monta itens com sugestão automática
-      const hoje = new Date().toISOString().slice(0,10)
-      const primeiroMes = transacoes[0]?.data?.slice(0,7)+'-01' || hoje
+      if (cs && cs.length > 1) {
+        // Múltiplos cartões — mostrar seleção
+        setCartoes(cs)
+        setCartaoFiltro(null)
+        setStep('selecionarCartao')
+      } else {
+        // Único cartão ou OFX/Inter — vai direto para revisão
+        if (!transacoes.length) { alert('Nenhuma transação encontrada.'); return }
+        montarItens(transacoes)
+      }
+    }
+    reader.readAsText(file, 'UTF-8')
+  }
+
+  function confirmarCartao(filtro) {
+    const { transacoes } = detectarEParsar(textoRaw, filenameRaw, filtro)
+    if (!transacoes.length) { alert('Nenhuma transação para este cartão.'); return }
+    setCartaoFiltro(filtro)
+    montarItens(transacoes)
+  }
+
+  function montarItens(transacoes) {
       const novosItens = transacoes.map(t => {
         const pattern = normalizarMemo(t.memo)
         const sugestao = memoMap[pattern]
@@ -192,8 +246,6 @@ export default function FinImportarFatura() {
       setIdxAtual(novosItens.findIndex(i=>!i.auto) >= 0 ? novosItens.findIndex(i=>!i.auto) : 0)
       setModo('lista')
       setStep('revisar')
-    }
-    reader.readAsText(file, 'UTF-8')
   }
 
   function atualizarItem(idx, campo, valor) {
@@ -250,6 +302,36 @@ export default function FinImportarFatura() {
     setSalvando(false)
     setStep('concluido')
   }
+
+  // ── Seleção de cartão (C6 multi-cartão) ──
+  if (step==='selecionarCartao') return (
+    <div className="card card-pad">
+      <div style={{fontWeight:800,fontSize:16,marginBottom:6}}>💳 Fatura {banco} — Selecione o cartão</div>
+      <div style={{fontSize:13,color:'var(--gray-500)',marginBottom:20}}>
+        Esta fatura contém lançamentos de múltiplos cartões. Escolha qual deseja importar:
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {cartoes.map(c => {
+          const filtro = `${c.nome};${c.final}`
+          return (
+            <button key={filtro} className="btn btn-ghost"
+              style={{justifyContent:'space-between',textAlign:'left',padding:'12px 16px',border:'1px solid var(--gray-200)',borderRadius:8}}
+              onClick={()=>confirmarCartao(filtro)}>
+              <div>
+                <div style={{fontWeight:700,fontSize:14}}>{c.label}</div>
+                <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{c.count} lançamentos</div>
+              </div>
+              <span style={{color:'var(--purple)',fontSize:18}}>→</span>
+            </button>
+          )
+        })}
+      </div>
+      <button className="btn btn-ghost btn-sm" style={{marginTop:16,color:'var(--gray-400)'}}
+        onClick={()=>setStep('upload')}>
+        ← Voltar
+      </button>
+    </div>
+  )
 
   // ── Upload ──
   if (step==='upload') return (
