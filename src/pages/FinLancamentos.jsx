@@ -961,6 +961,56 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
 }
 
 // ── Modal de Transferência entre contas ──────────────────────────────────────
+// ── Modal confirmar pagamento em lote ─────────────────────────────────────────
+function ModalConfirmarLotePago({ count, total, contas, onClose, onConfirm }) {
+  const [dataPag, setDataPag] = useState(new Date().toISOString().slice(0,10))
+  const [contaId, setContaId] = useState(
+    contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || ''
+  )
+  const [saving, setSaving] = useState(false)
+
+  async function confirmar() {
+    if (!contaId) return
+    setSaving(true)
+    await onConfirm(dataPag, contaId)
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:360}}>
+        <div className="modal-header">
+          <div className="modal-title">Confirmar pagamento em lote</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,marginBottom:16,textAlign:'center'}}>
+            <div style={{fontSize:13,color:'var(--purple)',fontWeight:700}}>{count} parcela{count!==1?'s':''} · {fmtR(total)}</div>
+            <div style={{fontSize:12,color:'var(--gray-500)',marginTop:2}}>serão marcadas como pagas</div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data do pagamento</label>
+            <input type="date" className="form-input" value={dataPag} onChange={e=>setDataPag(e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Conta debitada *</label>
+            <select className="form-input" value={contaId} onChange={e=>setContaId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={confirmar} disabled={saving||!contaId}>
+            {saving?<RefreshCw size={14} className="spin"/>:<>✓ Confirmar pagamento</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Modal pagamento parcial ────────────────────────────────────────────────────
 function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
   const [valorPago, setValorPago] = useState(parcela.valor_pago || '')
@@ -1288,13 +1338,34 @@ export default function FinLancamentos({ tipo }) {
     .filter(p => selecionados.has(p.id))
     .reduce((s,p) => s+p.valor, 0)
 
+  const [modalLotePago, setModalLotePago] = useState(false)
+
   async function marcarLoteStatus(novoStatus) {
     if (!selecionados.size) return
+    if (novoStatus === 'pago') { setModalLotePago(true); return }
     const ids = [...selecionados]
-    const hoje = new Date().toISOString().slice(0,10)
-    const updates = { status: novoStatus }
-    if (novoStatus === 'pago') updates.data_pagamento = hoje
-    await supabase.from('fin_parcelas').update(updates).in('id', ids)
+    await supabase.from('fin_parcelas').update({ status: novoStatus }).in('id', ids)
+    setSelecionados(new Set())
+    load()
+  }
+
+  async function confirmarLotePago(dataPag, contaId) {
+    const ids = [...selecionados]
+    await supabase.from('fin_parcelas').update({
+      status: 'pago', data_pagamento: dataPag, conta_id: contaId || null,
+    }).in('id', ids)
+
+    // Atualiza saldo da conta — soma todos os valores das parcelas selecionadas
+    if (contaId) {
+      const { data: conta } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaId).single()
+      if (conta) {
+        const totalSel = extratoLinhas.filter(p => selecionados.has(p.id)).reduce((s,p) => s+p.valor, 0)
+        const delta = tipo === 'receita' ? +totalSel : -totalSel
+        await supabase.from('fin_contas').update({ saldo_atual: (conta.saldo_atual||0) + delta }).eq('id', contaId)
+      }
+    }
+
+    setModalLotePago(false)
     setSelecionados(new Set())
     load()
   }
@@ -1672,6 +1743,13 @@ export default function FinLancamentos({ tipo }) {
       {modalPagParcial && (
         <ModalPagamentoParcial parcela={modalPagParcial} contas={contas}
           onClose={() => setModalPagParcial(null)} onSaved={() => { setModalPagParcial(null); load() }}
+        />
+      )}
+      {modalLotePago && (
+        <ModalConfirmarLotePago
+          count={selecionados.size} total={totalSelecionado} contas={contas}
+          onClose={() => setModalLotePago(false)}
+          onConfirm={confirmarLotePago}
         />
       )}
       {modalXml && (
