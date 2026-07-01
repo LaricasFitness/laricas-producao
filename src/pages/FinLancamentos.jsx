@@ -1545,7 +1545,7 @@ export default function FinLancamentos({ tipo }) {
                       <td style={{fontSize:11,color:'var(--gray-400)'}}>
                         {l.total_parcelas>1?`${p.numero_parcela}/${l.total_parcelas}`:'—'}
                       </td>
-                      <td style={{textAlign:'right',fontWeight:700,color}}>
+                      <td style={{textAlign:'right',fontWeight:700,color:cor}}>
                         {fmtR(p.valor)}
                         {p.valor_pago>0&&p.valor_pago<p.valor&&(
                           <div style={{fontSize:10,color:'var(--warning)'}}>pago: {fmtR(p.valor_pago)}</div>
