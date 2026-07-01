@@ -8,6 +8,7 @@ import FinCanalDespesas from './FinCanalDespesas'
 import FinOrcamento from './FinOrcamento'
 import FinSazonalidade from './FinSazonalidade'
 import FinReconciliacao from './FinReconciliacao'
+import FinImportarFatura from './FinImportarFatura'
 import FinAlertas from './FinAlertas'
 import FinConfig from './FinConfig'
 import { verificarEDispararAlertas } from '../lib/alertas'
@@ -23,6 +24,7 @@ const TABS = [
   { id:'orcamento',     label:'🎯 Orçamento'        },
   { id:'sazonalidade',  label:'📅 Sazonalidade'     },
   { id:'reconciliacao', label:'🏦 Reconciliação'    },
+  { id:'fatura',        label:'💳 Importar Fatura'  },
   { id:'alertas',       label:'🔔 Alertas'          },
   { id:'config',        label:'⚙️ Config'           },
 ]
@@ -49,6 +51,7 @@ export default function Financeiro() {
       {tab==='orcamento'    && <FinOrcamento />}
       {tab==='sazonalidade' && <FinSazonalidade />}
       {tab==='reconciliacao'&& <FinReconciliacao />}
+      {tab==='fatura'       && <FinImportarFatura />}
       {tab==='alertas'      && <FinAlertas />}
       {tab==='config'       && <FinConfig />}
     </>
