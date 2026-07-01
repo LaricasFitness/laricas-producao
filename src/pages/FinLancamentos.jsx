@@ -1050,9 +1050,9 @@ function ModalTransferencia({ contas, onClose, onSaved }) {
 
 export default function FinLancamentos({ tipo }) {
   const hoje = new Date()
-  const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
-  const [ini, setIni] = useState(mesIni)
-  const [fim, setFim] = useState(hoje.toISOString().slice(0,10))
+  const daqui7 = new Date(hoje); daqui7.setDate(daqui7.getDate() + 6)
+  const [ini, setIni] = useState(hoje.toISOString().slice(0,10))
+  const [fim, setFim] = useState(daqui7.toISOString().slice(0,10))
   const [statusFiltro, setStatusFiltro] = useState('todos')
   const [canalFiltro, setCanalFiltro] = useState('todos')
 
