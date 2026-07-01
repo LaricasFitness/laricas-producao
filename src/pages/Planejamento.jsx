@@ -218,38 +218,32 @@ export default function Planejamento({ onIrLogistica }) {
       setCsvRaw(texto)
       const parsed = parsearCSV(texto)
       const novosBling = {}
-      const pedidosPorDia = {} // { data: Set<numeroPedido> }
-
-      // Tenta extrair número de pedido para contar pedidos distintos
-      const rows = texto.split('\n').map(r => r.replace(/\r$/,''))
-      const header = rows[0]?.split(';').map(h=>h.replace(/^"|"$/g,'').trim()) || []
-      const idxPed = header.indexOf('Número pedido')
-      const idxData = header.indexOf('Data Prevista')
-
       for (const { sku, qtd, data } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
         novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
       }
 
-      // Conta pedidos distintos por dia
-      if (idxPed >= 0 && idxData >= 0) {
-        for (const row of rows.slice(1)) {
-          const cols = row.split(';').map(c=>c.replace(/^"|"$/g,'').trim())
-          const numPed = cols[idxPed]?.trim()
-          const dataBr = cols[idxData]?.trim()
-          if (!numPed || !dataBr) continue
-          // Converte data pt-BR para ISO
-          const parts = dataBr.split('/')
-          const iso = parts.length===3 ? `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}` : null
-          if (!iso) continue
-          if (!pedidosPorDia[iso]) pedidosPorDia[iso] = new Set()
-          pedidosPorDia[iso].add(numPed)
+      // Conta pedidos distintos por data usando o parser robusto
+      const countsPorDia = {}
+      const rows = parseCSVRobusto(texto)
+      if (rows.length > 1) {
+        const header = rows[0].map(h => h.replace(/^"|"$/g,'').trim())
+        const idxPed  = header.indexOf('Número pedido')
+        const idxData = header.indexOf('Data Prevista')
+        if (idxPed >= 0 && idxData >= 0) {
+          const pedsPorDia = {} // { data: Set<numPedido> }
+          for (const cols of rows.slice(1)) {
+            const numPed = cols[idxPed]?.trim()
+            const dataBr = cols[idxData]?.trim()
+            if (!numPed || !dataBr) continue
+            const dataIso = parsearDataBr(dataBr)
+            if (!dataIso) continue
+            if (!pedsPorDia[dataIso]) pedsPorDia[dataIso] = new Set()
+            pedsPorDia[dataIso].add(numPed)
+          }
+          for (const [d, set] of Object.entries(pedsPorDia)) countsPorDia[d] = set.size
         }
       }
-
-      // Converte Sets para contagens
-      const countsPorDia = {}
-      for (const [d, set] of Object.entries(pedidosPorDia)) countsPorDia[d] = set.size
 
       const datas = Object.keys(novosBling).sort()
       setDiasBling(novosBling)
