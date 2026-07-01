@@ -590,7 +590,7 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
     valor_parcela:      lancamento ? (lancamento.valor_total / (lancamento.total_parcelas||1)).toFixed(2) : '',
     categoria_id:       lancamento?.categoria_id || '',
     canal_id:           lancamento?.canal_id || '',
-    conta_id:           lancamento?.conta_id || (contas[0]?.id || ''),
+    conta_id: lancamento?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || '',
     forma_pagamento_id: lancamento?.forma_pagamento_id || '',
     fornecedor_id:      lancamento?.fornecedor_id || '',
     total_parcelas:     lancamento?.total_parcelas || 1,
@@ -961,6 +961,104 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
 }
 
 // ── Modal de Transferência entre contas ──────────────────────────────────────
+// ── Modal pagamento parcial ────────────────────────────────────────────────────
+function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
+  const [valorPago, setValorPago] = useState(parcela.valor_pago || '')
+  const [dataPag, setDataPag] = useState(parcela.data_pagamento || new Date().toISOString().slice(0,10))
+  const [contaId, setContaId] = useState(parcela.conta_id || contas[0]?.id || '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const vp = parseFloat(String(valorPago).replace(',','.')) || 0
+  const restante = parcela.valor - vp
+
+  async function salvar() {
+    if (!vp || vp <= 0) { setErr('Informe um valor pago válido.'); return }
+    if (vp > parcela.valor) { setErr('Valor pago maior que o valor da parcela.'); return }
+    if (!contaId) { setErr('Selecione a conta.'); return }
+    setSaving(true)
+    try {
+      const novoStatus = vp >= parcela.valor ? 'pago' : 'em_aberto'
+      await supabase.from('fin_parcelas').update({
+        valor_pago: vp,
+        status: novoStatus,
+        data_pagamento: novoStatus === 'pago' ? dataPag : null,
+        conta_id: contaId || null,
+      }).eq('id', parcela.id)
+
+      // Atualiza saldo da conta
+      if (contaId) {
+        const { data: conta } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaId).single()
+        if (conta) {
+          const delta = parcela._lanc?.tipo === 'receita' ? +vp : -vp
+          await supabase.from('fin_contas').update({ saldo_atual: (conta.saldo_atual||0) + delta }).eq('id', contaId)
+        }
+      }
+      onSaved()
+    } catch(e) { setErr(e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:380}}>
+        <div className="modal-header">
+          <div className="modal-title">Pagamento parcial</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {err && <div style={{color:'var(--danger)',fontSize:13,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:6,marginBottom:10}}>{err}</div>}
+          <div style={{display:'flex',justifyContent:'space-between',padding:'10px 14px',background:'var(--gray-50)',borderRadius:8,marginBottom:14}}>
+            <div>
+              <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700}}>VALOR DA PARCELA</div>
+              <div style={{fontWeight:800,fontSize:18,color:'var(--danger)'}}>{fmtR(parcela.valor)}</div>
+            </div>
+            {restante > 0 && restante < parcela.valor && (
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700}}>SALDO PENDENTE</div>
+                <div style={{fontWeight:700,fontSize:16,color:'var(--warning)'}}>{fmtR(restante)}</div>
+              </div>
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Valor pago agora (R$) *</label>
+            <input type="number" className="form-input" step={0.01} min={0.01} max={parcela.valor}
+              value={valorPago} onChange={e=>setValorPago(e.target.value)} autoFocus
+              placeholder={`Máximo: ${fmtR(parcela.valor)}`}/>
+            {vp > 0 && vp < parcela.valor && (
+              <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>
+                ⚠️ Pagamento parcial — restará {fmtR(parcela.valor - vp)} em aberto
+              </div>
+            )}
+            {vp >= parcela.valor && vp > 0 && (
+              <div style={{fontSize:12,color:'var(--ok)',marginTop:4}}>
+                ✓ Parcela será marcada como paga integralmente
+              </div>
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Data do pagamento</label>
+            <input type="date" className="form-input" value={dataPag} onChange={e=>setDataPag(e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Conta *</label>
+            <select className="form-input" value={contaId} onChange={e=>setContaId(e.target.value)}>
+              <option value="">Selecione...</option>
+              {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||!vp}>
+            {saving?<RefreshCw size={14} className="spin"/>:'Registrar pagamento'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalTransferencia({ contas, onClose, onSaved }) {
   const [f, setF] = useState({
     conta_origem: contas[0]?.id || '',
@@ -1099,7 +1197,11 @@ export default function FinLancamentos({ tipo }) {
   const [modalParcela, setModalParcela] = useState(null)
   const [modalXml, setModalXml] = useState(null)
   const [modalTransf, setModalTransf] = useState(false)
+  const [modalPagParcial, setModalPagParcial] = useState(null)
   const [expandido, setExpandido] = useState(null)
+  const [vistaExtrato, setVistaExtrato] = useState(true) // extrato (plano) vs agrupado
+  const [selecionados, setSelecionados] = useState(new Set()) // ids de parcelas selecionadas
+  const [formaFiltro, setFormaFiltro] = useState('todos')
   const xmlRef = useRef()
 
   useEffect(() => {
@@ -1133,15 +1235,18 @@ export default function FinLancamentos({ tipo }) {
     const { data } = await supabase
       .from('fin_lancamentos')
       .select(`*, fin_categorias(id,nome,cor), fin_canais(id,nome,cor), fin_contas(id,nome),
-               fin_parcelas(id,numero_parcela,valor,data_vencimento,data_pagamento,data_competencia,status,conta_id)`)
+               fin_formas_pagamento(id,nome),
+               fin_parcelas(id,numero_parcela,valor,valor_pago,data_vencimento,data_pagamento,data_competencia,status,conta_id)`)
       .eq('tipo', tipo)
       .order('criado_em', { ascending: false })
 
     let result = data || []
 
-    // Filtra por status/período nas parcelas
+    // Filtra por status/período/forma nas parcelas
     result = result.filter(l => {
       const parcelas = l.fin_parcelas || []
+      const matchForma = formaFiltro === 'todos' || l.forma_pagamento_id === formaFiltro
+      if (!matchForma) return false
       return parcelas.some(p => {
         const dentroData = p.data_vencimento >= ini && p.data_vencimento <= fim
         const matchStatus = statusFiltro === 'todos' || p.status === statusFiltro
@@ -1151,8 +1256,9 @@ export default function FinLancamentos({ tipo }) {
     })
 
     setLancamentos(result)
+    setSelecionados(new Set())
     setLoading(false)
-  }, [tipo, ini, fim, statusFiltro, canalFiltro])
+  }, [tipo, ini, fim, statusFiltro, canalFiltro, formaFiltro])
 
   useEffect(() => { load() }, [load])
 
@@ -1169,6 +1275,37 @@ export default function FinLancamentos({ tipo }) {
 
   const cor = tipo === 'receita' ? 'var(--ok)' : 'var(--danger)'
   const titulo = tipo === 'receita' ? 'Contas a Receber' : 'Contas a Pagar'
+
+  // Extrato plano: todas as parcelas do período, ordenadas por vencimento
+  const extratoLinhas = lancamentos.flatMap(l =>
+    (l.fin_parcelas||[])
+      .filter(p => p.data_vencimento >= ini && p.data_vencimento <= fim &&
+        (statusFiltro === 'todos' || p.status === statusFiltro))
+      .map(p => ({ ...p, _lanc: l }))
+  ).sort((a,b) => a.data_vencimento.localeCompare(b.data_vencimento))
+
+  const totalSelecionado = extratoLinhas
+    .filter(p => selecionados.has(p.id))
+    .reduce((s,p) => s+p.valor, 0)
+
+  async function marcarLoteStatus(novoStatus) {
+    if (!selecionados.size) return
+    const ids = [...selecionados]
+    const hoje = new Date().toISOString().slice(0,10)
+    const updates = { status: novoStatus }
+    if (novoStatus === 'pago') updates.data_pagamento = hoje
+    await supabase.from('fin_parcelas').update(updates).in('id', ids)
+    setSelecionados(new Set())
+    load()
+  }
+
+  function toggleSel(id) {
+    setSelecionados(prev => { const n = new Set(prev); n.has(id)?n.delete(id):n.add(id); return n })
+  }
+  function toggleTodos() {
+    if (selecionados.size === extratoLinhas.length) setSelecionados(new Set())
+    else setSelecionados(new Set(extratoLinhas.map(p=>p.id)))
+  }
 
   return (
     <>
@@ -1194,6 +1331,13 @@ export default function FinLancamentos({ tipo }) {
               <option value="vencido">Vencido</option>
             </select>
           </div>
+          <div className="form-group">
+            <label className="form-label">Forma pgto</label>
+            <select className="form-input" value={formaFiltro} onChange={e => setFormaFiltro(e.target.value)}>
+              <option value="todos">Todas</option>
+              {formasPag.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            </select>
+          </div>
           {tipo === 'receita' && (
             <div className="form-group">
               <label className="form-label">Canal</label>
@@ -1204,7 +1348,14 @@ export default function FinLancamentos({ tipo }) {
             </div>
           )}
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14} /></button>
-          <div style={{ marginLeft: 'auto', display:'flex', gap:8 }}>
+          <div style={{ marginLeft: 'auto', display:'flex', gap:8, alignItems:'center' }}>
+            {/* Vista toggle */}
+            <div style={{display:'flex',border:'1px solid var(--gray-200)',borderRadius:6,overflow:'hidden'}}>
+              <button className={`btn btn-xs ${vistaExtrato?'btn-primary':'btn-ghost'}`}
+                style={{borderRadius:0}} onClick={()=>setVistaExtrato(true)} title="Vista extrato">≡ Extrato</button>
+              <button className={`btn btn-xs ${!vistaExtrato?'btn-primary':'btn-ghost'}`}
+                style={{borderRadius:0}} onClick={()=>setVistaExtrato(false)} title="Vista agrupada">⊞ Agrupado</button>
+            </div>
             <button className="btn btn-ghost" onClick={()=>setModalTransf(true)} title="Transferência entre contas">
               ↔️ Transferência
             </button>
@@ -1249,6 +1400,20 @@ export default function FinLancamentos({ tipo }) {
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 14 }}>
           {titulo}
         </div>
+
+        {/* Barra de seleção em lote */}
+        {selecionados.size > 0 && (
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,marginBottom:8,flexWrap:'wrap'}}>
+            <span style={{fontWeight:700,fontSize:13,color:'var(--purple)'}}>{selecionados.size} selecionados · {fmtR(totalSelecionado)}</span>
+            <div style={{display:'flex',gap:6,marginLeft:'auto',flexWrap:'wrap'}}>
+              <button className="btn btn-primary btn-sm" onClick={()=>marcarLoteStatus('pago')}>✓ Marcar como Pago</button>
+              <button className="btn btn-ghost btn-sm" onClick={()=>marcarLoteStatus('agendado')}>📅 Agendar</button>
+              <button className="btn btn-ghost btn-sm" onClick={()=>marcarLoteStatus('em_aberto')}>↩ Em aberto</button>
+              <button className="btn btn-ghost btn-sm" style={{color:'var(--gray-400)'}} onClick={()=>setSelecionados(new Set())}>✕ Limpar</button>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <div className="loading"><RefreshCw size={14} className="spin" /></div>
         ) : lancamentos.length === 0 ? (
@@ -1256,7 +1421,104 @@ export default function FinLancamentos({ tipo }) {
             <div className="empty-icon">{tipo === 'receita' ? '📈' : '📉'}</div>
             <div className="empty-title">Nenhum lançamento no período</div>
           </div>
+
+        ) : vistaExtrato ? (
+          /* ── VISTA EXTRATO (plana, por vencimento) ── */
+          <div className="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{width:32}}>
+                    <input type="checkbox" checked={selecionados.size===extratoLinhas.length&&extratoLinhas.length>0}
+                      onChange={toggleTodos} style={{accentColor:'var(--purple)'}}/>
+                  </th>
+                  <th>Vencimento</th>
+                  <th>Descrição</th>
+                  <th>Categoria</th>
+                  <th>Forma Pgto</th>
+                  <th>Parcela</th>
+                  <th style={{textAlign:'right'}}>Valor</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {extratoLinhas.map(p => {
+                  const l = p._lanc
+                  const scfg = STATUS_LABEL[p.status] || STATUS_LABEL.em_aberto
+                  const hoje = new Date().toISOString().slice(0,10)
+                  const vencida = p.status !== 'pago' && p.data_vencimento < hoje
+                  return (
+                    <tr key={p.id} style={{background:selecionados.has(p.id)?'var(--purple-pale)':vencida?'#fff8f8':'var(--white)'}}>
+                      <td>
+                        <input type="checkbox" checked={selecionados.has(p.id)} onChange={()=>toggleSel(p.id)}
+                          style={{accentColor:'var(--purple)'}}/>
+                      </td>
+                      <td style={{fontWeight:600,color:vencida?'var(--danger)':'inherit',whiteSpace:'nowrap'}}>
+                        {fmtData(p.data_vencimento)}
+                      </td>
+                      <td style={{maxWidth:200}}>
+                        <div style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',fontWeight:500}}>
+                          {l.descricao}
+                        </div>
+                        {l.total_parcelas>1&&<div style={{fontSize:10,color:'var(--gray-400)'}}>{p.numero_parcela}/{l.total_parcelas}</div>}
+                      </td>
+                      <td>
+                        {l.fin_categorias ? (
+                          <span style={{fontSize:11,color:l.fin_categorias.cor||'var(--gray-500)',fontWeight:600}}>● {l.fin_categorias.nome}</span>
+                        ) : <span style={{color:'var(--gray-300)',fontSize:11}}>—</span>}
+                      </td>
+                      <td style={{fontSize:11,color:'var(--gray-500)'}}>
+                        {l.fin_formas_pagamento?.nome || '—'}
+                      </td>
+                      <td style={{fontSize:11,color:'var(--gray-400)'}}>
+                        {l.total_parcelas>1?`${p.numero_parcela}/${l.total_parcelas}`:'—'}
+                      </td>
+                      <td style={{textAlign:'right',fontWeight:700,color}}>
+                        {fmtR(p.valor)}
+                        {p.valor_pago>0&&p.valor_pago<p.valor&&(
+                          <div style={{fontSize:10,color:'var(--warning)'}}>pago: {fmtR(p.valor_pago)}</div>
+                        )}
+                      </td>
+                      <td><span className={`pill ${scfg.cls}`} style={{fontSize:10}}>{scfg.label}</span></td>
+                      <td>
+                        <div style={{display:'flex',gap:4}}>
+                          <button className="btn btn-ghost btn-xs" title="Editar parcela"
+                            onClick={()=>setModalParcela({...p,_tipo:tipo})}>Editar</button>
+                          <button className="btn btn-ghost btn-xs" title="Pagamento parcial"
+                            onClick={()=>setModalPagParcial({...p,_lanc:l})} style={{color:'var(--purple)'}}>₊</button>
+                          <button className="btn btn-ghost btn-xs" title="Clonar lançamento"
+                            onClick={async()=>{
+                              if(!window.confirm('Clonar este lançamento?'))return
+                              const {data:nl}=await supabase.from('fin_lancamentos').insert({
+                                tipo:l.tipo,descricao:l.descricao+' (cópia)',valor_total:l.valor_total,
+                                categoria_id:l.categoria_id,canal_id:l.canal_id,conta_id:l.conta_id,
+                                forma_pagamento_id:l.forma_pagamento_id,fornecedor_id:l.fornecedor_id,
+                                total_parcelas:l.total_parcelas,recorrente:l.recorrente,
+                                observacao:l.observacao,criado_por:'clone',
+                              }).select().single()
+                              if(nl){
+                                await supabase.from('fin_parcelas').insert({
+                                  lancamento_id:nl.id,numero_parcela:1,valor:p.valor,
+                                  data_vencimento:p.data_vencimento,data_competencia:p.data_competencia,
+                                  status:'em_aberto',conta_id:p.conta_id,
+                                })
+                                load()
+                              }
+                            }}>⧉</button>
+                          <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
+                            onClick={async()=>{if(!window.confirm('Excluir?'))return;await supabase.from('fin_lancamentos').delete().eq('id',l.id);load()}}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
         ) : (
+          /* ── VISTA AGRUPADA (original) ── */
           <div className="tbl-wrap">
             <table>
               <thead>
@@ -1386,7 +1648,7 @@ export default function FinLancamentos({ tipo }) {
               </tbody>
             </table>
           </div>
-        )}
+        )} {/* fim vistaExtrato ternário */}
       </div>
 
       {modalTransf && (
@@ -1405,6 +1667,11 @@ export default function FinLancamentos({ tipo }) {
       {modalParcela && (
         <ModalParcela parcela={modalParcela} contas={contas}
           onClose={() => setModalParcela(null)} onSaved={() => { setModalParcela(null); load() }}
+        />
+      )}
+      {modalPagParcial && (
+        <ModalPagamentoParcial parcela={modalPagParcial} contas={contas}
+          onClose={() => setModalPagParcial(null)} onSaved={() => { setModalPagParcial(null); load() }}
         />
       )}
       {modalXml && (
