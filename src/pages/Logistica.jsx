@@ -296,24 +296,18 @@ function gerarPDFRoteiro(routes, dateStr) {
 }
 
 // ── Salvar histórico no Supabase ──────────────────────────────────────────────
-async function salvarHistorico(routes, dateStr) {
+async function salvarHistorico(routes, dateStr, datasAtivas) {
   try {
-    const dataIso = dateStr.split('/').reverse().join('-')
-    const { data: rota, error } = await supabase
-      .from('rotas_historico').insert({ data_roteiro: dataIso }).select().single()
-    if (error) throw error
-    const paradas = []
-    for (const r of routes) {
-      for (const stop of r.stops) {
-        paradas.push({
-          rota_id: rota.id, rota_code: r.code, rota_label: r.label,
-          numero_pedido: stop.id, nome: stop.nome, rua: stop.rua, numero: stop.numero,
-          complemento: stop.complemento||null, bairro: stop.bairro,
-          cidade: stop.cidade, uf: stop.uf, cep: stop.cep, tel: stop.tel||null,
-        })
-      }
-    }
-    if (paradas.length) await supabase.from('rotas_historico_paradas').insert(paradas)
+    const usuario = JSON.parse(sessionStorage.getItem('usuario')||'{}').nome
+    const totalParadas = routes.reduce((s,r)=>s+r.stops.length, 0)
+    await supabase.from('logistica_historico').insert({
+      datas: datasAtivas?.length ? datasAtivas : [dateStr],
+      total_pedidos: totalParadas,
+      total_rotas: routes.length,
+      total_paradas: totalParadas,
+      rotas: routes,
+      criado_por: usuario,
+    })
   } catch(e) { console.error('Erro ao salvar histórico:', e) }
 }
 
@@ -462,12 +456,12 @@ export default function Logistica({ csvInicial }) {
 
   async function exportarTudo(rs) {
     await downloadAllCSVs(rs, dateStr.replace(/\//g,'-'))
-    await salvarHistorico(rs, dateStr)
+    await salvarHistorico(rs, dateStr, datasAtivas)
   }
 
   async function exportarPDF(rs) {
     gerarPDFRoteiro(rs, dateStr)
-    await salvarHistorico(rs, dateStr)
+    await salvarHistorico(rs, dateStr, datasAtivas)
   }
 
   async function buscarPedido() {
@@ -514,9 +508,110 @@ export default function Logistica({ csvInicial }) {
   const pendingSugestoes = Object.keys(sugestoes).length>0
   const dateStr = datasAtivas.length === 1 ? datasAtivas[0] : datasAtivas.join(' + ')
   const totalParadas = routes.reduce((s,r)=>s+r.stops.length,0)
+  const [abaLog, setAbaLog] = useState('roteiro') // 'roteiro' | 'historico'
+  const [historico, setHistorico] = useState([])
+  const [loadingHist, setLoadingHist] = useState(false)
+  const [histAberto, setHistAberto] = useState(null)
+
+  async function carregarHistorico() {
+    setLoadingHist(true)
+    const { data } = await supabase.from('logistica_historico')
+      .select('id, datas, total_pedidos, total_rotas, total_paradas, criado_por, criado_em')
+      .order('criado_em', { ascending: false })
+      .limit(50)
+    setHistorico(data||[])
+    setLoadingHist(false)
+  }
+
+  async function verDetalhesHistorico(id) {
+    const { data } = await supabase.from('logistica_historico').select('*').eq('id', id).single()
+    setHistAberto(data)
+  }
 
   return (
     <>
+      {/* Tabs */}
+      <div className="tabs" style={{marginBottom:0}}>
+        <button className={`tab${abaLog==='roteiro'?' active':''}`} onClick={()=>setAbaLog('roteiro')}>🗺️ Roteiro</button>
+        <button className={`tab${abaLog==='historico'?' active':''}`}
+          onClick={()=>{ setAbaLog('historico'); if(!historico.length) carregarHistorico() }}>
+          📋 Histórico
+        </button>
+      </div>
+
+      {/* ── ABA HISTÓRICO ── */}
+      {abaLog==='historico' && (
+        <div className="card card-pad">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <div style={{fontWeight:700,fontSize:14}}>Roteiros gerados</div>
+            <button className="btn btn-ghost btn-sm" onClick={carregarHistorico}><RefreshCw size={13}/></button>
+          </div>
+          {loadingHist ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {historico.length===0 && <div style={{color:'var(--gray-400)',fontSize:13,textAlign:'center',padding:20}}>Nenhum roteiro salvo ainda</div>}
+              {historico.map(h=>(
+                <div key={h.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'var(--gray-50)',borderRadius:8,cursor:'pointer'}}
+                  onClick={()=>verDetalhesHistorico(h.id)}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13}}>
+                      {(h.datas||[]).join(' · ')}
+                    </div>
+                    <div style={{fontSize:12,color:'var(--gray-500)',marginTop:2}}>
+                      {h.total_rotas} rota{h.total_rotas!==1?'s':''} · {h.total_paradas} parada{h.total_paradas!==1?'s':''} · por {h.criado_por||'—'}
+                    </div>
+                  </div>
+                  <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                    {new Date(h.criado_em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+                  </div>
+                  <span style={{color:'var(--purple)',fontSize:12}}>Ver ▶</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {histAberto && (
+            <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setHistAberto(null)}>
+              <div className="modal" style={{maxWidth:700,maxHeight:'85vh',overflow:'auto'}}>
+                <div className="modal-header">
+                  <div className="modal-title">Roteiro — {(histAberto.datas||[]).join(' · ')}</div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setHistAberto(null)}>✕</button>
+                </div>
+                <div className="modal-body">
+                  <div style={{fontSize:13,color:'var(--gray-500)',marginBottom:14}}>
+                    {histAberto.total_rotas} rota{histAberto.total_rotas!==1?'s':''} · {histAberto.total_paradas} parada{histAberto.total_paradas!==1?'s':''} · gerado em {new Date(histAberto.criado_em).toLocaleString('pt-BR')} por {histAberto.criado_por||'—'}
+                  </div>
+                  {(histAberto.rotas||[]).map((r,ri)=>(
+                    <div key={ri} style={{marginBottom:16}}>
+                      <div style={{fontWeight:800,fontSize:13,color:'var(--purple)',marginBottom:6,padding:'4px 10px',background:'var(--purple-pale)',borderRadius:6}}>
+                        Rota {r.code} · {r.label} · {r.stops?.length} paradas
+                      </div>
+                      <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                        <thead><tr style={{background:'var(--gray-50)'}}>
+                          <th style={{padding:'4px 8px',textAlign:'left',width:30}}>#</th>
+                          <th style={{padding:'4px 8px',textAlign:'left'}}>Pedido</th>
+                          <th style={{padding:'4px 8px',textAlign:'left'}}>Cliente</th>
+                          <th style={{padding:'4px 8px',textAlign:'left'}}>Endereço</th>
+                        </tr></thead>
+                        <tbody>
+                          {(r.stops||[]).map((stop,si)=>(
+                            <tr key={si} style={{borderTop:'1px solid var(--gray-100)'}}>
+                              <td style={{padding:'4px 8px',color:'var(--gray-400)'}}>{si+1}</td>
+                              <td style={{padding:'4px 8px',fontFamily:'monospace'}}>#{stop.id}</td>
+                              <td style={{padding:'4px 8px',fontWeight:600}}>{stop.nome}</td>
+                              <td style={{padding:'4px 8px',color:'var(--gray-600)'}}>{stop.rua}, {stop.numero} · {stop.bairro} · {stop.cidade}/{stop.uf}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {abaLog==='roteiro' && (<>
       {/* Upload + busca */}
       <div className="card card-pad">
         <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'flex-end' }}>
@@ -834,6 +929,7 @@ export default function Logistica({ csvInicial }) {
           </div>
         </div>
       )}
+    </>) /* fim abaLog==='roteiro' */}
     </>
   )
 }
