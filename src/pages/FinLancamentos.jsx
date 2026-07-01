@@ -1156,11 +1156,16 @@ export default function FinLancamentos({ tipo }) {
 
   useEffect(() => { load() }, [load])
 
-  const totalPrevisto = lancamentos.reduce((s, l) => s + l.valor_total, 0)
+  // Soma apenas as parcelas que vencem dentro do período — não o valor total do lançamento
+  const parcelasNoPeriodo = (l) => (l.fin_parcelas||[]).filter(p =>
+    p.data_vencimento >= ini && p.data_vencimento <= fim
+  )
+  const totalPrevisto = lancamentos.reduce((s, l) =>
+    s + parcelasNoPeriodo(l).reduce((ss, p) => ss + p.valor, 0), 0)
   const totalPago = lancamentos.reduce((s, l) =>
-    s + (l.fin_parcelas || []).filter(p => p.status === 'pago').reduce((ss, p) => ss + p.valor, 0), 0)
+    s + (l.fin_parcelas || []).filter(p => p.status === 'pago' && p.data_vencimento >= ini && p.data_vencimento <= fim).reduce((ss, p) => ss + p.valor, 0), 0)
   const totalVencido = lancamentos.reduce((s, l) =>
-    s + (l.fin_parcelas || []).filter(p => p.status === 'vencido').reduce((ss, p) => ss + p.valor, 0), 0)
+    s + (l.fin_parcelas || []).filter(p => p.status === 'vencido' && p.data_vencimento >= ini && p.data_vencimento <= fim).reduce((ss, p) => ss + p.valor, 0), 0)
 
   const cor = tipo === 'receita' ? 'var(--ok)' : 'var(--danger)'
   const titulo = tipo === 'receita' ? 'Contas a Receber' : 'Contas a Pagar'
@@ -1299,7 +1304,14 @@ export default function FinLancamentos({ tipo }) {
                       <td style={{ fontSize: 12, color: 'var(--gray-500)' }}>
                         {parcelas.length > 1 ? `${parcelas.length}x` : '1x'}
                       </td>
-                      <td style={{ fontWeight: 700, color: cor }}>{fmtR(l.valor_total)}</td>
+                      <td style={{ fontWeight: 700, color: cor }}>
+                        {fmtR(parcelasNoPeriodo(l).reduce((s,p)=>s+p.valor,0))}
+                        {l.total_parcelas > 1 && (
+                          <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:400}}>
+                            de {fmtR(l.valor_total)} total
+                          </div>
+                        )}
+                      </td>
                       <td style={{ fontWeight: 600, color: 'var(--ok)' }}>{fmtR(pago)}</td>
                       <td>
                         <span className={`pill ${situacao}`} style={{ fontSize: 10 }}>
