@@ -158,9 +158,26 @@ export default function FinDashboard() {
         diasPassados: diaAtual, diasNoMes,
       })
 
-      // Saldo de cada conta — usa saldo_atual que é atualizado a cada pagamento
+      // Posição de caixa: saldo_inicial + todas as movimentações pagas (não-transferência)
       const { data: contas } = await supabase.from('fin_contas').select('*').eq('ativo', true).order('nome')
-      setSaldoContas(contas||[])
+      const { data: pagas } = await supabase.from('fin_parcelas')
+        .select('valor, valor_pago, conta_id, fin_lancamentos!inner(tipo, is_transferencia)')
+        .eq('status', 'pago')
+        .eq('fin_lancamentos.is_transferencia', false)
+
+      const saldoMap = {}
+      for (const c of (contas||[])) {
+        saldoMap[c.id] = { ...c, saldo_calculado: c.saldo_inicial || 0 }
+      }
+      for (const p of (pagas||[])) {
+        const cid = p.conta_id
+        const l = p.fin_lancamentos
+        if (!cid || !saldoMap[cid] || l?.is_transferencia) continue
+        const vlr = (p.valor_pago != null && p.valor_pago > 0) ? p.valor_pago : p.valor
+        if (l?.tipo === 'receita') saldoMap[cid].saldo_calculado += vlr
+        else saldoMap[cid].saldo_calculado -= vlr
+      }
+      setSaldoContas(Object.values(saldoMap))
 
       const em10 = new Date(); em10.setDate(em10.getDate()+10)
       const ha30 = new Date(); ha30.setDate(ha30.getDate()-30)
@@ -285,13 +302,13 @@ export default function FinDashboard() {
             {saldoContas.map(c => (
               <div key={c.id} style={{ background:'rgba(255,255,255,.08)', borderRadius:7, padding:'8px 12px' }}>
                 <div style={{ fontSize:11, opacity:.6, fontWeight:600 }}>{c.nome}</div>
-                <div style={{ fontSize:16, fontWeight:800, color: (c.saldo_atual??0)>=0?'var(--gold)':'#ff8080', marginTop:3 }}>{fmtR(c.saldo_atual??0)}</div>
+                <div style={{ fontSize:16, fontWeight:800, color: (c.saldo_calculado??0)>=0?'var(--gold)':'#ff8080', marginTop:3 }}>{fmtR(c.saldo_calculado??0)}</div>
               </div>
             ))}
             {/* Saldo Total Consolidado */}
             <div style={{ background:'rgba(255,255,255,.18)', borderRadius:7, padding:'8px 12px', border:'1px solid rgba(255,255,255,.3)' }}>
               <div style={{ fontSize:11, opacity:.8, fontWeight:700 }}>TOTAL CONSOLIDADO</div>
-              <div style={{ fontSize:18, fontWeight:900, color:'var(--gold)', marginTop:3 }}>{fmtR(saldoContas.reduce((s,c)=>s+(c.saldo_atual??0),0))}</div>
+              <div style={{ fontSize:18, fontWeight:900, color:'var(--gold)', marginTop:3 }}>{fmtR(saldoContas.reduce((s,c)=>s+(c.saldo_calculado??0),0))}</div>
             </div>
           </div>
         </div>
