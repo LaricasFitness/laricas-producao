@@ -594,7 +594,7 @@ export default function FinConfig() {
               {value:'investimento',label:'Investimento'},
             ]},
             {key:'descricao',label:'Descrição'},
-            {key:'saldo_inicial',label:'Saldo inicial',type:'number'},
+            {key:'saldo_inicial',label:'Saldo base (30/06/2026)',type:'number'},
             {key:'ativo',label:'Ativo'},
           ]}
           defaults={{nome:'',tipo:'corrente',descricao:'',saldo_inicial:0,ativo:true}}
