@@ -604,7 +604,7 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
     valor_parcela:      lancamento ? (clone ? clone.valor : (lancamento.valor_total / (lancamento.total_parcelas||1))).toFixed(2) : '',
     categoria_id:       lancamento?.categoria_id || '',
     canal_id:           lancamento?.canal_id || '',
-    conta_id: lancamento?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || '',
+    conta_id: lancamento?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6') && !c.nome?.toLowerCase().includes('invest'))?.id || contas[0]?.id || '',
     forma_pagamento_id: lancamento?.forma_pagamento_id || '',
     fornecedor_id:      lancamento?.fornecedor_id || '',
     total_parcelas:     1,
@@ -979,7 +979,7 @@ function ModalParcela({ parcela, contas, onClose, onSaved }) {
 function ModalConfirmarLotePago({ count, total, contas, onClose, onConfirm }) {
   const [dataPag, setDataPag] = useState(new Date().toISOString().slice(0,10))
   const [contaId, setContaId] = useState(
-    contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || ''
+    contas.find(c=>c.nome?.toLowerCase().includes('c6') && !c.nome?.toLowerCase().includes('invest'))?.id || contas[0]?.id || ''
   )
   const [saving, setSaving] = useState(false)
 
@@ -1032,7 +1032,7 @@ function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
   const [valorNovo, setValorNovo] = useState('')
   const [dataPag, setDataPag] = useState(new Date().toISOString().slice(0,10))
   const [contaId, setContaId] = useState(
-    parcela.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || ''
+    parcela.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6') && !c.nome?.toLowerCase().includes('invest'))?.id || contas[0]?.id || ''
   )
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
