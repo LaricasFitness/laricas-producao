@@ -1,7 +1,154 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../supabase'
 import { fmtR, fmtData, STATUS_LABEL } from '../lib/financeiro'
-import { RefreshCw, Pencil, Trash2 } from 'lucide-react'
+import { RefreshCw, Pencil, Trash2, Save, Plus } from 'lucide-react'
+
+// ── Modal edição rápida de lançamento no Extrato ─────────────────────────────
+function ModalEditarExtrato({ parcela, lancamento, categorias, canais, contas, formasPag, fornecedores, onClose, onSaved }) {
+  const [f, setF] = useState({
+    descricao:          lancamento.descricao || '',
+    categoria_id:       lancamento.categoria_id || '',
+    canal_id:           lancamento.canal_id || '',
+    conta_id:           parcela.conta_id || lancamento.conta_id || '',
+    forma_pagamento_id: lancamento.forma_pagamento_id || '',
+    fornecedor_id:      lancamento.fornecedor_id || '',
+    observacao:         lancamento.observacao || '',
+    valor:              parcela.valor || 0,
+    data_vencimento:    parcela.data_vencimento || '',
+    data_competencia:   parcela.data_competencia || '',
+    status:             parcela.status || 'em_aberto',
+    data_pagamento:     parcela.data_pagamento || '',
+  })
+  const set = (k,v) => setF(p=>({...p,[k]:v}))
+  const [saving, setSaving] = useState(false)
+  const [busca, setBusca] = useState('')
+
+  const catsFiltradas = categorias.filter(c =>
+    !busca || c.nome.toLowerCase().includes(busca.toLowerCase()) ||
+    categorias.find(p=>p.id===c.parent_id)?.nome.toLowerCase().includes(busca.toLowerCase())
+  )
+
+  async function salvar() {
+    setSaving(true)
+    await supabase.from('fin_lancamentos').update({
+      descricao: f.descricao,
+      categoria_id: f.categoria_id || null,
+      canal_id: f.canal_id || null,
+      conta_id: f.conta_id || null,
+      forma_pagamento_id: f.forma_pagamento_id || null,
+      fornecedor_id: f.fornecedor_id || null,
+      observacao: f.observacao || null,
+    }).eq('id', lancamento.id)
+    await supabase.from('fin_parcelas').update({
+      valor: parseFloat(f.valor) || parcela.valor,
+      data_vencimento: f.data_vencimento,
+      data_competencia: f.data_competencia || null,
+      status: f.status,
+      data_pagamento: f.status === 'pago' ? (f.data_pagamento || new Date().toISOString().slice(0,10)) : null,
+      conta_id: f.conta_id || null,
+    }).eq('id', parcela.id)
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:520}}>
+        <div className="modal-header">
+          <div className="modal-title">Editar lançamento</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div className="form-group" style={{gridColumn:'1/-1'}}>
+            <label className="form-label">Descrição *</label>
+            <input className="form-input" value={f.descricao} onChange={e=>set('descricao',e.target.value)} autoFocus/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Valor (R$)</label>
+            <input type="number" className="form-input" step={0.01} value={f.valor} onChange={e=>set('valor',e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Status</label>
+            <select className="form-input" value={f.status} onChange={e=>set('status',e.target.value)}>
+              <option value="em_aberto">Em aberto</option>
+              <option value="agendado">Agendado</option>
+              <option value="pago">Pago</option>
+              <option value="vencido">Vencido</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Vencimento</label>
+            <input type="date" className="form-input" value={f.data_vencimento} onChange={e=>set('data_vencimento',e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Competência</label>
+            <input type="date" className="form-input" value={f.data_competencia} onChange={e=>set('data_competencia',e.target.value)}/>
+          </div>
+          {f.status === 'pago' && (
+            <div className="form-group">
+              <label className="form-label">Data pagamento</label>
+              <input type="date" className="form-input" value={f.data_pagamento} onChange={e=>set('data_pagamento',e.target.value)}/>
+            </div>
+          )}
+          <div className="form-group" style={{gridColumn:'1/-1'}}>
+            <label className="form-label">Categoria</label>
+            <input className="form-input" placeholder="Buscar categoria..." value={busca}
+              onChange={e=>setBusca(e.target.value)} style={{marginBottom:4}}/>
+            <select className="form-input" value={f.categoria_id} onChange={e=>set('categoria_id',e.target.value)} size={5}>
+              <option value="">Sem categoria</option>
+              {catsFiltradas.map(c=>(
+                <option key={c.id} value={c.id}>
+                  {'　'.repeat(c._indent||0)}{(c._indent||0)>0?'└ ':''}{c.nome}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Conta</label>
+            <select className="form-input" value={f.conta_id} onChange={e=>set('conta_id',e.target.value)}>
+              <option value="">Selecione...</option>
+              {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Forma Pgto</label>
+            <select className="form-input" value={f.forma_pagamento_id} onChange={e=>set('forma_pagamento_id',e.target.value)}>
+              <option value="">Selecione...</option>
+              {formasPag.map(fp=><option key={fp.id} value={fp.id}>{fp.nome}</option>)}
+            </select>
+          </div>
+          {lancamento.tipo === 'receita' && (
+            <div className="form-group">
+              <label className="form-label">Canal</label>
+              <select className="form-input" value={f.canal_id} onChange={e=>set('canal_id',e.target.value)}>
+                <option value="">Selecione...</option>
+                {canais.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="form-group">
+            <label className="form-label">Fornecedor</label>
+            <select className="form-input" value={f.fornecedor_id} onChange={e=>set('fornecedor_id',e.target.value)}>
+              <option value="">Sem fornecedor</option>
+              {fornecedores.map(fn=><option key={fn.id} value={fn.id}>{fn.nome_fantasia||fn.razao_social}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{gridColumn:'1/-1'}}>
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={f.observacao} onChange={e=>set('observacao',e.target.value)}/>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+            {saving?<RefreshCw size={14} className="spin"/>:<><Save size={14}/> Salvar</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function FinExtrato() {
   const hoje = new Date()
@@ -10,7 +157,38 @@ export default function FinExtrato() {
   const [fim, setFim] = useState(hoje.toISOString().slice(0,10))
   const [linhas, setLinhas] = useState([])
   const [loading, setLoading] = useState(true)
-  const [saldoAnterior, setSaldoAnterior] = useState(0)
+  const [modalEditar, setModalEditar] = useState(null) // { parcela, lancamento }
+
+  // Dados de apoio
+  const [categorias, setCategorias] = useState([])
+  const [canais, setCanais] = useState([])
+  const [contas, setContas] = useState([])
+  const [formasPag, setFormasPag] = useState([])
+  const [fornecedores, setFornecedores] = useState([])
+
+  useEffect(() => {
+    Promise.all([
+      supabase.from('fin_categorias').select('*').eq('ativo',true).order('nivel').order('ordem').order('nome'),
+      supabase.from('fin_canais').select('*').eq('ativo',true).order('nome'),
+      supabase.from('fin_contas').select('*').eq('ativo',true).order('nome'),
+      supabase.from('fin_formas_pagamento').select('*').eq('ativo',true).order('nome'),
+      supabase.from('fin_fornecedores').select('*').eq('ativo',true).order('razao_social'),
+    ]).then(([{data:cats},{data:cns},{data:cnts},{data:fps},{data:forns}]) => {
+      // Monta categorias com indentação
+      const todas = cats||[]
+      const result = []
+      function addN(pid, indent) {
+        todas.filter(c=>(c.parent_id||null)===(pid||null)).sort((a,b)=>(a.ordem||99)-(b.ordem||99)||(a.nome>b.nome?1:-1))
+          .forEach(c=>{ result.push({...c,_indent:indent}); addN(c.id,indent+1) })
+      }
+      addN(null,0)
+      setCategorias(result)
+      setCanais(cns||[])
+      setContas(cnts||[])
+      setFormasPag(fps||[])
+      setFornecedores(forns||[])
+    })
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -154,11 +332,10 @@ export default function FinExtrato() {
                     </td>
                     <td style={{padding:'8px 10px'}}>
                       <div style={{display:'flex',gap:4}}>
-                        <button className="btn btn-ghost btn-xs" title="Editar parcela"
-                          onClick={async()=>{
-                            const novo = prompt('Novo status (pago/em_aberto/agendado/cancelado):',p.status)
-                            if (novo) { await supabase.from('fin_parcelas').update({status:novo,data_pagamento:novo==='pago'?new Date().toISOString().slice(0,10):null}).eq('id',p.id); load() }
-                          }}><Pencil size={11}/></button>
+                        <button className="btn btn-ghost btn-xs" title="Editar lançamento"
+                          onClick={()=>setModalEditar({parcela:p, lancamento:l})}>
+                          <Pencil size={11}/>
+                        </button>
                         <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} title="Excluir lançamento"
                           onClick={async()=>{
                             if(!window.confirm('Excluir este lançamento?'))return
@@ -186,6 +363,16 @@ export default function FinExtrato() {
           </table>
         )}
       </div>
+      {modalEditar && (
+        <ModalEditarExtrato
+          parcela={modalEditar.parcela}
+          lancamento={modalEditar.lancamento}
+          categorias={categorias} canais={canais} contas={contas}
+          formasPag={formasPag} fornecedores={fornecedores}
+          onClose={()=>setModalEditar(null)}
+          onSaved={()=>{ setModalEditar(null); load() }}
+        />
+      )}
     </>
   )
 }
