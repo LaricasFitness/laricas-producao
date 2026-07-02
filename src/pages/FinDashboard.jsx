@@ -158,7 +158,9 @@ export default function FinDashboard() {
         diasPassados: diaAtual, diasNoMes,
       })
 
-      // Posição de caixa: saldo_inicial + todas as movimentações pagas (não-transferência)
+      // Posição de caixa: saldo_inicial + movimentações pagas
+      // Transferências DEVEM afetar saldo por conta (A perde, B ganha)
+      // mas são excluídas do P&L (KPIs de receita/despesa)
       const { data: contas } = await supabase.from('fin_contas').select('*').eq('ativo', true).order('nome')
       const { data: pagas } = await supabase.from('fin_parcelas')
         .select('valor, valor_pago, conta_id, fin_lancamentos!inner(tipo, is_transferencia)')
@@ -171,10 +173,9 @@ export default function FinDashboard() {
       for (const p of (pagas||[])) {
         const cid = p.conta_id
         const l = p.fin_lancamentos
-        // Exclui transferências — verifica tanto boolean true quanto string 'true'
         if (!cid || !saldoMap[cid]) continue
-        if (l?.is_transferencia === true || l?.is_transferencia === 'true') continue
         const vlr = (p.valor_pago != null && p.valor_pago > 0) ? p.valor_pago : p.valor
+        // Inclui transferências no saldo por conta — mas usa tipo para saber direção
         if (l?.tipo === 'receita') saldoMap[cid].saldo_calculado += vlr
         else saldoMap[cid].saldo_calculado -= vlr
       }
