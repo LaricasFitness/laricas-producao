@@ -320,6 +320,138 @@ function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
   )
 }
 
+function FornecedoresSecao() {
+  const [items, setItems] = useState([])
+  const [modal, setModal] = useState(null) // null | 'new' | item
+
+  async function load() {
+    const {data} = await supabase.from('fin_fornecedores').select('*').order('razao_social')
+    setItems(data||[])
+  }
+  useEffect(()=>{load()},[])
+
+  async function salvar(f) {
+    if (f.id) {
+      await supabase.from('fin_fornecedores').update(f).eq('id', f.id)
+    } else {
+      await supabase.from('fin_fornecedores').insert({...f, ativo:true})
+    }
+    setModal(null); load()
+  }
+
+  async function excluir(item) {
+    const {count} = await supabase.from('fin_lancamentos').select('id', {count:'exact',head:true}).eq('fornecedor_id', item.id)
+    if (count > 0) {
+      if (!window.confirm(`"${item.razao_social}" está vinculado a ${count} lançamento(s). Excluir mesmo assim?`)) return
+    } else {
+      if (!window.confirm(`Excluir "${item.razao_social}"?`)) return
+    }
+    await supabase.from('fin_fornecedores').delete().eq('id', item.id)
+    load()
+  }
+
+  return (
+    <div className="card card-pad">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{fontWeight:700,fontSize:14}}>🏭 Fornecedores</div>
+        <button className="btn btn-primary btn-sm" onClick={()=>setModal('new')}><Plus size={13}/> Novo</button>
+      </div>
+      <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+        <thead>
+          <tr style={{background:'var(--gray-50)'}}>
+            <th style={{padding:'7px 12px',textAlign:'left'}}>Razão Social</th>
+            <th style={{padding:'7px 12px',textAlign:'left'}}>Nome Fantasia</th>
+            <th style={{padding:'7px 12px',textAlign:'left'}}>Tipo</th>
+            <th style={{padding:'7px 12px',textAlign:'left'}}>CNPJ/CPF</th>
+            <th style={{padding:'7px 12px',textAlign:'left'}}>Cidade/UF</th>
+            <th style={{padding:'7px 12px',textAlign:'center'}}>Ativo</th>
+            <th style={{padding:'7px 12px'}}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(item=>(
+            <tr key={item.id} style={{borderTop:'1px solid var(--gray-100)'}}>
+              <td style={{padding:'8px 12px',fontWeight:600}}>{item.razao_social}</td>
+              <td style={{padding:'8px 12px',color:'var(--gray-500)'}}>{item.nome_fantasia||'—'}</td>
+              <td style={{padding:'8px 12px'}}><span className="pill neutral" style={{fontSize:10}}>{item.tipo_pessoa==='pf'?'PF':'PJ'}</span></td>
+              <td style={{padding:'8px 12px',fontSize:12,color:'var(--gray-500)'}}>{item.cnpj||'—'}</td>
+              <td style={{padding:'8px 12px',fontSize:12,color:'var(--gray-500)'}}>{item.cidade?`${item.cidade}/${item.uf}`:'—'}</td>
+              <td style={{padding:'8px 12px',textAlign:'center'}}>{item.ativo?'✓':'—'}</td>
+              <td style={{padding:'8px 12px'}}>
+                <div style={{display:'flex',gap:4}}>
+                  <button className="btn btn-ghost btn-xs" onClick={()=>setModal(item)}><Pencil size={11}/></button>
+                  <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>excluir(item)}>✕</button>
+                </div>
+              </td>
+            </tr>
+          ))}
+          {items.length===0&&<tr><td colSpan={7} style={{padding:20,textAlign:'center',color:'var(--gray-400)'}}>Nenhum fornecedor cadastrado</td></tr>}
+        </tbody>
+      </table>
+      {modal && <ModalFornecedor item={modal==='new'?null:modal} onClose={()=>setModal(null)} onSaved={salvar}/>}
+    </div>
+  )
+}
+
+function ModalFornecedor({ item, onClose, onSaved }) {
+  const [f, setF] = useState({ tipo_pessoa:'pj', razao_social:'', nome_fantasia:'', cnpj:'', cidade:'', uf:'SP', ativo:true, ...item })
+  const set = (k,v) => setF(p=>({...p,[k]:v}))
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:420}}>
+        <div className="modal-header">
+          <div className="modal-title">{item?'Editar':'Novo'} fornecedor</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label className="form-label">Tipo</label>
+            <div style={{display:'flex',gap:8}}>
+              {[{v:'pj',l:'🏢 PJ'},{v:'pf',l:'👤 PF'}].map(o=>(
+                <button key={o.v} type="button" className={`btn btn-sm ${f.tipo_pessoa===o.v?'btn-primary':'btn-ghost'}`}
+                  onClick={()=>set('tipo_pessoa',o.v)}>{o.l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">{f.tipo_pessoa==='pf'?'Nome completo':'Razão Social'} *</label>
+            <input className="form-input" value={f.razao_social} onChange={e=>set('razao_social',e.target.value)} autoFocus/>
+          </div>
+          {f.tipo_pessoa==='pj'&&<div className="form-group">
+            <label className="form-label">Nome Fantasia</label>
+            <input className="form-input" value={f.nome_fantasia||''} onChange={e=>set('nome_fantasia',e.target.value)}/>
+          </div>}
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">{f.tipo_pessoa==='pf'?'CPF':'CNPJ'}</label>
+              <input className="form-input" value={f.cnpj||''} onChange={e=>set('cnpj',e.target.value||null)}/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Cidade/UF</label>
+              <div style={{display:'flex',gap:6}}>
+                <input className="form-input" value={f.cidade||''} onChange={e=>set('cidade',e.target.value)} style={{flex:1}} placeholder="Cidade"/>
+                <input className="form-input" value={f.uf||''} onChange={e=>set('uf',e.target.value.toUpperCase())} maxLength={2} style={{width:52}}/>
+              </div>
+            </div>
+          </div>
+          <div className="form-group">
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer'}}>
+              <input type="checkbox" checked={!!f.ativo} onChange={e=>set('ativo',e.target.checked)} style={{accentColor:'var(--purple)'}}/>
+              Ativo
+            </label>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={()=>onSaved(f)} disabled={!f.razao_social?.trim()}>
+            <Save size={14}/> Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function FinConfig() {
   const [aba, setAba] = useState('categorias')
   return (
@@ -387,19 +519,7 @@ export default function FinConfig() {
         />
       )}
 
-      {aba==='fornecedores' && (
-        <SecaoSimples titulo="🏭 Fornecedores" tabela="fin_fornecedores"
-          campos={[
-            {key:'razao_social',label:'Razão Social'},
-            {key:'nome_fantasia',label:'Nome Fantasia'},
-            {key:'cnpj',label:'CNPJ'},
-            {key:'cidade',label:'Cidade'},
-            {key:'uf',label:'UF'},
-            {key:'ativo',label:'Ativo'},
-          ]}
-          defaults={{razao_social:'',nome_fantasia:'',cnpj:'',cidade:'',uf:'SP',ativo:true}}
-        />
-      )}
+      {aba==='fornecedores' && <FornecedoresSecao />}
 
       {aba==='dre' && <FinConfigDRE/>}
     </>
