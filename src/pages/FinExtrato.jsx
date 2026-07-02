@@ -80,7 +80,7 @@ export default function FinExtrato() {
       </div>
 
       {/* Tabela extrato */}
-      <div className="card" style={{overflow:'hidden'}}>
+      <div className="card" style={{overflowX:'auto'}}>
         {loading ? (
           <div className="loading"><RefreshCw size={14} className="spin"/></div>
         ) : (
