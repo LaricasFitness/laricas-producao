@@ -74,8 +74,8 @@ export default function FinDashboard() {
   const mesAnt = new Date(hoje.getFullYear(), hoje.getMonth()-1, 1)
   const anoMesAnt = `${mesAnt.getFullYear()}-${String(mesAnt.getMonth()+1).padStart(2,'0')}`
 
-  const ini  = `${anoMes}-01`
-  const fim  = `${anoMes}-${new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate()}`
+  const [ini, setIni] = useState(`${anoMes}-01`)
+  const [fim, setFim] = useState(`${anoMes}-${new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate()}`)
   const iniA = `${anoMesAnt}-01`
   const fimA = `${anoMesAnt}-${new Date(mesAnt.getFullYear(), mesAnt.getMonth()+1, 0).getDate()}`
 
@@ -194,22 +194,59 @@ export default function FinDashboard() {
       setLoading(false)
     }
     load()
-  }, [])
+  }, [ini, fim])
 
   if (loading) return <div className="loading"><RefreshCw size={16} className="spin" /> Carregando dashboard...</div>
 
-  const mesNome = hoje.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  const mesNome = ini === fim
+    ? fmtData(ini)
+    : `${fmtData(ini)} → ${fmtData(fim)}`
   const vencidos = alertas.filter(a => a.tipo === 'vencido')
   const proximos = alertas.filter(a => a.tipo !== 'vencido')
 
+  // Atalhos rápidos de período
+  function setPeriodoMes(offsetMeses = 0) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() + offsetMeses, 1)
+    const ultimo = new Date(d.getFullYear(), d.getMonth()+1, 0)
+    setIni(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`)
+    setFim(`${ultimo.getFullYear()}-${String(ultimo.getMonth()+1).padStart(2,'0')}-${String(ultimo.getDate()).padStart(2,'0')}`)
+  }
+  function setPeriodoDias(dias) {
+    const d = new Date(); d.setDate(d.getDate() - dias)
+    setIni(d.toISOString().slice(0,10))
+    setFim(hoje.toISOString().slice(0,10))
+  }
+
   return (
     <>
-      {/* Header */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+      {/* Header com filtro de data */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', marginBottom:12, flexWrap:'wrap', gap:12 }}>
         <div>
           <div style={{ fontWeight:800, fontSize:16, color:'var(--purple-dark)' }}>Visão geral — {mesNome}</div>
           <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>
             Dia {projecao?.diasPassados} de {projecao?.diasNoMes} · Setas = variação vs mês anterior
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'flex-end', flexWrap:'wrap' }}>
+          {/* Atalhos */}
+          <div style={{ display:'flex', gap:4 }}>
+            {[
+              { l:'7d',     fn:()=>setPeriodoDias(7) },
+              { l:'30d',    fn:()=>setPeriodoDias(30) },
+              { l:'Mês',    fn:()=>setPeriodoMes(0) },
+              { l:'Mês ant',fn:()=>setPeriodoMes(-1) },
+              { l:'Ano',    fn:()=>{ setIni(`${hoje.getFullYear()}-01-01`); setFim(`${hoje.getFullYear()}-12-31`) } },
+            ].map(({l,fn}) => (
+              <button key={l} className="btn btn-ghost btn-xs" onClick={fn}>{l}</button>
+            ))}
+          </div>
+          {/* Pickers */}
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <input type="date" className="form-input" value={ini} onChange={e=>setIni(e.target.value)}
+              style={{ padding:'4px 8px', fontSize:12, height:30 }}/>
+            <span style={{ color:'var(--gray-400)', fontSize:12 }}>→</span>
+            <input type="date" className="form-input" value={fim} onChange={e=>setFim(e.target.value)}
+              style={{ padding:'4px 8px', fontSize:12, height:30 }}/>
           </div>
         </div>
       </div>
