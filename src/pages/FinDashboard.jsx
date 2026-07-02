@@ -163,7 +163,6 @@ export default function FinDashboard() {
       const { data: pagas } = await supabase.from('fin_parcelas')
         .select('valor, valor_pago, conta_id, fin_lancamentos!inner(tipo, is_transferencia)')
         .eq('status', 'pago')
-        .eq('fin_lancamentos.is_transferencia', false)
 
       const saldoMap = {}
       for (const c of (contas||[])) {
@@ -172,7 +171,9 @@ export default function FinDashboard() {
       for (const p of (pagas||[])) {
         const cid = p.conta_id
         const l = p.fin_lancamentos
-        if (!cid || !saldoMap[cid] || l?.is_transferencia) continue
+        // Exclui transferências — verifica tanto boolean true quanto string 'true'
+        if (!cid || !saldoMap[cid]) continue
+        if (l?.is_transferencia === true || l?.is_transferencia === 'true') continue
         const vlr = (p.valor_pago != null && p.valor_pago > 0) ? p.valor_pago : p.valor
         if (l?.tipo === 'receita') saldoMap[cid].saldo_calculado += vlr
         else saldoMap[cid].saldo_calculado -= vlr
