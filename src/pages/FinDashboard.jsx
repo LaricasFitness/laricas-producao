@@ -158,22 +158,9 @@ export default function FinDashboard() {
         diasPassados: diaAtual, diasNoMes,
       })
 
-      // Saldo de cada conta
-      const { data: contas } = await supabase.from('fin_contas').select('*').eq('ativo', true)
-      const { data: pagas } = await supabase.from('fin_parcelas')
-        .select('valor, conta_id, fin_lancamentos(tipo)')
-        .eq('status', 'pago')
-      const saldoMap = {}
-      for (const c of (contas||[])) {
-        saldoMap[c.id] = { ...c, saldo: c.saldo_inicial || 0 }
-      }
-      for (const p of (pagas||[])) {
-        const cid = p.conta_id
-        if (!cid || !saldoMap[cid]) continue
-        if (p.fin_lancamentos?.tipo === 'receita') saldoMap[cid].saldo += p.valor
-        else saldoMap[cid].saldo -= p.valor
-      }
-      setSaldoContas(Object.values(saldoMap).sort((a,b)=>a.nome.localeCompare(b.nome)))
+      // Saldo de cada conta — usa saldo_atual que é atualizado a cada pagamento
+      const { data: contas } = await supabase.from('fin_contas').select('*').eq('ativo', true).order('nome')
+      setSaldoContas(contas||[])
 
       const em10 = new Date(); em10.setDate(em10.getDate()+10)
       const ha30 = new Date(); ha30.setDate(ha30.getDate()-30)
@@ -298,13 +285,13 @@ export default function FinDashboard() {
             {saldoContas.map(c => (
               <div key={c.id} style={{ background:'rgba(255,255,255,.08)', borderRadius:7, padding:'8px 12px' }}>
                 <div style={{ fontSize:11, opacity:.6, fontWeight:600 }}>{c.nome}</div>
-                <div style={{ fontSize:16, fontWeight:800, color: c.saldo>=0?'var(--gold)':'#ff8080', marginTop:3 }}>{fmtR(c.saldo)}</div>
+                <div style={{ fontSize:16, fontWeight:800, color: (c.saldo_atual??0)>=0?'var(--gold)':'#ff8080', marginTop:3 }}>{fmtR(c.saldo_atual??0)}</div>
               </div>
             ))}
             {/* Saldo Total Consolidado */}
             <div style={{ background:'rgba(255,255,255,.18)', borderRadius:7, padding:'8px 12px', border:'1px solid rgba(255,255,255,.3)' }}>
               <div style={{ fontSize:11, opacity:.8, fontWeight:700 }}>TOTAL CONSOLIDADO</div>
-              <div style={{ fontSize:18, fontWeight:900, color:'var(--gold)', marginTop:3 }}>{fmtR(saldoContas.reduce((s,c)=>s+c.saldo,0))}</div>
+              <div style={{ fontSize:18, fontWeight:900, color:'var(--gold)', marginTop:3 }}>{fmtR(saldoContas.reduce((s,c)=>s+(c.saldo_atual??0),0))}</div>
             </div>
           </div>
         </div>
