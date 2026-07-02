@@ -91,24 +91,27 @@ export default function FinDashboard() {
   async function calcKpis(ini, fim) {
     const { data } = await supabase
       .from('fin_parcelas')
-      .select('valor, status, fin_lancamentos(tipo, fin_categorias(nome, tipo))')
+      .select('valor, valor_pago, status, fin_lancamentos!inner(tipo, is_transferencia, fin_categorias(nome, tipo))')
+      .eq('fin_lancamentos.is_transferencia', false)
       .gte('data_vencimento', ini)
       .lte('data_vencimento', fim)
 
-    const todas = data || []
+    const todas = (data || []).filter(p => p.fin_lancamentos?.is_transferencia !== true)
     const rec = todas.filter(p => p.fin_lancamentos?.tipo === 'receita')
     const des = todas.filter(p => p.fin_lancamentos?.tipo === 'despesa')
 
+    // Usa valor_pago quando disponível para refletir pagamentos parciais
+    const valorEfetivo = p => (p.status === 'pago' ? (p.valor_pago || p.valor) : 0)
     const recTotal  = rec.reduce((s,p) => s+p.valor, 0)
-    const recPago   = rec.filter(p=>p.status==='pago').reduce((s,p) => s+p.valor, 0)
+    const recPago   = rec.reduce((s,p) => s+valorEfetivo(p), 0)
     const recVencido= rec.filter(p=>p.status==='vencido').reduce((s,p) => s+p.valor, 0)
     const desTotal  = des.reduce((s,p) => s+p.valor, 0)
-    const desPago   = des.filter(p=>p.status==='pago').reduce((s,p) => s+p.valor, 0)
+    const desPago   = des.reduce((s,p) => s+valorEfetivo(p), 0)
     const resultado = recPago - desPago
     const margem    = recPago > 0 ? (resultado/recPago)*100 : 0
 
     // CMV para margem bruta
-    const cmv = des.filter(p=>p.status==='pago' && p.fin_lancamentos?.fin_categorias?.nome?.startsWith('CMV')).reduce((s,p)=>s+p.valor,0)
+    const cmv = des.filter(p=>p.status==='pago' && p.fin_lancamentos?.fin_categorias?.nome?.startsWith('CMV')).reduce((s,p)=>s+valorEfetivo(p),0)
     const marginBruta = recPago > 0 ? ((recPago - cmv)/recPago)*100 : 0
 
     return { recTotal, recPago, recVencido, desTotal, desPago, resultado, margem, marginBruta }
