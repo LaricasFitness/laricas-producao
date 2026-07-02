@@ -3,7 +3,44 @@ import { supabase } from '../supabase'
 import { fmtR, fmtData, STATUS_LABEL, atualizarVencidas } from '../lib/financeiro'
 import { Plus, RefreshCw, Pencil, Save, Upload, FileText } from 'lucide-react'
 
-// ── Parser XML NF-e ───────────────────────────────────────────────────────────
+// ── Parser XML NFS-e (padrão ABRASF — Nota Fiscal de Serviço) ─────────────────
+function parseNFSe(xmlText) {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(xmlText, 'text/xml')
+  const get = (tag) => doc.querySelector(tag)?.textContent?.trim() || ''
+  const getAlt = (...tags) => { for (const t of tags) { const v = get(t); if (v) return v } return '' }
+
+  // Prestador (quem emitiu — é o fornecedor)
+  const fornecedor = {
+    cnpj: getAlt('PrestadorServico Cnpj', 'CpfCnpj Cnpj', 'Prestador Cnpj'),
+    razao_social: getAlt('PrestadorServico RazaoSocial', 'Prestador RazaoSocial', 'RazaoSocial'),
+    cidade: getAlt('PrestadorServico xMun', 'Municipio xMun', 'EnderecoServicoPrestado xMun'),
+    uf: getAlt('PrestadorServico xUF', 'Municipio xUF', 'EnderecoServicoPrestado xUF'),
+    nome_fantasia: '',
+    telefone: '',
+    endereco: getAlt('PrestadorServico Endereco Logradouro', 'Logradouro'),
+  }
+
+  // Valores
+  const valorServicos = parseFloat(getAlt('Servico Valores ValorServicos', 'ValorServicos', 'vServ') || '0')
+  const valorLiquido  = parseFloat(getAlt('Servico Valores ValorLiquidoNfse', 'ValorLiquidoNfse', 'vNF') || '0') || valorServicos
+  const descricao     = getAlt('Servico Discriminacao', 'Discriminacao', 'ItemListaServico')
+  const numero        = getAlt('InfNfse Numero', 'Numero', 'nNFSe', 'NumeroNFSe')
+  const dataEmissao   = (getAlt('InfNfse DataEmissao', 'DataEmissao', 'dEmi') || '').slice(0,10)
+  const chave         = getAlt('CodigoVerificacao', 'ChaveNFSe', 'Chave')
+
+  return {
+    numero, chave,
+    data_emissao: dataEmissao,
+    valor_total: valorLiquido || valorServicos,
+    tipo_nota: 'NFSe',
+    fornecedor,
+    itens: [{ descricao: descricao || `NFS-e ${numero}`, valor_total: valorLiquido || valorServicos, quantidade: 1, unidade: 'SV', valor_unitario: valorLiquido || valorServicos }],
+    duplicatas: [], // NFS-e geralmente não tem duplicatas — pagamento à vista
+  }
+}
+
+// ── Parser NF-e ───────────────────────────────────────────────────────────────
 function parseNFe(xmlText) {
   const parser = new DOMParser()
   const doc = parser.parseFromString(xmlText, 'text/xml')
@@ -306,7 +343,7 @@ function ModalConfirmarXML({ nf, categorias, contas, formasPag, onClose, onSaved
     <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal" style={{maxWidth:540}}>
         <div className="modal-header">
-          <div className="modal-title">📄 NF-e {nf.numero} — {nf.fornecedor.razao_social}</div>
+          <div className="modal-title">📄 {nf.tipo_nota||'NF-e'} {nf.numero} — {nf.fornecedor.razao_social}</div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
@@ -1297,7 +1334,14 @@ export default function FinLancamentos({ tipo }) {
   function handleXML(file) {
     const reader = new FileReader()
     reader.onload = e => {
-      const nf = parseNFe(e.target.result)
+      const text = e.target.result
+      // Detecta tipo: NFS-e tem tags como InfNfse, CompNfse, NfseInfNfse, GerarNfseResposta
+      const isNFSe = /InfNfse|CompNfse|NfseInfNfse|GerarNfse|NumeroNFSe|Discriminacao/i.test(text)
+      const nf = isNFSe ? parseNFSe(text) : parseNFe(text)
+      if (!nf.fornecedor?.cnpj && !nf.fornecedor?.razao_social) {
+        alert('XML não reconhecido. Verifique se é uma NF-e ou NFS-e válida.')
+        return
+      }
       setModalXml(nf)
     }
     reader.readAsText(file, 'UTF-8')
@@ -1458,7 +1502,7 @@ export default function FinLancamentos({ tipo }) {
             {tipo === 'despesa' && (
               <>
                 <button className="btn btn-ghost" onClick={()=>xmlRef.current?.click()}>
-                  <FileText size={14}/> Importar XML NF-e
+                  <FileText size={14}/> Importar XML NF-e / NFS-e
                 </button>
                 <input ref={xmlRef} type="file" accept=".xml" style={{display:'none'}}
                   onChange={e=>{if(e.target.files[0])handleXML(e.target.files[0]);e.target.value=''}}/>
