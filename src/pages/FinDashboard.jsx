@@ -101,7 +101,12 @@ export default function FinDashboard() {
     const des = todas.filter(p => p.fin_lancamentos?.tipo === 'despesa')
 
     // Usa valor_pago quando disponível para refletir pagamentos parciais
-    const valorEfetivo = p => (p.status === 'pago' ? ((p.valor_pago != null && p.valor_pago > 0) ? p.valor_pago : p.valor) : 0)
+    // Parcelas em_aberto com valor_pago > 0 = pagamento parcial registrado
+    const valorEfetivo = p => {
+      if (p.status === 'pago') return (p.valor_pago != null && p.valor_pago > 0) ? p.valor_pago : p.valor
+      if (p.valor_pago != null && p.valor_pago > 0) return p.valor_pago // parcial
+      return 0
+    }
     const recTotal  = rec.reduce((s,p) => s+p.valor, 0)
     const recPago   = rec.reduce((s,p) => s+valorEfetivo(p), 0)
     const recVencido= rec.filter(p=>p.status==='vencido').reduce((s,p) => s+p.valor, 0)
