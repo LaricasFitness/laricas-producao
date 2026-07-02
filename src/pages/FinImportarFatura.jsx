@@ -234,7 +234,7 @@ export default function FinImportarFatura() {
           vencimento: t.data,
           competencia: t.data.slice(0,7)+'-01',
           categoria_id: sugestao?.categoria_id || '',
-          conta_id: sugestao?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || '',
+          conta_id: sugestao?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6') && !c.nome?.toLowerCase().includes('invest'))?.id || contas[0]?.id || '',
           fornecedor_id: sugestao?.fornecedor_id || '',
           // Metadados
           auto: !!sugestao,
