@@ -497,7 +497,20 @@ function ComboboxCategoria({ value, onChange, opcoes, placeholder = 'Selecione..
   const selecionada = opcoes.find(o => o.id === value)
 
   const filtradas = busca.trim()
-    ? opcoes.filter(o => o.nome.toLowerCase().includes(busca.toLowerCase()))
+    ? (() => {
+        const buscaLower = busca.toLowerCase()
+        // IDs de categorias que fazem match direto
+        const matchIds = new Set(opcoes.filter(o => o.nome.toLowerCase().includes(buscaLower)).map(o => o.id))
+        // Inclui filhos de qualquer match
+        return opcoes.filter(o => {
+          if (matchIds.has(o.id)) return true
+          if (o.parent_id && matchIds.has(o.parent_id)) return true
+          // Verifica avô também
+          const pai = opcoes.find(x => x.id === o.parent_id)
+          if (pai?.parent_id && matchIds.has(pai.parent_id)) return true
+          return false
+        })
+      })()
     : opcoes
 
   useEffect(() => {
@@ -585,19 +598,20 @@ function ComboboxCategoria({ value, onChange, opcoes, placeholder = 'Selecione..
 
 function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasPag, fornecedores, onClose, onSaved }) {
   const isNew = !lancamento?.id
+  const clone = lancamento?._clonarParcela // parcela original ao clonar
   const [f, setF] = useState({
     descricao:          lancamento?.descricao || '',
-    valor_parcela:      lancamento ? (lancamento.valor_total / (lancamento.total_parcelas||1)).toFixed(2) : '',
+    valor_parcela:      lancamento ? (clone ? clone.valor : (lancamento.valor_total / (lancamento.total_parcelas||1))).toFixed(2) : '',
     categoria_id:       lancamento?.categoria_id || '',
     canal_id:           lancamento?.canal_id || '',
     conta_id: lancamento?.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || '',
     forma_pagamento_id: lancamento?.forma_pagamento_id || '',
     fornecedor_id:      lancamento?.fornecedor_id || '',
-    total_parcelas:     lancamento?.total_parcelas || 1,
-    recorrente:         lancamento?.recorrente || false,
+    total_parcelas:     1,
+    recorrente:         false,
     observacao:         lancamento?.observacao || '',
-    data_vencimento:    lancamento?.fin_parcelas?.[0]?.data_vencimento || new Date().toISOString().slice(0,10),
-    data_competencia:   lancamento?.fin_parcelas?.[0]?.data_competencia || '',
+    data_vencimento:    clone?.data_vencimento || lancamento?.fin_parcelas?.[0]?.data_vencimento || new Date().toISOString().slice(0,10),
+    data_competencia:   clone?.data_competencia || lancamento?.fin_parcelas?.[0]?.data_competencia || '',
     status:             lancamento?.fin_parcelas?.[0]?.status || 'em_aberto',
   })
   const [saving, setSaving] = useState(false)
@@ -1013,34 +1027,37 @@ function ModalConfirmarLotePago({ count, total, contas, onClose, onConfirm }) {
 
 // ── Modal pagamento parcial ────────────────────────────────────────────────────
 function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
-  const [valorPago, setValorPago] = useState(parcela.valor_pago || '')
-  const [dataPag, setDataPag] = useState(parcela.data_pagamento || new Date().toISOString().slice(0,10))
-  const [contaId, setContaId] = useState(parcela.conta_id || contas[0]?.id || '')
+  const jaPago = parcela.valor_pago || 0
+  const restante = parcela.valor - jaPago
+  const [valorNovo, setValorNovo] = useState('')
+  const [dataPag, setDataPag] = useState(new Date().toISOString().slice(0,10))
+  const [contaId, setContaId] = useState(
+    parcela.conta_id || contas.find(c=>c.nome?.toLowerCase().includes('c6'))?.id || contas[0]?.id || ''
+  )
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
 
-  const vp = parseFloat(String(valorPago).replace(',','.')) || 0
-  const restante = parcela.valor - vp
+  const vn = parseFloat(String(valorNovo).replace(',','.')) || 0
+  const totalPago = jaPago + vn
+  const novoRestante = parcela.valor - totalPago
 
   async function salvar() {
-    if (!vp || vp <= 0) { setErr('Informe um valor pago válido.'); return }
-    if (vp > parcela.valor) { setErr('Valor pago maior que o valor da parcela.'); return }
+    if (!vn || vn <= 0) { setErr('Informe o valor pago agora.'); return }
+    if (vn > restante + 0.01) { setErr(`Máximo: ${fmtR(restante)}.`); return }
     if (!contaId) { setErr('Selecione a conta.'); return }
     setSaving(true)
     try {
-      const novoStatus = vp >= parcela.valor ? 'pago' : 'em_aberto'
+      const novoStatus = totalPago >= parcela.valor - 0.01 ? 'pago' : 'em_aberto'
       await supabase.from('fin_parcelas').update({
-        valor_pago: vp,
+        valor_pago: Math.min(totalPago, parcela.valor),
         status: novoStatus,
-        data_pagamento: novoStatus === 'pago' ? dataPag : null,
-        conta_id: contaId || null,
+        data_pagamento: novoStatus === 'pago' ? dataPag : parcela.data_pagamento,
+        conta_id: contaId,
       }).eq('id', parcela.id)
-
-      // Atualiza saldo da conta
       if (contaId) {
         const { data: conta } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaId).single()
         if (conta) {
-          const delta = parcela._lanc?.tipo === 'receita' ? +vp : -vp
+          const delta = parcela._lanc?.tipo === 'receita' ? +vn : -vn
           await supabase.from('fin_contas').update({ saldo_atual: (conta.saldo_atual||0) + delta }).eq('id', contaId)
         }
       }
@@ -1053,54 +1070,59 @@ function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
     <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal" style={{maxWidth:380}}>
         <div className="modal-header">
-          <div className="modal-title">Pagamento parcial</div>
+          <div className="modal-title">Registrar pagamento</div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
           {err && <div style={{color:'var(--danger)',fontSize:13,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:6,marginBottom:10}}>{err}</div>}
-          <div style={{display:'flex',justifyContent:'space-between',padding:'10px 14px',background:'var(--gray-50)',borderRadius:8,marginBottom:14}}>
+          {/* Resumo da parcela */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,padding:'10px 14px',background:'var(--gray-50)',borderRadius:8,marginBottom:14,textAlign:'center'}}>
             <div>
-              <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700}}>VALOR DA PARCELA</div>
-              <div style={{fontWeight:800,fontSize:18,color:'var(--danger)'}}>{fmtR(parcela.valor)}</div>
+              <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700}}>TOTAL</div>
+              <div style={{fontWeight:700,fontSize:15,color:'var(--gray-700)'}}>{fmtR(parcela.valor)}</div>
             </div>
-            {restante > 0 && restante < parcela.valor && (
-              <div style={{textAlign:'right'}}>
-                <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700}}>SALDO PENDENTE</div>
-                <div style={{fontWeight:700,fontSize:16,color:'var(--warning)'}}>{fmtR(restante)}</div>
-              </div>
-            )}
+            <div>
+              <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700}}>JÁ PAGO</div>
+              <div style={{fontWeight:700,fontSize:15,color:'var(--ok)'}}>{fmtR(jaPago)}</div>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700}}>PENDENTE</div>
+              <div style={{fontWeight:700,fontSize:15,color:restante>0?'var(--warning)':'var(--ok)'}}>{fmtR(restante)}</div>
+            </div>
           </div>
-          <div className="form-group">
-            <label className="form-label">Valor pago agora (R$) *</label>
-            <input type="number" className="form-input" step={0.01} min={0.01} max={parcela.valor}
-              value={valorPago} onChange={e=>setValorPago(e.target.value)} autoFocus
-              placeholder={`Máximo: ${fmtR(parcela.valor)}`}/>
-            {vp > 0 && vp < parcela.valor && (
-              <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>
-                ⚠️ Pagamento parcial — restará {fmtR(parcela.valor - vp)} em aberto
-              </div>
-            )}
-            {vp >= parcela.valor && vp > 0 && (
-              <div style={{fontSize:12,color:'var(--ok)',marginTop:4}}>
-                ✓ Parcela será marcada como paga integralmente
-              </div>
-            )}
-          </div>
-          <div className="form-group">
-            <label className="form-label">Data do pagamento</label>
-            <input type="date" className="form-input" value={dataPag} onChange={e=>setDataPag(e.target.value)}/>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Conta *</label>
-            <select className="form-input" value={contaId} onChange={e=>setContaId(e.target.value)}>
-              <option value="">Selecione...</option>
-              {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
-            </select>
-          </div>
+          {restante <= 0 ? (
+            <div style={{color:'var(--ok)',fontWeight:600,fontSize:14,textAlign:'center',padding:12}}>✓ Esta parcela já está totalmente paga</div>
+          ) : (<>
+            <div className="form-group">
+              <label className="form-label">Valor pago agora (R$) *</label>
+              <input type="number" className="form-input" step={0.01} min={0.01} max={restante}
+                value={valorNovo} onChange={e=>setValorNovo(e.target.value)} autoFocus
+                placeholder={`Saldo pendente: ${fmtR(restante)}`}/>
+              {vn > 0 && novoRestante > 0.01 && (
+                <div style={{fontSize:12,color:'var(--warning)',marginTop:4}}>
+                  ⚠️ Restará {fmtR(novoRestante)} pendente após este lançamento
+                </div>
+              )}
+              {vn > 0 && novoRestante <= 0.01 && (
+                <div style={{fontSize:12,color:'var(--ok)',marginTop:4}}>✓ Parcela será quitada integralmente</div>
+              )}
+            </div>
+            <div className="form-group">
+              <label className="form-label">Data</label>
+              <input type="date" className="form-input" value={dataPag} onChange={e=>setDataPag(e.target.value)}/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Conta *</label>
+              <select className="form-input" value={contaId} onChange={e=>setContaId(e.target.value)}>
+                <option value="">Selecione...</option>
+                {contas.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            </div>
+          </>)}
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={saving||!vp}>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||!vn||restante<=0}>
             {saving?<RefreshCw size={14} className="spin"/>:'Registrar pagamento'}
           </button>
         </div>
@@ -1136,6 +1158,7 @@ function ModalTransferencia({ contas, onClose, onSaved }) {
         valor_total: valor,
         conta_id: f.conta_origem,
         total_parcelas: 1,
+        is_transferencia: true,
         observacao: `Transferência → ${contas.find(c=>c.id===f.conta_destino)?.nome}`,
         criado_por: usuario,
       }).select().single()
@@ -1153,6 +1176,7 @@ function ModalTransferencia({ contas, onClose, onSaved }) {
         valor_total: valor,
         conta_id: f.conta_destino,
         total_parcelas: 1,
+        is_transferencia: true,
         observacao: `Transferência ← ${contas.find(c=>c.id===f.conta_origem)?.nome}`,
         criado_por: usuario,
       }).select().single()
@@ -1288,6 +1312,7 @@ export default function FinLancamentos({ tipo }) {
                fin_formas_pagamento(id,nome),
                fin_parcelas(id,numero_parcela,valor,valor_pago,data_vencimento,data_pagamento,data_competencia,status,conta_id)`)
       .eq('tipo', tipo)
+      .neq('is_transferencia', true)
       .order('criado_em', { ascending: false })
 
     let result = data || []
@@ -1506,6 +1531,7 @@ export default function FinLancamentos({ tipo }) {
                   <th>Vencimento</th>
                   <th>Descrição</th>
                   <th>Categoria</th>
+                  <th>Canal</th>
                   <th>Forma Pgto</th>
                   <th>Parcela</th>
                   <th style={{textAlign:'right'}}>Valor</th>
@@ -1540,6 +1566,9 @@ export default function FinLancamentos({ tipo }) {
                         ) : <span style={{color:'var(--gray-300)',fontSize:11}}>—</span>}
                       </td>
                       <td style={{fontSize:11,color:'var(--gray-500)'}}>
+                        {l.fin_canais?.nome || '—'}
+                      </td>
+                      <td style={{fontSize:11,color:'var(--gray-500)'}}>
                         {l.fin_formas_pagamento?.nome || '—'}
                       </td>
                       <td style={{fontSize:11,color:'var(--gray-400)'}}>
@@ -1554,29 +1583,15 @@ export default function FinLancamentos({ tipo }) {
                       <td><span className={`pill ${scfg.cls}`} style={{fontSize:10}}>{scfg.label}</span></td>
                       <td>
                         <div style={{display:'flex',gap:4}}>
+                          <button className="btn btn-ghost btn-xs" title="Editar lançamento"
+                            onClick={()=>setModal(l)}><Pencil size={11}/></button>
                           <button className="btn btn-ghost btn-xs" title="Editar parcela"
-                            onClick={()=>setModalParcela({...p,_tipo:tipo})}>Editar</button>
+                            onClick={()=>setModalParcela({...p,_tipo:tipo})}>✎</button>
                           <button className="btn btn-ghost btn-xs" title="Pagamento parcial"
                             onClick={()=>setModalPagParcial({...p,_lanc:l})} style={{color:'var(--purple)'}}>₊</button>
                           <button className="btn btn-ghost btn-xs" title="Clonar lançamento"
-                            onClick={async()=>{
-                              if(!window.confirm('Clonar este lançamento?'))return
-                              const {data:nl}=await supabase.from('fin_lancamentos').insert({
-                                tipo:l.tipo,descricao:l.descricao+' (cópia)',valor_total:l.valor_total,
-                                categoria_id:l.categoria_id,canal_id:l.canal_id,conta_id:l.conta_id,
-                                forma_pagamento_id:l.forma_pagamento_id,fornecedor_id:l.fornecedor_id,
-                                total_parcelas:l.total_parcelas,recorrente:l.recorrente,
-                                observacao:l.observacao,criado_por:'clone',
-                              }).select().single()
-                              if(nl){
-                                await supabase.from('fin_parcelas').insert({
-                                  lancamento_id:nl.id,numero_parcela:1,valor:p.valor,
-                                  data_vencimento:p.data_vencimento,data_competencia:p.data_competencia,
-                                  status:'em_aberto',conta_id:p.conta_id,
-                                })
-                                load()
-                              }
-                            }}>⧉</button>
+                            onClick={()=>setModal({...l, id:null, descricao:l.descricao+' (cópia)', _clonarParcela:p})}
+                          >⧉</button>
                           <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}}
                             onClick={async()=>{if(!window.confirm('Excluir?'))return;await supabase.from('fin_lancamentos').delete().eq('id',l.id);load()}}>✕</button>
                         </div>
