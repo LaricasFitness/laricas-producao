@@ -322,7 +322,8 @@ function SecaoSimples({ titulo, tabela, campos, defaults, orderBy = 'nome' }) {
 
 function FornecedoresSecao() {
   const [items, setItems] = useState([])
-  const [modal, setModal] = useState(null) // null | 'new' | item
+  const [modal, setModal] = useState(null)         // null | 'new' | item (editar)
+  const [modalExcluir, setModalExcluir] = useState(null) // item a excluir
 
   async function load() {
     const {data} = await supabase.from('fin_fornecedores').select('*').order('razao_social')
@@ -331,22 +332,24 @@ function FornecedoresSecao() {
   useEffect(()=>{load()},[])
 
   async function salvar(f) {
-    if (f.id) {
-      await supabase.from('fin_fornecedores').update(f).eq('id', f.id)
-    } else {
-      await supabase.from('fin_fornecedores').insert({...f, ativo:true})
-    }
+    if (f.id) await supabase.from('fin_fornecedores').update(f).eq('id', f.id)
+    else await supabase.from('fin_fornecedores').insert({...f, ativo:true})
     setModal(null); load()
   }
 
-  async function excluir(item) {
-    const {count} = await supabase.from('fin_lancamentos').select('id', {count:'exact',head:true}).eq('fornecedor_id', item.id)
-    if (count > 0) {
-      if (!window.confirm(`"${item.razao_social}" está vinculado a ${count} lançamento(s). Excluir mesmo assim?`)) return
+  async function confirmarExclusao(novoFornecedorId) {
+    // Reatribui lançamentos se necessário
+    if (novoFornecedorId) {
+      await supabase.from('fin_lancamentos')
+        .update({ fornecedor_id: novoFornecedorId })
+        .eq('fornecedor_id', modalExcluir.id)
     } else {
-      if (!window.confirm(`Excluir "${item.razao_social}"?`)) return
+      await supabase.from('fin_lancamentos')
+        .update({ fornecedor_id: null })
+        .eq('fornecedor_id', modalExcluir.id)
     }
-    await supabase.from('fin_fornecedores').delete().eq('id', item.id)
+    await supabase.from('fin_fornecedores').delete().eq('id', modalExcluir.id)
+    setModalExcluir(null)
     load()
   }
 
@@ -380,7 +383,7 @@ function FornecedoresSecao() {
               <td style={{padding:'8px 12px'}}>
                 <div style={{display:'flex',gap:4}}>
                   <button className="btn btn-ghost btn-xs" onClick={()=>setModal(item)}><Pencil size={11}/></button>
-                  <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>excluir(item)}>✕</button>
+                  <button className="btn btn-ghost btn-xs" style={{color:'var(--danger)'}} onClick={()=>setModalExcluir(item)}>✕</button>
                 </div>
               </td>
             </tr>
@@ -389,6 +392,105 @@ function FornecedoresSecao() {
         </tbody>
       </table>
       {modal && <ModalFornecedor item={modal==='new'?null:modal} onClose={()=>setModal(null)} onSaved={salvar}/>}
+      {modalExcluir && (
+        <ModalExcluirFornecedor
+          fornecedor={modalExcluir}
+          todos={items.filter(i=>i.id!==modalExcluir.id)}
+          onClose={()=>setModalExcluir(null)}
+          onConfirm={confirmarExclusao}
+        />
+      )}
+    </div>
+  )
+}
+
+function ModalExcluirFornecedor({ fornecedor, todos, onClose, onConfirm }) {
+  const [lancamentos, setLancamentos] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [novoFornId, setNovoFornId] = useState('')
+  const [salvando, setSalvando] = useState(false)
+
+  useEffect(() => {
+    supabase.from('fin_lancamentos')
+      .select('id, descricao, valor_total, tipo, criado_em')
+      .eq('fornecedor_id', fornecedor.id)
+      .order('criado_em', { ascending: false })
+      .then(({ data }) => { setLancamentos(data||[]); setLoading(false) })
+  }, [])
+
+  async function confirmar() {
+    setSalvando(true)
+    await onConfirm(novoFornId || null)
+    setSalvando(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:560}}>
+        <div className="modal-header">
+          <div className="modal-title" style={{color:'var(--danger)'}}>
+            🗑️ Excluir fornecedor
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>{fornecedor.razao_social}</div>
+          {loading ? (
+            <div className="loading"><RefreshCw size={14} className="spin"/></div>
+          ) : lancamentos.length === 0 ? (
+            <div style={{padding:'12px 14px',background:'#f0fdf4',borderRadius:8,color:'var(--ok)',fontSize:13,fontWeight:600,marginTop:12}}>
+              ✓ Nenhum lançamento vinculado. Pode excluir sem impacto.
+            </div>
+          ) : (
+            <>
+              <div style={{padding:'10px 14px',background:'#fff8f0',borderRadius:8,color:'var(--warning)',fontSize:13,fontWeight:600,marginBottom:12}}>
+                ⚠️ {lancamentos.length} lançamento{lancamentos.length!==1?'s':''} vinculado{lancamentos.length!==1?'s':''} a este fornecedor
+              </div>
+
+              {/* Lista de lançamentos */}
+              <div style={{maxHeight:220,overflowY:'auto',border:'1px solid var(--gray-200)',borderRadius:8,marginBottom:16}}>
+                {lancamentos.map((l,i) => (
+                  <div key={l.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderTop:i>0?'1px solid var(--gray-100)':undefined,fontSize:13}}>
+                    <div>
+                      <span style={{fontWeight:600}}>{l.descricao}</span>
+                      <span style={{fontSize:11,color:'var(--gray-400)',marginLeft:8}}>{new Date(l.criado_em).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                    <span style={{fontWeight:700,color:l.tipo==='receita'?'var(--ok)':'var(--danger)',whiteSpace:'nowrap',marginLeft:12}}>
+                      {l.tipo==='despesa'?'-':'+'} R$ {(l.valor_total||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Reatribuir */}
+              <div className="form-group">
+                <label className="form-label">Reatribuir lançamentos para outro fornecedor (opcional)</label>
+                <select className="form-input" value={novoFornId} onChange={e=>setNovoFornId(e.target.value)}>
+                  <option value="">Deixar sem fornecedor</option>
+                  {todos.map(f=><option key={f.id} value={f.id}>{f.nome_fantasia||f.razao_social}</option>)}
+                </select>
+                {novoFornId && (
+                  <div style={{fontSize:12,color:'var(--ok)',marginTop:4}}>
+                    ✓ Os {lancamentos.length} lançamento{lancamentos.length!==1?'s':''} serão transferidos para "{todos.find(f=>f.id===novoFornId)?.razao_social}"
+                  </div>
+                )}
+                {!novoFornId && lancamentos.length > 0 && (
+                  <div style={{fontSize:12,color:'var(--gray-400)',marginTop:4}}>
+                    Os lançamentos ficarão sem fornecedor vinculado
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-danger" onClick={confirmar} disabled={salvando||loading}
+            style={{background:'var(--danger)',color:'#fff',border:'none'}}>
+            {salvando?<RefreshCw size={14} className="spin"/>:'Confirmar exclusão'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
