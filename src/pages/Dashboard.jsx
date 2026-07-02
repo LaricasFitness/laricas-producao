@@ -53,6 +53,7 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
 
   async function load() {
     setLoading(true)
+    setData([]) // limpa dados antigos imediatamente para evitar flash de tipo errado
     try { setData(await carregarStatusCompleto(tipo)) } catch(e) { console.error(e) }
     setLoading(false)
   }
