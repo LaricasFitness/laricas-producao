@@ -717,6 +717,29 @@ function ModalLancamento({ lancamento, tipo, categorias, canais, contas, formasP
         await supabase.from('fin_parcelas').insert(gerarParcelas().map(p => ({ ...p, lancamento_id: l.id })))
       } else {
         await supabase.from('fin_lancamentos').update(payload).eq('id', lancamento.id)
+        // Atualiza valor das parcelas existentes
+        const parcelas = lancamento.fin_parcelas || []
+        if (parcelas.length > 0 && valorParcela > 0) {
+          const hoje = new Date().toISOString().slice(0,10)
+          const futuras = parcelas.filter(p => p.data_vencimento >= hoje && p.status !== 'pago')
+          const todasParcelas = parcelas
+
+          let parcelasAtualizar = todasParcelas
+          if (futuras.length > 0 && todasParcelas.length > 1) {
+            const resp = window.confirm(
+              `Este lançamento tem ${futuras.length} parcela(s) futura(s) em aberto.\n\n` +
+              `Clique OK para atualizar TODAS as parcelas futuras.\n` +
+              `Clique Cancelar para atualizar apenas o valor total.`
+            )
+            if (resp) parcelasAtualizar = futuras
+            else parcelasAtualizar = []
+          }
+          if (parcelasAtualizar.length > 0) {
+            await Promise.all(parcelasAtualizar.map(p =>
+              supabase.from('fin_parcelas').update({ valor: valorParcela }).eq('id', p.id)
+            ))
+          }
+        }
       }
       onSaved()
     } catch(e) { setErr(e.message) }
@@ -1353,7 +1376,7 @@ export default function FinLancamentos({ tipo }) {
     const { data } = await supabase
       .from('fin_lancamentos')
       .select(`*, fin_categorias(id,nome,cor), fin_canais(id,nome,cor), fin_contas(id,nome),
-               fin_formas_pagamento(id,nome),
+               fin_formas_pagamento(id,nome), fin_fornecedores(id,razao_social,nome_fantasia),
                fin_parcelas(id,numero_parcela,valor,valor_pago,data_vencimento,data_pagamento,data_competencia,status,conta_id)`)
       .eq('tipo', tipo)
       .neq('is_transferencia', true)
@@ -1575,9 +1598,9 @@ export default function FinLancamentos({ tipo }) {
                   <th>Vencimento</th>
                   <th>Descrição</th>
                   <th>Categoria</th>
-                  <th>Canal</th>
+                  {tipo === 'receita' && <th>Canal</th>}
+                  <th>Fornecedor</th>
                   <th>Forma Pgto</th>
-                  <th>Parcela</th>
                   <th style={{textAlign:'right'}}>Valor</th>
                   <th>Status</th>
                   <th></th>
@@ -1609,14 +1632,16 @@ export default function FinLancamentos({ tipo }) {
                           <span style={{fontSize:11,color:l.fin_categorias.cor||'var(--gray-500)',fontWeight:600}}>● {l.fin_categorias.nome}</span>
                         ) : <span style={{color:'var(--gray-300)',fontSize:11}}>—</span>}
                       </td>
-                      <td style={{fontSize:11,color:'var(--gray-500)'}}>
-                        {l.fin_canais?.nome || '—'}
+                      {tipo === 'receita' && (
+                        <td style={{fontSize:11,color:'var(--gray-500)'}}>
+                          {l.fin_canais?.nome || '—'}
+                        </td>
+                      )}
+                      <td style={{fontSize:11,color:'var(--gray-500)',maxWidth:120,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                        {l.fin_fornecedores?.nome_fantasia || l.fin_fornecedores?.razao_social || '—'}
                       </td>
                       <td style={{fontSize:11,color:'var(--gray-500)'}}>
                         {l.fin_formas_pagamento?.nome || '—'}
-                      </td>
-                      <td style={{fontSize:11,color:'var(--gray-400)'}}>
-                        {l.total_parcelas>1?`${p.numero_parcela}/${l.total_parcelas}`:'—'}
                       </td>
                       <td style={{textAlign:'right',fontWeight:700,color:cor}}>
                         {fmtR(p.valor)}
