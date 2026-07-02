@@ -198,6 +198,7 @@ export default function FinExtrato() {
         id, numero_parcela, valor, valor_pago, status, data_vencimento, data_pagamento, data_competencia, conta_id,
         fin_lancamentos!inner(
           id, tipo, descricao, total_parcelas, is_transferencia,
+          categoria_id, canal_id, forma_pagamento_id, fornecedor_id, observacao,
           fin_categorias(id,nome,cor),
           fin_canais(id,nome),
           fin_contas(id,nome),
