@@ -9,6 +9,7 @@ import FinSazonalidade from './FinSazonalidade'
 import FinReconciliacao from './FinReconciliacao'
 import FinImportarFatura from './FinImportarFatura'
 import FinExtrato from './FinExtrato'
+import FinBalancete from './FinBalancete'
 import FinAlertas from './FinAlertas'
 import FinConfig from './FinConfig'
 import { verificarEDispararAlertas } from '../lib/alertas'
@@ -24,6 +25,7 @@ const TABS = [
   { id:'sazonalidade',  label:'📅 Sazonalidade'     },
   { id:'reconciliacao', label:'🏦 Reconciliação'    },
   { id:'fatura',        label:'💳 Importar Fatura'  },
+  { id:'balancete',     label:'📊 Balancete'         },
   { id:'extrato',       label:'📒 Extrato Geral'    },
   { id:'alertas',       label:'🔔 Alertas'          },
   { id:'config',        label:'⚙️ Config'           },
@@ -51,6 +53,7 @@ export default function Financeiro() {
       {tab==='sazonalidade' && <FinSazonalidade />}
       {tab==='reconciliacao'&& <FinReconciliacao />}
       {tab==='fatura'       && <FinImportarFatura />}
+      {tab==='balancete'    && <FinBalancete />}
       {tab==='extrato'      && <FinExtrato />}
       {tab==='alertas'      && <FinAlertas />}
       {tab==='config'       && <FinConfig />}
