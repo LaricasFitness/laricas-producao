@@ -221,114 +221,131 @@ export default function FinBalancete() {
             {l:'Despesas',v:totalDespesas,cor:'var(--danger)',compV:dadosComp?dadosComp.meses.reduce((s,m)=>s+(dadosComp.totDesp[m]||0),0):null},
             {l:'Resultado',v:resultado,cor:resultado>=0?'var(--ok)':'var(--danger)',compV:dadosComp?dadosComp.meses.reduce((s,m)=>s+(dadosComp.totRec[m]||0)-(dadosComp.totDesp[m]||0),0):null},
           ].map(k=>(
-            <div key={k.l} style={{padding:'10px 14px',borderRadius:8,background:'var(--gray-50)',borderLeft:`3px solid ${k.cor}`}}>
-              <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700}}>{k.l.toUpperCase()}</div>
-              <div style={{fontWeight:800,fontSize:20,color:k.cor}}>{fmtR(k.v)}</div>
-              {k.compV!=null && <div style={{fontSize:12,color:'var(--gray-500)'}}>{COMP_LABEL[comparativo]}: {fmtR(k.compV)} {fmtDelta(k.v,k.compV)}</div>}
+            <div key={k.l} style={{padding:'12px 16px',borderRadius:8,background:'var(--gray-50)',borderLeft:`3px solid ${k.cor}`}}>
+              <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',marginBottom:4}}>{k.l}</div>
+              <div style={{fontWeight:800,fontSize:22,color:k.cor}}>{fmtR(k.v)}</div>
+              {k.compV!=null && <div style={{fontSize:12,color:'var(--gray-500)',marginTop:2}}>{COMP_LABEL[comparativo]}: {fmtR(k.compV)} {fmtDelta(k.v,k.compV)}</div>}
             </div>
           ))}
         </div>
       </div>
 
-      {/* Gráfico */}
-      <div className="card card-pad" style={{marginBottom:12}}>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={grafico} margin={{top:5,right:20,left:10,bottom:5}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#eee"/>
-            <XAxis dataKey="mes" tick={{fontSize:11}}/>
-            <YAxis tickFormatter={v=>fmtR(v).replace('R$','')} tick={{fontSize:10}} width={80}/>
-            <Tooltip formatter={(v,n)=>[fmtR(v),n]}/>
-            <Legend iconSize={10} wrapperStyle={{fontSize:12}}/>
-            <Line type="monotone" dataKey="Receitas" stroke="var(--ok)" strokeWidth={2} dot={false}/>
-            <Line type="monotone" dataKey="Despesas" stroke="var(--danger)" strokeWidth={2} dot={false}/>
-            <Line type="monotone" dataKey="Resultado" stroke="var(--purple)" strokeWidth={2} dot={false} strokeDasharray="4 2"/>
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Tabela balancete */}
-      <div className="card" style={{overflowX:'auto'}}>
-        {loading && <div className="loading"><RefreshCw size={14} className="spin"/></div>}
-        <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+      {/* Tabela balancete — PRIMEIRO */}
+      <div className="card" style={{overflowX:'auto',marginBottom:16}}>
+        {loading && <div style={{padding:20,textAlign:'center'}}><RefreshCw size={14} className="spin"/></div>}
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:14}}>
           <thead>
             <tr style={{background:'var(--gray-50)'}}>
-              <th style={{padding:'8px 14px',textAlign:'left',minWidth:220,position:'sticky',left:0,background:'var(--gray-50)'}}>Categoria</th>
+              <th style={{padding:'10px 16px',textAlign:'left',minWidth:240,position:'sticky',left:0,background:'var(--gray-50)',fontSize:12,fontWeight:700,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em'}}>Categoria</th>
               {meses.map(m=>(
-                <th key={m} style={{padding:'8px 10px',textAlign:'right',minWidth:120}}>{labelMes(m)}</th>
+                <th key={m} style={{padding:'10px 12px',textAlign:'right',minWidth:130,fontSize:12,fontWeight:700,color:'var(--gray-500)',textTransform:'uppercase',letterSpacing:'.05em'}}>{labelMes(m)}</th>
               ))}
-              <th style={{padding:'8px 10px',textAlign:'right',minWidth:120,color:'var(--purple)',fontWeight:800}}>Total</th>
+              <th style={{padding:'10px 12px',textAlign:'right',minWidth:130,color:'var(--purple)',fontWeight:800,fontSize:13}}>Total</th>
             </tr>
           </thead>
           <tbody>
             {/* RECEITAS */}
-            <tr><td colSpan={meses.length+2} style={{padding:'6px 14px',fontWeight:800,fontSize:11,textTransform:'uppercase',background:'#f0fdf4',color:'var(--ok)',letterSpacing:'.05em'}}>Receitas</td></tr>
+            <tr>
+              <td colSpan={meses.length+2} style={{padding:'8px 16px',fontWeight:800,fontSize:12,textTransform:'uppercase',background:'#e8fdf0',color:'var(--ok)',letterSpacing:'.05em',borderTop:'2px solid var(--ok)'}}>
+                Receitas
+              </td>
+            </tr>
             {receitas.map(([catId,cat])=>(
-              <tr key={catId} style={{borderTop:'1px solid var(--gray-100)'}}>
-                <td style={{padding:'7px 14px 7px 24px',color:'var(--gray-700)',position:'sticky',left:0,background:'var(--white)'}}>{cat.nome}</td>
+              <tr key={catId} style={{borderBottom:'1px solid var(--gray-100)'}}>
+                <td style={{padding:'9px 16px 9px 28px',color:'var(--gray-800)',position:'sticky',left:0,background:'var(--white)',fontSize:14}}>{cat.nome}</td>
                 {meses.map(m=>(
-                  <td key={m} style={{padding:'7px 10px',textAlign:'right',color:'var(--ok)',fontWeight:cat.meses[m]?500:300}}>
+                  <td key={m} style={{padding:'9px 12px',textAlign:'right',color:cat.meses[m]?'var(--ok)':'var(--gray-300)',fontSize:14}}>
                     {cat.meses[m]?fmtR(cat.meses[m]):'—'}
                   </td>
                 ))}
-                <td style={{padding:'7px 10px',textAlign:'right',fontWeight:700,color:'var(--ok)'}}>
+                <td style={{padding:'9px 12px',textAlign:'right',fontWeight:700,color:'var(--ok)',fontSize:14}}>
                   {fmtR(Object.values(cat.meses).reduce((s,v)=>s+v,0))}
                 </td>
               </tr>
             ))}
-            <tr style={{borderTop:'2px solid var(--ok)',background:'#f0fdf4'}}>
-              <td style={{padding:'8px 14px',fontWeight:800,position:'sticky',left:0,background:'#f0fdf4',color:'var(--ok)'}}>Total de receitas</td>
-              {meses.map(m=><td key={m} style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--ok)'}}>{fmtR(totRec[m]||0)}</td>)}
-              <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--ok)'}}>{fmtR(totalReceitas)}</td>
+            <tr style={{borderTop:'2px solid var(--ok)',background:'#e8fdf0'}}>
+              <td style={{padding:'10px 16px',fontWeight:800,fontSize:14,position:'sticky',left:0,background:'#e8fdf0',color:'var(--ok)'}}>Total de receitas</td>
+              {meses.map(m=><td key={m} style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontSize:14,color:'var(--ok)'}}>{fmtR(totRec[m]||0)}</td>)}
+              <td style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontSize:14,color:'var(--ok)'}}>{fmtR(totalReceitas)}</td>
             </tr>
 
             {/* DESPESAS */}
-            <tr><td colSpan={meses.length+2} style={{padding:'6px 14px',fontWeight:800,fontSize:11,textTransform:'uppercase',background:'#fff5f5',color:'var(--danger)',letterSpacing:'.05em'}}>Despesas</td></tr>
+            <tr>
+              <td colSpan={meses.length+2} style={{padding:'8px 16px',fontWeight:800,fontSize:12,textTransform:'uppercase',background:'#fef2f2',color:'var(--danger)',letterSpacing:'.05em',borderTop:'2px solid var(--danger)'}}>
+                Despesas
+              </td>
+            </tr>
             {despesas.map(([catId,cat])=>(
-              <tr key={catId} style={{borderTop:'1px solid var(--gray-100)'}}>
-                <td style={{padding:'7px 14px 7px 24px',color:'var(--gray-700)',position:'sticky',left:0,background:'var(--white)'}}>{cat.nome}</td>
+              <tr key={catId} style={{borderBottom:'1px solid var(--gray-100)'}}>
+                <td style={{padding:'9px 16px 9px 28px',color:'var(--gray-800)',position:'sticky',left:0,background:'var(--white)',fontSize:14}}>{cat.nome}</td>
                 {meses.map(m=>(
-                  <td key={m} style={{padding:'7px 10px',textAlign:'right',color:'var(--danger)',fontWeight:cat.meses[m]?500:300}}>
+                  <td key={m} style={{padding:'9px 12px',textAlign:'right',color:cat.meses[m]?'var(--danger)':'var(--gray-300)',fontSize:14}}>
                     {cat.meses[m]?fmtR(cat.meses[m]):'—'}
                   </td>
                 ))}
-                <td style={{padding:'7px 10px',textAlign:'right',fontWeight:700,color:'var(--danger)'}}>
+                <td style={{padding:'9px 12px',textAlign:'right',fontWeight:700,color:'var(--danger)',fontSize:14}}>
                   {fmtR(Object.values(cat.meses).reduce((s,v)=>s+v,0))}
                 </td>
               </tr>
             ))}
-            <tr style={{borderTop:'2px solid var(--danger)',background:'#fff5f5'}}>
-              <td style={{padding:'8px 14px',fontWeight:800,position:'sticky',left:0,background:'#fff5f5',color:'var(--danger)'}}>Total de despesas</td>
-              {meses.map(m=><td key={m} style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--danger)'}}>{fmtR(totDesp[m]||0)}</td>)}
-              <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--danger)'}}>{fmtR(totalDespesas)}</td>
+            <tr style={{borderTop:'2px solid var(--danger)',background:'#fef2f2'}}>
+              <td style={{padding:'10px 16px',fontWeight:800,fontSize:14,position:'sticky',left:0,background:'#fef2f2',color:'var(--danger)'}}>Total de despesas</td>
+              {meses.map(m=><td key={m} style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontSize:14,color:'var(--danger)'}}>{fmtR(totDesp[m]||0)}</td>)}
+              <td style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontSize:14,color:'var(--danger)'}}>{fmtR(totalDespesas)}</td>
             </tr>
 
             {/* TRANSFERÊNCIAS */}
             {(Object.keys(transfsMap.entrada).length > 0 || Object.keys(transfsMap.saida).length > 0) && (<>
-              <tr><td colSpan={meses.length+2} style={{padding:'6px 14px',fontWeight:800,fontSize:11,textTransform:'uppercase',background:'var(--gray-50)',color:'var(--gray-500)',letterSpacing:'.05em'}}>Transferências de entrada</td></tr>
-              <tr style={{borderTop:'1px solid var(--gray-100)'}}>
-                <td style={{padding:'7px 14px 7px 24px',position:'sticky',left:0,background:'var(--white)'}}>Transferências de entrada</td>
-                {meses.map(m=><td key={m} style={{padding:'7px 10px',textAlign:'right',color:'var(--gray-600)'}}>{totTransfEnt[m]?fmtR(totTransfEnt[m]):'—'}</td>)}
-                <td style={{padding:'7px 10px',textAlign:'right',fontWeight:700}}>{fmtR(meses.reduce((s,m)=>s+(totTransfEnt[m]||0),0))}</td>
+              <tr>
+                <td colSpan={meses.length+2} style={{padding:'8px 16px',fontWeight:800,fontSize:12,textTransform:'uppercase',background:'var(--gray-50)',color:'var(--gray-500)',letterSpacing:'.05em',borderTop:'2px solid var(--gray-300)'}}>
+                  Transferências de entrada
+                </td>
               </tr>
-              <tr><td colSpan={meses.length+2} style={{padding:'6px 14px',fontWeight:800,fontSize:11,textTransform:'uppercase',background:'var(--gray-50)',color:'var(--gray-500)',letterSpacing:'.05em'}}>Transferências de saída</td></tr>
-              <tr style={{borderTop:'1px solid var(--gray-100)'}}>
-                <td style={{padding:'7px 14px 7px 24px',position:'sticky',left:0,background:'var(--white)'}}>Transferências de saída</td>
-                {meses.map(m=><td key={m} style={{padding:'7px 10px',textAlign:'right',color:'var(--gray-600)'}}>{totTransfSai[m]?fmtR(totTransfSai[m]):'—'}</td>)}
-                <td style={{padding:'7px 10px',textAlign:'right',fontWeight:700}}>{fmtR(meses.reduce((s,m)=>s+(totTransfSai[m]||0),0))}</td>
+              <tr style={{borderBottom:'1px solid var(--gray-100)'}}>
+                <td style={{padding:'9px 16px 9px 28px',position:'sticky',left:0,background:'var(--white)',fontSize:14}}>Transferências de entrada</td>
+                {meses.map(m=><td key={m} style={{padding:'9px 12px',textAlign:'right',color:'var(--gray-600)',fontSize:14}}>{totTransfEnt[m]?fmtR(totTransfEnt[m]):'—'}</td>)}
+                <td style={{padding:'9px 12px',textAlign:'right',fontWeight:700,fontSize:14}}>{fmtR(meses.reduce((s,m)=>s+(totTransfEnt[m]||0),0))}</td>
+              </tr>
+              <tr>
+                <td colSpan={meses.length+2} style={{padding:'8px 16px',fontWeight:800,fontSize:12,textTransform:'uppercase',background:'var(--gray-50)',color:'var(--gray-500)',letterSpacing:'.05em'}}>
+                  Transferências de saída
+                </td>
+              </tr>
+              <tr style={{borderBottom:'1px solid var(--gray-100)'}}>
+                <td style={{padding:'9px 16px 9px 28px',position:'sticky',left:0,background:'var(--white)',fontSize:14}}>Transferências de saída</td>
+                {meses.map(m=><td key={m} style={{padding:'9px 12px',textAlign:'right',color:'var(--gray-600)',fontSize:14}}>{totTransfSai[m]?fmtR(totTransfSai[m]):'—'}</td>)}
+                <td style={{padding:'9px 12px',textAlign:'right',fontWeight:700,fontSize:14}}>{fmtR(meses.reduce((s,m)=>s+(totTransfSai[m]||0),0))}</td>
               </tr>
             </>)}
 
             {/* RESULTADO */}
             <tr style={{borderTop:'3px solid var(--purple)',background:'var(--purple-pale)'}}>
-              <td style={{padding:'10px 14px',fontWeight:900,fontSize:14,color:'var(--purple)',position:'sticky',left:0,background:'var(--purple-pale)'}}>Resultado (Rec. - Desp.)</td>
+              <td style={{padding:'12px 16px',fontWeight:900,fontSize:15,color:'var(--purple)',position:'sticky',left:0,background:'var(--purple-pale)'}}>Resultado (Rec. − Desp.)</td>
               {meses.map(m=>{
                 const v=(totRec[m]||0)-(totDesp[m]||0)
-                return <td key={m} style={{padding:'10px 10px',textAlign:'right',fontWeight:800,fontSize:14,color:v>=0?'var(--ok)':'var(--danger)'}}>{fmtR(v)}</td>
+                return <td key={m} style={{padding:'12px 12px',textAlign:'right',fontWeight:800,fontSize:15,color:v>=0?'var(--ok)':'var(--danger)'}}>{fmtR(v)}</td>
               })}
-              <td style={{padding:'10px 10px',textAlign:'right',fontWeight:900,fontSize:14,color:resultado>=0?'var(--ok)':'var(--danger)'}}>{fmtR(resultado)}</td>
+              <td style={{padding:'12px 12px',textAlign:'right',fontWeight:900,fontSize:15,color:resultado>=0?'var(--ok)':'var(--danger)'}}>{fmtR(resultado)}</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      {/* Gráfico — ÚLTIMO */}
+      <div className="card card-pad">
+        <div style={{fontWeight:700,fontSize:14,marginBottom:12,color:'var(--gray-700)'}}>Evolução mensal</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={grafico} margin={{top:5,right:20,left:10,bottom:5}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eee"/>
+            <XAxis dataKey="mes" tick={{fontSize:12}}/>
+            <YAxis tickFormatter={v=>fmtR(v).replace('R$\u00a0','')} tick={{fontSize:11}} width={90}/>
+            <Tooltip formatter={(v,n)=>[fmtR(v),n]} contentStyle={{fontSize:13}}/>
+            <Legend iconSize={12} wrapperStyle={{fontSize:13}}/>
+            <Line type="monotone" dataKey="Receitas" stroke="var(--ok)" strokeWidth={2.5} dot={{r:4}}/>
+            <Line type="monotone" dataKey="Despesas" stroke="var(--danger)" strokeWidth={2.5} dot={{r:4}}/>
+            <Line type="monotone" dataKey="Resultado" stroke="var(--purple)" strokeWidth={2} dot={{r:3}} strokeDasharray="5 3"/>
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </>
   )
