@@ -339,8 +339,40 @@ export default function FinDRE() {
                   if (filhos.length > 0) {
                     for (const f of filhos) linhas.push(...renderGrupo(f, 1))
                   } else {
-                    // Grupo sem filhos = linha editável diretamente
-                    linhas.push(...renderGrupo(grupo, 1).slice(1)) // pula o header que já renderizamos
+                    // Grupo sem filhos = linha de valores diretamente (categorias vinculadas)
+                    {meses.map(m => {
+                      const v = totalGrupo(m, grupo)
+                      const s = calcSubtotais(m)
+                      const base = s[grupo.base_pct||'fl']||s.fb||1
+                      linhas.push(null) // placeholder — rendered inline below
+                      return null
+                    })}
+                    // Renderiza linha de valores do grupo raiz diretamente
+                    linhas.push(
+                      <tr key={`vals-${grupo.id}`} style={{borderBottom:'1px solid var(--gray-100)'}}>
+                        <td style={{padding:'7px 14px 7px 14px',position:'sticky',left:0,background:'var(--white)'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:5}}>
+                            <span style={{width:14,flexShrink:0}}/>
+                            <span style={{width:8,height:8,borderRadius:2,background:grupo.cor||'var(--gray-400)',flexShrink:0}}/>
+                            <span style={{fontWeight:500,fontSize:12,color:'var(--gray-600)'}}>{grupo.nome}</span>
+                          </div>
+                        </td>
+                        {meses.map(m => {
+                          const v = totalGrupo(m, grupo)
+                          const s = calcSubtotais(m)
+                          const base = s[grupo.base_pct||'fl']||s.fb||1
+                          return (
+                            <td key={m} style={{padding:'7px 10px',textAlign:'right',background:'var(--white)'}}>
+                              <CelulaEditavel valor={v} onSave={val=>salvarAjuste(m, grupo.id, val)}/>
+                              {mostrarPct && base>0 && <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmtPct(pct(v,base))}</div>}
+                            </td>
+                          )
+                        })}
+                        <td style={{textAlign:'right',padding:'7px 10px',fontWeight:600,fontSize:12,color:'var(--gray-600)',background:'var(--white)'}}>
+                          {fmtR(meses.reduce((s,m)=>s+totalGrupo(m,grupo),0))}
+                        </td>
+                      </tr>
+                    )
                   }
 
                   // Subtotal
