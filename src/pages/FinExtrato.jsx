@@ -209,8 +209,13 @@ export default function FinExtrato() {
       .gte('data_vencimento', ini)
       .lte('data_vencimento', fim)
       .order('data_vencimento', { ascending: true })
-
-    setLinhas(data || [])
+    // Ordena: usa data_pagamento para pagos, data_vencimento para os demais
+    const sorted = (data||[]).sort((a,b) => {
+      const da = (a.status==='pago' && a.data_pagamento) ? a.data_pagamento : a.data_vencimento
+      const db = (b.status==='pago' && b.data_pagamento) ? b.data_pagamento : b.data_vencimento
+      return da.localeCompare(db)
+    })
+    setLinhas(sorted)
     setLoading(false)
   }, [ini, fim])
 
@@ -297,7 +302,10 @@ export default function FinExtrato() {
                     opacity: isTransf ? 0.7 : 1,
                   }}>
                     <td style={{padding:'8px 14px',color:vencida?'var(--danger)':'var(--gray-600)',fontWeight:vencida?700:400,whiteSpace:'nowrap'}}>
-                      {fmtData(p.data_vencimento)}
+                      {p.status==='pago' && p.data_pagamento ? fmtData(p.data_pagamento) : fmtData(p.data_vencimento)}
+                      {p.status==='pago' && p.data_pagamento && p.data_pagamento !== p.data_vencimento &&
+                        <div style={{fontSize:10,color:'var(--gray-400)'}}>prev: {fmtData(p.data_vencimento)}</div>
+                      }
                     </td>
                     <td style={{padding:'8px 14px',maxWidth:180}}>
                       <div style={{fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
