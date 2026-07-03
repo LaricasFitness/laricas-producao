@@ -4,7 +4,6 @@ import FinLancamentos from './FinLancamentos'
 import FinFluxo from './FinFluxo'
 import FinDRE from './FinDRE'
 import FinCanais from './FinCanais'
-import FinCanalDespesas from './FinCanalDespesas'
 import FinOrcamento from './FinOrcamento'
 import FinSazonalidade from './FinSazonalidade'
 import FinReconciliacao from './FinReconciliacao'
@@ -21,7 +20,6 @@ const TABS = [
   { id:'fluxo',         label:'💰 Fluxo de Caixa'  },
   { id:'dre',           label:'📋 DRE'              },
   { id:'canais',        label:'🏷️ DRE por Canal'   },
-  { id:'canal_desp',    label:'⚙️ Desp. por Canal' },
   { id:'orcamento',     label:'🎯 Orçamento'        },
   { id:'sazonalidade',  label:'📅 Sazonalidade'     },
   { id:'reconciliacao', label:'🏦 Reconciliação'    },
@@ -49,7 +47,6 @@ export default function Financeiro() {
       {tab==='fluxo'        && <FinFluxo />}
       {tab==='dre'          && <FinDRE />}
       {tab==='canais'       && <FinCanais />}
-      {tab==='canal_desp'   && <FinCanalDespesas />}
       {tab==='orcamento'    && <FinOrcamento />}
       {tab==='sazonalidade' && <FinSazonalidade />}
       {tab==='reconciliacao'&& <FinReconciliacao />}
