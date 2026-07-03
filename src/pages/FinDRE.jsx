@@ -205,7 +205,7 @@ export default function FinDRE() {
     const filhos = grupos.filter(g=>g.parent_id===grupo.id).sort((a,b)=>a.ordem-b.ordem||a.nome.localeCompare(b.nome))
     const temFilhos = filhos.length > 0
     // Por padrão grupos raiz e nível 2 começam expandidos
-    const expandido = expandidos.has(grupo.id) ?? (nivel <= 2)
+    const expandido = expandidos.size === 0 ? true : expandidos.has(grupo.id)
     const indent = 14 + (nivel-1)*18
     const bg = nivel===1?'var(--white)':nivel===2?'#fafafa':'#f5f5f5'
     const fw = nivel===1?600:nivel===2?500:400
