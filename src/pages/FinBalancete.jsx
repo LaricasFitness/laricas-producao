@@ -97,8 +97,11 @@ export default function FinBalancete() {
       const mes = p.data_vencimento?.slice(0,7)
       if (!mes || !meses.includes(mes)) continue
 
-      // Filtra conta
-      if (contaId !== 'todas' && p.conta_id !== contaId) continue
+      // Filtra conta — considera tanto conta_id da parcela quanto do lançamento
+      if (contaId !== 'todas') {
+        const parcelaConta = p.conta_id
+        if (parcelaConta && parcelaConta !== contaId) continue
+      }
 
       if (l.is_transferencia) {
         const key = l.tipo === 'receita' ? 'entrada' : 'saida'
