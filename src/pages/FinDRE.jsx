@@ -81,8 +81,9 @@ export default function FinDRE() {
 
     const [{data:parcelas},{data:ajustesDb}] = await Promise.all([
       supabase.from('fin_parcelas')
-        .select('valor, data_competencia, data_vencimento, data_pagamento, fin_lancamentos(tipo, fin_categorias(nome))')
-        .gte(campoData, ini).lte(campoData, fim).eq('status','pago'),
+        .select('valor, valor_pago, data_competencia, data_vencimento, data_pagamento, status, fin_lancamentos!inner(tipo, is_transferencia, fin_categorias(nome))')
+        .gte(campoData, ini).lte(campoData, fim)
+        .in('status',['pago','em_aberto','agendado','vencido','pendente']),
       supabase.from('fin_dre_ajustes')
         .select('*, fin_categorias(nome)')
         .gte('ano_mes', anoMesIni).lte('ano_mes', anoMesFim),
@@ -91,11 +92,15 @@ export default function FinDRE() {
     // Dados de lançamentos reais agrupados por mês/categoria
     const mapa = {}
     for (const p of (parcelas||[])) {
+      const l = p.fin_lancamentos
+      if (l?.is_transferencia) continue
+      if (p.status !== 'pago' && !(p.valor_pago > 0)) continue // só inclui pagos ou parcialmente pagos
       const mes = (regime==='caixa'?p.data_pagamento:p.data_competencia||p.data_vencimento)?.slice(0,7)
-      const cat = p.fin_lancamentos?.fin_categorias?.nome
+      const cat = l?.fin_categorias?.nome
       if (!mes||!cat) continue
       if (!mapa[mes]) mapa[mes] = {}
-      mapa[mes][cat] = (mapa[mes][cat]||0) + p.valor
+      const vlr = (p.valor_pago > 0 && p.status !== 'pago') ? p.valor_pago : p.valor
+      mapa[mes][cat] = (mapa[mes][cat]||0) + vlr
     }
     setDadosLanc(mapa)
 
@@ -184,15 +189,23 @@ export default function FinDRE() {
     setAjustesMap(prev=>({...prev,[key]:valor}))
   }
 
+  // Expande todos os grupos quando carregados
+  useEffect(() => {
+    if (grupos.length > 0) {
+      setExpandidos(new Set(grupos.map(g=>g.id)))
+    }
+  }, [grupos])
+
   function toggleExp(id) {
     setExpandidos(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n})
   }
 
-  // Renderiza grupo e filhos recursivamente
+  // Renderiza grupo e filhos recursivamente — sempre mostra todos, mesmo com zero
   function renderGrupo(grupo, nivel=1) {
     const filhos = grupos.filter(g=>g.parent_id===grupo.id).sort((a,b)=>a.ordem-b.ordem||a.nome.localeCompare(b.nome))
     const temFilhos = filhos.length > 0
-    const expandido = expandidos.has(grupo.id)
+    // Por padrão grupos raiz e nível 2 começam expandidos
+    const expandido = expandidos.has(grupo.id) ?? (nivel <= 2)
     const indent = 14 + (nivel-1)*18
     const bg = nivel===1?'var(--white)':nivel===2?'#fafafa':'#f5f5f5'
     const fw = nivel===1?600:nivel===2?500:400
@@ -223,9 +236,11 @@ export default function FinDRE() {
             <td key={m} style={{padding:'7px 10px',textAlign:'right',background:bg}}>
               {!temFilhos
                 ? <CelulaEditavel valor={v} onSave={val=>salvarAjuste(m, grupo.id, val)}/>
-                : <span style={{fontWeight:600,color:v>0?'var(--gray-700)':'var(--gray-300)',fontSize:fs}}>{v>0?fmtR(v):'—'}</span>
+                : <span style={{fontWeight:600,color:v!==0?'var(--gray-700)':'var(--gray-300)',fontSize:fs}}>
+                    {fmtR(v)}
+                  </span>
               }
-              {mostrarPct && v>0 && base>0 && <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmtPct(pct(v,base))}</div>}
+              {mostrarPct && base>0 && <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmtPct(pct(v,base))}</div>}
             </td>
           )
         })}
