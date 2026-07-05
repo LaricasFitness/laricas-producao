@@ -1107,13 +1107,28 @@ function ModalPagamentoParcial({ parcela, contas, onClose, onSaved }) {
     if (!contaId) { setErr('Selecione a conta.'); return }
     setSaving(true)
     try {
-      const novoStatus = totalPago >= parcela.valor - 0.01 ? 'pago' : 'em_aberto'
+      const novoTotal = jaPago + vn
+      const novoStatus = novoTotal >= parcela.valor - 0.01 ? 'pago' : 'em_aberto'
+      const usuario = JSON.parse(sessionStorage.getItem('usuario')||'{}').nome
+
+      // 1. Registra este pagamento individual com sua data
+      await supabase.from('fin_parcelas_pagamentos').insert({
+        parcela_id: parcela.id,
+        valor: vn,
+        data_pagamento: dataPag,
+        conta_id: contaId || null,
+        criado_por: usuario,
+      })
+
+      // 2. Atualiza parcela com total acumulado
       await supabase.from('fin_parcelas').update({
-        valor_pago: Math.min(totalPago, parcela.valor),
+        valor_pago: Math.min(novoTotal, parcela.valor),
         status: novoStatus,
-        data_pagamento: novoStatus === 'pago' ? dataPag : parcela.data_pagamento,
+        data_pagamento: dataPag,
         conta_id: contaId,
       }).eq('id', parcela.id)
+
+      // 3. Atualiza saldo da conta
       if (contaId) {
         const { data: conta } = await supabase.from('fin_contas').select('saldo_atual').eq('id', contaId).single()
         if (conta) {
