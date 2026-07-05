@@ -196,6 +196,7 @@ export default function FinExtrato() {
       .from('fin_parcelas')
       .select(`
         id, numero_parcela, valor, valor_pago, status, data_vencimento, data_pagamento, data_competencia, conta_id,
+        fin_parcelas_pagamentos(id, valor, data_pagamento, conta_id),
         fin_lancamentos!inner(
           id, tipo, descricao, total_parcelas, is_transferencia,
           categoria_id, canal_id, forma_pagamento_id, fornecedor_id, observacao,
@@ -209,13 +210,36 @@ export default function FinExtrato() {
       .gte('data_vencimento', ini)
       .lte('data_vencimento', fim)
       .order('data_vencimento', { ascending: true })
-    // Ordena: usa data_pagamento para pagos, data_vencimento para os demais
-    const sorted = (data||[]).sort((a,b) => {
-      const da = (a.status==='pago' && a.data_pagamento) ? a.data_pagamento : a.data_vencimento
-      const db = (b.status==='pago' && b.data_pagamento) ? b.data_pagamento : b.data_vencimento
-      return da.localeCompare(db)
-    })
-    setLinhas(sorted)
+
+    // Expande parcelas com múltiplos pagamentos em linhas separadas
+    const expandidas = []
+    for (const p of (data||[])) {
+      const pags = p.fin_parcelas_pagamentos || []
+      if (pags.length > 1) {
+        // Cada pagamento parcial vira uma linha separada
+        for (const pg of pags.sort((a,b)=>a.data_pagamento.localeCompare(b.data_pagamento))) {
+          expandidas.push({
+            ...p,
+            _tipo_linha: 'pagamento_parcial',
+            _pagamento: pg,
+            _valor_exibido: pg.valor,
+            _data_exibida: pg.data_pagamento,
+          })
+        }
+      } else {
+        // Pagamento único ou sem pagamento
+        expandidas.push({
+          ...p,
+          _tipo_linha: 'normal',
+          _valor_exibido: (p.valor_pago > 0 && p.valor_pago < p.valor) ? p.valor_pago : p.valor,
+          _data_exibida: (p.status === 'pago' && p.data_pagamento) ? p.data_pagamento : p.data_vencimento,
+        })
+      }
+    }
+
+    // Ordena por data de exibição
+    expandidas.sort((a,b) => a._data_exibida.localeCompare(b._data_exibida))
+    setLinhas(expandidas)
     setLoading(false)
   }, [ini, fim])
 
@@ -226,8 +250,8 @@ export default function FinExtrato() {
     return p.fin_lancamentos?.tipo === 'receita' ? v : -v
   }
 
-  const totalReceitas = linhas.filter(p=>p.fin_lancamentos?.tipo==='receita'&&p.status==='pago').reduce((s,p)=>s+(p.valor_pago||p.valor),0)
-  const totalDespesas = linhas.filter(p=>p.fin_lancamentos?.tipo==='despesa'&&p.status==='pago').reduce((s,p)=>s+(p.valor_pago||p.valor),0)
+  const totalReceitas = linhas.filter(p=>p.fin_lancamentos?.tipo==='receita'&&(p.status==='pago'||p._tipo_linha==='pagamento_parcial')).reduce((s,p)=>s+(p._valor_exibido||0),0)
+  const totalDespesas = linhas.filter(p=>p.fin_lancamentos?.tipo==='despesa'&&(p.status==='pago'||p._tipo_linha==='pagamento_parcial')).reduce((s,p)=>s+(p._valor_exibido||0),0)
   const saldo = totalReceitas - totalDespesas
 
   return (
@@ -291,7 +315,8 @@ export default function FinExtrato() {
                 const l = p.fin_lancamentos
                 const isRec = l?.tipo === 'receita'
                 const isTransf = l?.is_transferencia
-                const vlr = p.valor_pago > 0 ? p.valor_pago : p.valor
+                const vlr = p._valor_exibido || (p.valor_pago > 0 ? p.valor_pago : p.valor)
+                const dataExib = p._data_exibida || (p.status==='pago' && p.data_pagamento ? p.data_pagamento : p.data_vencimento)
                 const scfg = STATUS_LABEL[p.status] || STATUS_LABEL.em_aberto
                 const hoje = new Date().toISOString().slice(0,10)
                 const vencida = p.status !== 'pago' && p.data_vencimento < hoje
@@ -302,8 +327,11 @@ export default function FinExtrato() {
                     opacity: isTransf ? 0.7 : 1,
                   }}>
                     <td style={{padding:'8px 14px',color:vencida?'var(--danger)':'var(--gray-600)',fontWeight:vencida?700:400,whiteSpace:'nowrap'}}>
-                      {p.status==='pago' && p.data_pagamento ? fmtData(p.data_pagamento) : fmtData(p.data_vencimento)}
-                      {p.status==='pago' && p.data_pagamento && p.data_pagamento !== p.data_vencimento &&
+                      {fmtData(dataExib)}
+                      {p._tipo_linha==='pagamento_parcial' && (
+                        <div style={{fontSize:10,color:'var(--purple)'}}>pagamento parcial</div>
+                      )}
+                      {p._tipo_linha!=='pagamento_parcial' && dataExib !== p.data_vencimento && p.status==='pago' &&
                         <div style={{fontSize:10,color:'var(--gray-400)'}}>prev: {fmtData(p.data_vencimento)}</div>
                       }
                     </td>
