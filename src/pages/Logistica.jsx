@@ -442,12 +442,26 @@ export default function Logistica({ csvInicial }) {
   async function confirmarEGerar() {
     let merged = orders.map(o=>manualAddr[o.id]?{...o,...manualAddr[o.id]}:o)
     for (const o of merged) {
-      if (o.cpfCnpj && manualAddr[o.id]?.rua) {
+      const temEndereco = manualAddr[o.id]?.rua || o.rua
+      if (!temEndereco) continue
+      if (o.cpfCnpj) {
         await supabase.from('enderecos_cache').upsert({
           cpf_cnpj:o.cpfCnpj, nome:o.nome, rua:o.rua, numero:o.numero,
           complemento:o.complemento, bairro:o.bairro, cidade:o.cidade, uf:o.uf, cep:o.cep, tel:o.tel,
           atualizado_em:new Date().toISOString(),
         },{ onConflict:'cpf_cnpj' })
+      } else if (o.nome && o.cep) {
+        // Sem CPF/CNPJ — salva por nome+cep (melhor esforço)
+        const { data: existing } = await supabase.from('enderecos_cache')
+          .select('cpf_cnpj').eq('nome', o.nome).eq('cep', o.cep).maybeSingle()
+        if (!existing) {
+          await supabase.from('enderecos_cache').insert({
+            cpf_cnpj: `sem-doc-${o.nome.slice(0,10).replace(/\s/g,'-')}-${o.cep}`,
+            nome:o.nome, rua:o.rua, numero:o.numero,
+            complemento:o.complemento, bairro:o.bairro, cidade:o.cidade, uf:o.uf, cep:o.cep, tel:o.tel,
+            atualizado_em:new Date().toISOString(),
+          })
+        }
       }
     }
     const built = buildRoutes(merged.filter(o=>!o.excluir))
@@ -469,12 +483,33 @@ export default function Logistica({ csvInicial }) {
     setBuscando(true)
     const dez = new Date(); dez.setDate(dez.getDate()-10)
     const { data } = await supabase
-      .from('rotas_historico_paradas')
-      .select('*, rota:rota_id(data_roteiro, criado_em)')
-      .eq('numero_pedido', buscaPedido.trim())
-      .gte('rota.data_roteiro', dez.toISOString().slice(0,10))
+      .from('logistica_historico')
+      .select('id, datas, rotas, criado_em')
+      .gte('criado_em', dez.toISOString())
       .order('criado_em', { ascending: false })
-    setResultadoBusca(data||[])
+
+    const numBusca = buscaPedido.trim().replace(/^#/,'')
+    const resultados = []
+    for (const h of (data||[])) {
+      for (const r of (h.rotas||[])) {
+        for (const stop of (r.stops||[])) {
+          if (String(stop.id).includes(numBusca) || stop.nome?.toLowerCase().includes(numBusca.toLowerCase())) {
+            resultados.push({
+              numero_pedido: stop.id,
+              nome: stop.nome,
+              rua: stop.rua, numero: stop.numero,
+              complemento: stop.complemento||'',
+              bairro: stop.bairro, cidade: stop.cidade,
+              uf: stop.uf, cep: stop.cep, tel: stop.tel||'',
+              rota_label: r.label,
+              datas: h.datas,
+              criado_em: h.criado_em,
+            })
+          }
+        }
+      }
+    }
+    setResultadoBusca(resultados)
     setBuscando(false)
   }
 
@@ -887,6 +922,36 @@ export default function Logistica({ csvInicial }) {
                         e.currentTarget.style.opacity = '0.4'
                       }}
                       onDragEnd={e => { e.currentTarget.style.opacity = '1' }}
+                      onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid var(--purple)' }}
+                      onDragLeave={e => { e.currentTarget.style.borderTop = '' }}
+                      onDrop={e => {
+                        e.preventDefault()
+                        e.currentTarget.style.borderTop = ''
+                        const payload = JSON.parse(e.dataTransfer.getData('stop') || '{}')
+                        if (!payload.stopId) return
+                        // Se é da mesma rota, reordena
+                        if (payload.fromRoute === rIdx) {
+                          setRoutes(prev => prev.map((rt, i) => {
+                            if (i !== rIdx) return rt
+                            const stops = [...rt.stops]
+                            const fromIdx = stops.findIndex(s => s.id === payload.stopId)
+                            if (fromIdx === -1 || fromIdx === idx) return rt
+                            const [moved] = stops.splice(fromIdx, 1)
+                            stops.splice(idx, 0, moved)
+                            return { ...rt, stops }
+                          }))
+                        } else {
+                          // Move entre rotas (comportamento anterior)
+                          setRoutes(prev => {
+                            const ns = prev.map(rt => ({ ...rt, stops: [...rt.stops] }))
+                            const fromStop = ns[payload.fromRoute]?.stops.find(s => s.id === payload.stopId)
+                            if (!fromStop) return prev
+                            ns[payload.fromRoute].stops = ns[payload.fromRoute].stops.filter(s => s.id !== payload.stopId)
+                            ns[rIdx].stops.splice(idx, 0, fromStop)
+                            return ns.filter(rt => rt.stops.length > 0).map((rt, i) => ({ ...rt, code: String(i+1).padStart(2,'0') }))
+                          })
+                        }
+                      }}
                       style={{
                         padding:'9px 14px', borderBottom:'1px solid var(--gray-100)',
                         display:'grid', gridTemplateColumns:'20px 20px 80px 160px 1fr 28px',
