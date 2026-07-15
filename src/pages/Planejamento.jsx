@@ -85,51 +85,75 @@ function headerDia(iso) { return `${diaSemana(iso)} ${fmtDataBr(iso)}` }
 function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const PAGE_H = 297 // A4 altura mm
+  const MARGIN = 14
 
-  // Header menor — 18px em vez de 28px
-  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 18, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(10); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 8)
+  // Header compacto
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness', MARGIN, 9)
   doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
-  doc.text(`Gerado: ${agora}`, 130, 8)
+  doc.text(`Gerado: ${agora}`, 130, 9)
 
-  // Título grande — "Produção do dia - Data"
-  doc.setTextColor(82, 46, 100); doc.setFontSize(18); doc.setFont(undefined, 'bold')
-  doc.text(`Produção do dia — ${headerDia(dataProducao)}`, 14, 30)
+  // Título "Produção do dia — Data"
+  doc.setTextColor(82, 46, 100); doc.setFontSize(16); doc.setFont(undefined, 'bold')
+  doc.text(`Produção do dia — ${headerDia(dataProducao)}`, MARGIN, 26)
 
-  // Observação se houver
-  let startY = 38
+  // Observação
+  let startY = 33
   if (observacao.trim()) {
-    doc.setFontSize(9); doc.setFont(undefined, 'italic'); doc.setTextColor(120, 80, 150)
-    doc.text(`Obs: ${observacao}`, 14, startY)
-    startY += 8
+    doc.setFontSize(8); doc.setFont(undefined, 'italic'); doc.setTextColor(120, 80, 150)
+    doc.text(`Obs: ${observacao}`, MARGIN, startY)
+    startY += 6
   }
 
+  // Monta body
   const body = []
   for (const cat of ORDEM_CATS) {
     const itens = (itensDia[cat] || []).filter(i => i.total > 0)
     if (!itens.length) continue
     const totalCat = itens.reduce((s, i) => s + i.total, 0)
     body.push([{ content: `${cat}  —  ${totalCat.toLocaleString('pt-BR')} un`, colSpan: 2,
-      styles: { fillColor: [103,63,124], textColor: [255,255,255], fontStyle: 'bold', fontSize: 8, cellPadding: 3 } }])
+      styles: { fillColor: [103,63,124], textColor: [255,255,255], fontStyle: 'bold', cellPadding: 2.5 } }])
     for (const i of itens) {
       body.push([i.nome, { content: i.total.toLocaleString('pt-BR'), styles: { halign: 'center', fontStyle: 'bold' } }])
     }
   }
 
+  // Rodapé — reserva 12mm no fundo
+  const FOOTER_H = 12
+  const availableH = PAGE_H - startY - FOOTER_H - MARGIN
+
+  // Calcula fontSize ideal para caber tudo
+  // Estimativa: cada linha ocupa ~(fontSize * 0.45) mm com cellPadding 2
+  const totalRows = body.length
+  const estimatedRowH = (fs) => fs * 0.45 + 4 // cellPadding
+  let fontSize = 9
+  while (fontSize > 5.5) {
+    const estH = totalRows * estimatedRowH(fontSize)
+    if (estH <= availableH) break
+    fontSize -= 0.5
+  }
+  const cellPad = fontSize < 7 ? 1.5 : 2
+
   autoTable(doc, {
     startY, body,
-    styles: { fontSize: 9, cellPadding: 3 },
+    styles: { fontSize, cellPadding: cellPad },
     alternateRowStyles: { fillColor: [248, 245, 252] },
-    columnStyles: { 1: { cellWidth: 24, halign: 'center' } },
-    margin: { left: 14, right: 14 },
+    columnStyles: { 1: { cellWidth: 22, halign: 'center' } },
+    margin: { left: MARGIN, right: MARGIN },
+    // Se ainda sobrar muito, distribui o espaço verticalmente
+    didDrawPage: () => {},
   })
 
-  const finalY = doc.lastAutoTable.finalY + 6
+  const finalY = doc.lastAutoTable.finalY + 4
+  // Total geral
   doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
-  doc.text(`Total geral: ${totalGeral.toLocaleString('pt-BR')} unidades`, 14, finalY)
-  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
-  doc.text('Laricas Fitness — Planejamento de Produção', 14, 290)
+  doc.text(`Total geral: ${totalGeral.toLocaleString('pt-BR')} unidades`, MARGIN, Math.min(finalY, PAGE_H - 10))
+
+  // Rodapé
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+  doc.text('Laricas Fitness — Planejamento de Produção', MARGIN, PAGE_H - 5)
   doc.save(`Producao_${dataProducao}.pdf`)
 }
 
