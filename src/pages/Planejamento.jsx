@@ -82,15 +82,28 @@ function diaSemana(iso) {
 function headerDia(iso) { return `${diaSemana(iso)} ${fmtDataBr(iso)}` }
 
 // ── PDF Produção (página única, compacto) ─────────────────────────────────────
-function gerarPDFProducao(dataProducao, itensDia, totalGeral) {
+function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
-  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 28, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(15); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 12)
-  doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
-  doc.text(`Produção do dia — ${headerDia(dataProducao)}`, 14, 20)
-  doc.text(`Gerado: ${agora}`, 130, 20)
+
+  // Header menor — 18px em vez de 28px
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 18, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(10); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness', 14, 8)
+  doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Gerado: ${agora}`, 130, 8)
+
+  // Título grande — "Produção do dia - Data"
+  doc.setTextColor(82, 46, 100); doc.setFontSize(18); doc.setFont(undefined, 'bold')
+  doc.text(`Produção do dia — ${headerDia(dataProducao)}`, 14, 30)
+
+  // Observação se houver
+  let startY = 38
+  if (observacao.trim()) {
+    doc.setFontSize(9); doc.setFont(undefined, 'italic'); doc.setTextColor(120, 80, 150)
+    doc.text(`Obs: ${observacao}`, 14, startY)
+    startY += 8
+  }
 
   const body = []
   for (const cat of ORDEM_CATS) {
@@ -105,10 +118,10 @@ function gerarPDFProducao(dataProducao, itensDia, totalGeral) {
   }
 
   autoTable(doc, {
-    startY: 33, body,
-    styles: { fontSize: 8, cellPadding: 2.5 },
+    startY, body,
+    styles: { fontSize: 9, cellPadding: 3 },
     alternateRowStyles: { fillColor: [248, 245, 252] },
-    columnStyles: { 1: { cellWidth: 22, halign: 'center' } },
+    columnStyles: { 1: { cellWidth: 24, halign: 'center' } },
     margin: { left: 14, right: 14 },
   })
 
@@ -199,7 +212,8 @@ export default function Planejamento({ onIrLogistica }) {
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
   const [datasAtivas, setDatasAtivas] = useState([])
-  const [csvRaw, setCsvRaw] = useState(null) // guarda o texto CSV para passar à logística
+  const [csvRaw, setCsvRaw] = useState(null)
+  const [observacao, setObservacao] = useState('')
   const fileRef = useRef()
 
   useEffect(() => {
@@ -277,7 +291,7 @@ export default function Planejamento({ onIrLogistica }) {
   }
 
   async function exportarPDFProducao() {
-    gerarPDFProducao(diaAtual, itensDiaAtual, totalDiaAtual)
+    gerarPDFProducao(diaAtual, itensDiaAtual, totalDiaAtual, observacao)
     try {
       const { data: plan, error } = await supabase.from('planejamentos')
         .insert({ data_producao: diaAtual }).select().single()
@@ -339,7 +353,16 @@ export default function Planejamento({ onIrLogistica }) {
           </div>
 
           {temDados && (
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              {/* Campo de observação */}
+              {diaAtual && (
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ marginBottom: 3 }}>Observação (aparece no PDF)</label>
+                  <input className="form-input" value={observacao} onChange={e => setObservacao(e.target.value)}
+                    placeholder="Ex: Produção reduzida, faltou Whey..."
+                    style={{ width: 280, fontSize: 12 }} />
+                </div>
+              )}
               <button className="btn btn-ghost" onClick={limpar}><Trash2 size={14} /> Limpar</button>
               {diaAtual && totalDiaAtual > 0 && (
                 <button className="btn btn-gold" onClick={exportarPDFProducao}>
