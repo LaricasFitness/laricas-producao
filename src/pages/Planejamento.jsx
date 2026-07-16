@@ -261,6 +261,7 @@ export default function Planejamento({ onIrLogistica }) {
   const [observacao, setObservacao] = useState('')
   const [itensExtras, setItensExtras] = useState([]) // [{id, nome, cat, qtd, data}]
   const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '', data: '' })
+  const [sugestoes, setSugestoes] = useState([]) // [{id, sku, nome, qtd, data, cat, confirmado}]
   const fileRef = useRef()
 
   useEffect(() => {
@@ -312,6 +313,32 @@ export default function Planejamento({ onIrLogistica }) {
       setDiasOrdenados(datas)
       setDatasAtivas([])
       setDiasDelivery({})
+
+      // Detecta SKUs não cadastrados — sugere como itens extras
+      const skusCadastrados = new Set(embalagens.map(e => e.codigo))
+      const novaSugestoes = []
+      // Agrupa por SKU: soma qtd por data
+      const skuMap = {} // { sku: { data: qtd } }
+      for (const { sku, qtd, data } of parsed) {
+        if (skusCadastrados.has(sku)) continue // já cadastrado, ignora
+        if (!skuMap[sku]) skuMap[sku] = {}
+        skuMap[sku][data] = (skuMap[sku][data] || 0) + qtd
+      }
+      // Cria uma sugestão por SKU×data
+      for (const [sku, porData] of Object.entries(skuMap)) {
+        for (const [data, qtd] of Object.entries(porData)) {
+          novaSugestoes.push({
+            id: `${sku}-${data}-${Date.now()}-${Math.random()}`,
+            sku,
+            nome: sku, // editável pelo operador
+            qtd,
+            data,
+            cat: ORDEM_CATS[0],
+            confirmado: false,
+          })
+        }
+      }
+      setSugestoes(novaSugestoes)
       setImportando(false)
     }
     reader.readAsText(file, 'UTF-8')
@@ -323,6 +350,7 @@ export default function Planejamento({ onIrLogistica }) {
 
   function limpar() {
     setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({})
+    setSugestoes([]); setItensExtras([])
   }
 
   const diasVisiveis = diasOrdenados.filter(d => datasAtivas.includes(d))
@@ -497,6 +525,87 @@ export default function Planejamento({ onIrLogistica }) {
           </div>
         )}
       </div>
+
+      {/* Sugestões de SKUs não cadastrados */}
+      {sugestoes.length > 0 && (
+        <div className="card card-pad" style={{ border: '2px solid var(--gold)', marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--gold)' }}>
+                ⚠️ {sugestoes.filter(s=>!s.confirmado).length} produto(s) não cadastrado(s) encontrado(s) no CSV
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>
+                Verifique nome, quantidade e data — confirme para adicionar como item extra
+              </div>
+            </div>
+            {sugestoes.every(s=>s.confirmado) && (
+              <span style={{ fontSize: 12, color: 'var(--ok)', fontWeight: 700 }}>✓ Todos confirmados</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {sugestoes.map(s => (
+              <div key={s.id} style={{
+                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+                padding: '10px 12px', borderRadius: 8,
+                background: s.confirmado ? '#f0fdf4' : '#fffbf0',
+                border: `1px solid ${s.confirmado ? 'var(--ok)' : 'var(--gold)'}`,
+                opacity: s.confirmado ? 0.7 : 1,
+              }}>
+                {/* SKU original — read only hint */}
+                <span style={{ fontSize: 11, color: 'var(--gray-400)', fontFamily: 'monospace', flexShrink: 0 }}>
+                  SKU: {s.sku}
+                </span>
+                {/* Nome editável */}
+                <input className="form-input" value={s.nome}
+                  disabled={s.confirmado}
+                  onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, nome:e.target.value} : x))}
+                  placeholder="Nome do produto" style={{ flex: 1, minWidth: 160, fontSize: 13 }} />
+                {/* Categoria */}
+                <select className="form-input" value={s.cat}
+                  disabled={s.confirmado}
+                  onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, cat:e.target.value} : x))}
+                  style={{ width: 160, fontSize: 13 }}>
+                  {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {/* Quantidade editável */}
+                <input type="number" className="form-input" value={s.qtd} min={1}
+                  disabled={s.confirmado}
+                  onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, qtd:parseInt(e.target.value)||0} : x))}
+                  style={{ width: 72, fontSize: 13 }} />
+                {/* Data editável */}
+                <select className="form-input" value={s.data}
+                  disabled={s.confirmado}
+                  onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, data:e.target.value} : x))}
+                  style={{ width: 120, fontSize: 13 }}>
+                  {diasOrdenados.map(d => <option key={d} value={d}>{headerDia(d)}</option>)}
+                </select>
+                {/* Ações */}
+                {!s.confirmado ? (
+                  <button className="btn btn-sm" style={{ background:'var(--gold)',color:'#fff',border:'none',flexShrink:0 }}
+                    onClick={() => {
+                      setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, confirmado:true} : x))
+                      setItensExtras(prev => [...prev, { id: s.id, nome: s.nome, cat: s.cat, qtd: s.qtd, data: s.data }])
+                    }}>
+                    ✓ Confirmar
+                  </button>
+                ) : (
+                  <button className="btn btn-ghost btn-sm" style={{ color:'var(--gray-400)',flexShrink:0 }}
+                    onClick={() => {
+                      setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, confirmado:false} : x))
+                      setItensExtras(prev => prev.filter(x => x.id !== s.id))
+                    }}>
+                    ↩ Desfazer
+                  </button>
+                )}
+                <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)',flexShrink:0 }}
+                  onClick={() => setSugestoes(prev => prev.filter(x => x.id !== s.id))}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Aviso sem data */}
       {temDados && datasAtivas.length === 0 && (
