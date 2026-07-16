@@ -171,6 +171,8 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   const [dataRec, setDataRec] = useState(new Date().toISOString().slice(0, 10))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [itensExtras, setItensExtras] = useState([]) // itens não cadastrados
+  const [novoItem, setNovoItem] = useState({ nome: '', qtd: '' })
 
   useEffect(() => {
     supabase.from('pedido_itens').select('*, embalagens(id, codigo, nome, estoque_atual)')
@@ -184,23 +186,44 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
       })
   }, [pedido.id])
 
+  function adicionarItemExtra() {
+    if (!novoItem.nome.trim() || !novoItem.qtd) return
+    setItensExtras(prev => [...prev, { id: `extra-${Date.now()}`, nome: novoItem.nome.trim(), qtd: parseInt(novoItem.qtd) || 0 }])
+    setNovoItem({ nome: '', qtd: '' })
+  }
+
   async function salvar() {
     setSaving(true)
     try {
+      // Itens cadastrados
       for (const item of itens) {
         const qtd = parseInt(recebidos[item.id]) || 0
         await supabase.from('pedido_itens')
           .update({ quantidade_recebida: qtd, recebido_em: dataRec })
           .eq('id', item.id)
-
-        // Adiciona ao estoque
         const estoqueAtual = item.embalagens?.estoque_atual || 0
         await supabase.from('embalagens')
           .update({ estoque_atual: estoqueAtual + qtd, atualizado_em: new Date().toISOString() })
           .eq('id', item.embalagem_id)
       }
+
+      // Itens extras — registra no inventário como observação e cria snapshot
+      for (const extra of itensExtras) {
+        if (extra.qtd <= 0) continue
+        // Salva no log de ações para rastreabilidade
+        await supabase.from('log_acoes').insert({
+          acao: 'recebimento_extra_grafica',
+          descricao: `Recebimento não cadastrado: "${extra.nome}" — ${extra.qtd} un (pedido #${pedido.numero})`,
+          tabela: 'pedidos_grafica',
+          dados_novos: { nome: extra.nome, qtd: extra.qtd, data: dataRec, pedido: pedido.numero },
+        })
+      }
+
       const todosOk = itens.every(i => parseInt(recebidos[i.id]) === i.quantidade_solicitada)
-      await supabase.from('pedidos_grafica').update({ status: todosOk ? 'recebido_total' : 'recebido_parcial' }).eq('id', pedido.id)
+      const temExtras = itensExtras.some(e => e.qtd > 0)
+      await supabase.from('pedidos_grafica').update({
+        status: todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
+      }).eq('id', pedido.id)
       onSaved()
     } catch (e) { alert('Erro: ' + e.message) }
     setSaving(false)
@@ -223,6 +246,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
             <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} style={{ maxWidth: 200 }} />
           </div>
           {loading ? <div className="loading"><RefreshCw size={16} className="spin" /></div> : (
+            <>
             <table className="tbl">
               <thead><tr><th>Embalagem</th><th>Pedido</th><th>Recebido</th></tr></thead>
               <tbody>
@@ -250,6 +274,58 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
                 })}
               </tbody>
             </table>
+
+            {/* Itens extras não cadastrados */}
+            <div style={{ marginTop: 16, borderTop: '1px solid var(--gray-200)', paddingTop: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--gray-600)', marginBottom: 8 }}>
+                📦 Itens recebidos não cadastrados no sistema
+              </div>
+              {itensExtras.length > 0 && (
+                <table className="tbl" style={{ marginBottom: 10 }}>
+                  <thead><tr><th>Descrição</th><th>Qtd</th><th></th></tr></thead>
+                  <tbody>
+                    {itensExtras.map(e => (
+                      <tr key={e.id}>
+                        <td>
+                          <input className="form-input" value={e.nome}
+                            onChange={ev => setItensExtras(prev => prev.map(x => x.id===e.id ? {...x, nome:ev.target.value} : x))}
+                            style={{ fontSize: 13, padding: '5px 8px' }} />
+                        </td>
+                        <td>
+                          <input type="number" min={1} className="qty-input"
+                            value={e.qtd}
+                            onChange={ev => setItensExtras(prev => prev.map(x => x.id===e.id ? {...x, qtd:parseInt(ev.target.value)||0} : x))} />
+                        </td>
+                        <td>
+                          <button className="btn btn-ghost btn-xs" style={{ color: 'var(--danger)' }}
+                            onClick={() => setItensExtras(prev => prev.filter(x => x.id !== e.id))}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input className="form-input" placeholder="Nome / descrição do item"
+                  value={novoItem.nome} onChange={e => setNovoItem(p => ({...p, nome: e.target.value}))}
+                  onKeyDown={e => e.key === 'Enter' && adicionarItemExtra()}
+                  style={{ flex: 1, fontSize: 13 }} />
+                <input type="number" min={1} className="form-input" placeholder="Qtd"
+                  value={novoItem.qtd} onChange={e => setNovoItem(p => ({...p, qtd: e.target.value}))}
+                  onKeyDown={e => e.key === 'Enter' && adicionarItemExtra()}
+                  style={{ width: 80, fontSize: 13 }} />
+                <button className="btn btn-ghost btn-sm" onClick={adicionarItemExtra}
+                  disabled={!novoItem.nome.trim() || !novoItem.qtd}>
+                  + Adicionar
+                </button>
+              </div>
+              {itensExtras.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 6 }}>
+                  ℹ️ Itens não cadastrados são registrados no log para referência. Cadastre no Admin para controlar o estoque.
+                </div>
+              )}
+            </div>
+            </>
           )}
         </div>
         <div className="modal-footer">
