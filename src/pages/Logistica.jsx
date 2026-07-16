@@ -466,6 +466,8 @@ export default function Logistica({ csvInicial }) {
     }
     const built = buildRoutes(merged.filter(o=>!o.excluir))
     setRoutes(built); setStep('ready')
+    // Salva automaticamente ao gerar — sem precisar exportar
+    salvarHistorico(built, dateStr, datasAtivas)
   }
 
   async function exportarTudo(rs) {
@@ -481,7 +483,7 @@ export default function Logistica({ csvInicial }) {
   async function buscarPedido() {
     if (!buscaPedido.trim()) return
     setBuscando(true)
-    const dez = new Date(); dez.setDate(dez.getDate()-10)
+    const dez = new Date(); dez.setDate(dez.getDate()-30)
     const { data } = await supabase
       .from('logistica_historico')
       .select('id, datas, rotas, criado_em')
@@ -693,7 +695,7 @@ export default function Logistica({ csvInicial }) {
         {/* Busca por pedido */}
         <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid var(--gray-200)' }}>
           <div style={{ fontSize:12, fontWeight:700, color:'var(--gray-500)', textTransform:'uppercase', letterSpacing:'.05em', marginBottom:8 }}>
-            🔍 Buscar pedido nos últimos 10 dias
+            🔍 Buscar pedido nos últimos 30 dias
           </div>
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             <input className="form-input" style={{ width:180 }} placeholder="Nº do pedido"
@@ -710,7 +712,7 @@ export default function Logistica({ csvInicial }) {
           {resultadoBusca!==null&&(
             <div style={{ marginTop:10 }}>
               {resultadoBusca.length===0?(
-                <div style={{ fontSize:13, color:'var(--gray-400)' }}>Nenhum resultado nos últimos 10 dias para "{buscaPedido}".</div>
+                <div style={{ fontSize:13, color:'var(--gray-400)' }}>Nenhum resultado nos últimos 30 dias para "{buscaPedido}".</div>
               ):(
                 resultadoBusca.map((p, idx)=>(
                   <div key={`${p.numero_pedido}-${idx}`} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid var(--gray-100)', flexWrap:'wrap' }}>
