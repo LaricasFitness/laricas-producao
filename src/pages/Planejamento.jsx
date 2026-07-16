@@ -238,6 +238,8 @@ export default function Planejamento({ onIrLogistica }) {
   const [datasAtivas, setDatasAtivas] = useState([])
   const [csvRaw, setCsvRaw] = useState(null)
   const [observacao, setObservacao] = useState('')
+  const [itensExtras, setItensExtras] = useState([]) // [{id, nome, cat, qtd}]
+  const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '' })
   const fileRef = useRef()
 
   useEffect(() => {
@@ -314,6 +316,17 @@ export default function Planejamento({ onIrLogistica }) {
     }))
   }
 
+  function adicionarExtra() {
+    if (!novoExtra.nome.trim() || !novoExtra.qtd) return
+    setItensExtras(prev => [...prev, {
+      id: Date.now(),
+      nome: novoExtra.nome.trim(),
+      cat: novoExtra.cat,
+      qtd: parseInt(novoExtra.qtd) || 0,
+    }])
+    setNovoExtra(p => ({ ...p, nome: '', qtd: '' }))
+  }
+
   async function exportarPDFProducao() {
     gerarPDFProducao(diaAtual, itensDiaAtual, totalDiaAtual, observacao)
     try {
@@ -344,7 +357,7 @@ export default function Planejamento({ onIrLogistica }) {
     } catch(e) { console.error('Erro ao salvar planejamento:', e) }
   }
 
-  // Monta dados do dia atual
+  // Monta dados do dia atual (CSV + extras manuais)
   const itensDiaAtual = {}
   if (diaAtual) {
     for (const cat of ORDEM_CATS) {
@@ -354,7 +367,16 @@ export default function Planejamento({ onIrLogistica }) {
         delivery: diasDelivery[diaAtual]?.[e.codigo] || 0,
         total: (diasBling[diaAtual]?.[e.codigo] || 0) + (diasDelivery[diaAtual]?.[e.codigo] || 0),
       })).filter(i => i.total > 0)
-      if (itens.length) itensDiaAtual[cat] = itens
+      // Adiciona extras manuais na categoria correta
+      const extras = itensExtras.filter(x => x.cat === cat && x.qtd > 0)
+        .map(x => ({ nome: x.nome, sku: null, bling: 0, delivery: 0, total: x.qtd, extra: true, extraId: x.id }))
+      const todos = [...itens, ...extras]
+      if (todos.length) itensDiaAtual[cat] = todos
+    }
+    // Extras sem categoria reconhecida vão para "Outros"
+    const semCat = itensExtras.filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0)
+    if (semCat.length) {
+      itensDiaAtual['Outros'] = semCat.map(x => ({ nome: x.nome, sku: null, bling: 0, delivery: 0, total: x.qtd, extra: true, extraId: x.id }))
     }
   }
   const totalDiaAtual = Object.values(itensDiaAtual).flat().reduce((s, i) => s + i.total, 0)
@@ -512,6 +534,37 @@ export default function Planejamento({ onIrLogistica }) {
                       const del = diaAtual ? (diasDelivery[diaAtual]?.[e.codigo] || 0) : 0
                       const tot = bAtual + del
                       const temResto = diasResto.some(d => (diasBling[d]?.[e.codigo] || 0) > 0)
+                      if (e.extra) {
+                        // Item extra manual
+                        return (
+                          <tr key={`extra-${e.extraId}`} style={{ background: '#fffbf0' }}>
+                            <td style={{ padding: '9px 14px', fontWeight: 600, borderBottom: '1px solid var(--gray-100)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 10, background: 'var(--gold)', color: '#fff', padding: '1px 5px', borderRadius: 4, fontWeight: 700 }}>EXTRA</span>
+                              {e.nome}
+                            </td>
+                            {diaAtual && (
+                              <>
+                                <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: 'var(--gray-300)', background: 'var(--purple-ghost)' }}>—</td>
+                                <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', background: 'var(--purple-ghost)' }}>
+                                  <input type="number" min={0} value={e.total || ''}
+                                    onChange={ev => setItensExtras(prev => prev.map(x => x.id === e.extraId ? { ...x, qtd: parseInt(ev.target.value) || 0 } : x))}
+                                    style={{ width: 60, padding: '5px 6px', border: '1.5px solid var(--gold)', borderRadius: 6, fontSize: 13, fontWeight: 700, textAlign: 'center', background: '#fffbf0', outline: 'none' }} />
+                                </td>
+                                <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', fontWeight: 800, fontSize: 15, color: 'var(--gray-800)', background: 'var(--purple-ghost)' }}>
+                                  {e.total > 0 ? e.total : '—'}
+                                </td>
+                              </>
+                            )}
+                            {diasResto.map(d => (
+                              <td key={d} style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: 'var(--gray-300)' }}>—</td>
+                            ))}
+                            <td style={{ padding: '0 6px' }}>
+                              <button onClick={() => setItensExtras(prev => prev.filter(x => x.id !== e.extraId))}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14, padding: 2 }}>✕</button>
+                            </td>
+                          </tr>
+                        )
+                      }
                       return (
                         <tr key={e.codigo} style={{ opacity: tot === 0 && !temResto ? 0.4 : 1 }}>
                           <td style={{ padding: '9px 14px', fontWeight: tot > 0 ? 600 : 400, borderBottom: '1px solid var(--gray-100)' }}>{e.nome}</td>
@@ -546,6 +599,29 @@ export default function Planejamento({ onIrLogistica }) {
               </tbody>
             </table>
           </div>
+
+          {/* Adicionar item extra */}
+          {diaAtual && (
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--gray-100)', background: '#fffbf0', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gold)', flexShrink: 0 }}>+ Item extra:</span>
+              <input className="form-input" placeholder="Nome do produto"
+                value={novoExtra.nome} onChange={e => setNovoExtra(p => ({ ...p, nome: e.target.value }))}
+                style={{ flex: 1, minWidth: 180, fontSize: 13 }} />
+              <select className="form-input" value={novoExtra.cat}
+                onChange={e => setNovoExtra(p => ({ ...p, cat: e.target.value }))}
+                style={{ width: 180, fontSize: 13 }}>
+                {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <input type="number" className="form-input" placeholder="Qtd" min={1}
+                value={novoExtra.qtd} onChange={e => setNovoExtra(p => ({ ...p, qtd: e.target.value }))}
+                style={{ width: 80, fontSize: 13 }}
+                onKeyDown={e => { if (e.key === 'Enter') adicionarExtra() }} />
+              <button className="btn btn-gold" onClick={adicionarExtra}
+                disabled={!novoExtra.nome.trim() || !novoExtra.qtd}>
+                + Adicionar
+              </button>
+            </div>
+          )}
 
           {totalDiaAtual > 0 && (
             <div style={{ padding: '12px 20px', borderTop: '2px solid var(--purple-pale)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
