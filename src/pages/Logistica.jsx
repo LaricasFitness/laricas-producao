@@ -712,15 +712,15 @@ export default function Logistica({ csvInicial }) {
               {resultadoBusca.length===0?(
                 <div style={{ fontSize:13, color:'var(--gray-400)' }}>Nenhum resultado nos últimos 10 dias para "{buscaPedido}".</div>
               ):(
-                resultadoBusca.map(p=>(
-                  <div key={p.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid var(--gray-100)', flexWrap:'wrap' }}>
+                resultadoBusca.map((p, idx)=>(
+                  <div key={`${p.numero_pedido}-${idx}`} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid var(--gray-100)', flexWrap:'wrap' }}>
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:700, fontSize:13 }}>#{p.numero_pedido} · {p.nome}</div>
                       <div style={{ fontSize:12, color:'var(--gray-500)' }}>
                         {p.rua}, {p.numero}{p.complemento?` - ${p.complemento}`:''} · {p.bairro} · {p.cidade}/{p.uf} · CEP {p.cep}
                       </div>
                       <div style={{ fontSize:11, color:'var(--gray-400)', marginTop:2 }}>
-                        Rota {p.rota_code} — {p.rota_label} · {p.rota?.data_roteiro ? new Date(p.rota.data_roteiro+'T12:00:00').toLocaleDateString('pt-BR') : ''}
+                        Rota {p.rota_label} · {(p.datas||[]).join(', ')} · registrado {new Date(p.criado_em).toLocaleDateString('pt-BR')}
                       </div>
                     </div>
                     {step==='ready'&&(
