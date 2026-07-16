@@ -158,7 +158,7 @@ function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
 }
 
 // ── PDF Produção Completa ─────────────────────────────────────────────────────
-function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual) {
+function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras=[]) {
   const doc = new jsPDF('l', 'mm', 'a4')
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
   doc.setFillColor(82, 46, 100); doc.rect(0, 0, 297, 38, 'F')
@@ -172,18 +172,26 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
   const colHead = ['Produto', 'Bling', 'Delivery', 'Total']
   diasResto.forEach(d => colHead.push(headerDia(d)))
 
-  const cats = ORDEM_CATS.filter(cat =>
-    embalagens.some(e => e.categoria === cat &&
-      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0)
-    )
-  )
+  // Categorias com dados (CSV ou extras)
+  const catsComDados = ORDEM_CATS.filter(cat => {
+    const temCSV = embalagens.some(e => e.categoria === cat &&
+      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0))
+    const temExtra = itensExtras.some(x => x.cat === cat && x.qtd > 0 && diasVisiveis.includes(x.data))
+    return temCSV || temExtra
+  })
+  // Extras em categorias não reconhecidas
+  const catsExtras = [...new Set(itensExtras
+    .filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 && diasVisiveis.includes(x.data))
+    .map(x => x.cat))]
+  const todasCats = [...catsComDados, ...catsExtras]
 
   let startY = 46
-  for (const cat of cats) {
-    const itens = embalagens.filter(e => e.categoria === cat && (
-      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0)
-    ))
-    if (!itens.length) continue
+  for (const cat of todasCats) {
+    const itensCSV = embalagens.filter(e => e.categoria === cat &&
+      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0))
+    const extrasNaCat = itensExtras.filter(x => x.cat === cat && x.qtd > 0 && diasVisiveis.includes(x.data))
+
+    if (!itensCSV.length && !extrasNaCat.length) continue
 
     autoTable(doc, {
       startY,
@@ -193,14 +201,27 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
       margin: { left: 14, right: 14 },
     })
 
-    const body = itens.map(e => {
+    const body = []
+
+    // Itens do CSV
+    for (const e of itensCSV) {
       const b = diasBling[diaAtual]?.[e.codigo] || 0
       const del = diasDelivery[diaAtual]?.[e.codigo] || 0
       const tot = b + del
       const row = [e.nome, b > 0 ? b : '—', del > 0 ? del : '—', tot > 0 ? tot : '—']
       diasResto.forEach(d => { const bR = diasBling[d]?.[e.codigo] || 0; row.push(bR > 0 ? bR : '—') })
-      return row
-    })
+      body.push(row)
+    }
+
+    // Itens extras — aparecem na coluna da sua data
+    for (const x of extrasNaCat) {
+      const row = [`${x.nome} ✦`, '—', '—', '—']
+      // Para diaAtual
+      if (x.data === diaAtual) { row[1] = '—'; row[2] = String(x.qtd); row[3] = String(x.qtd) }
+      // Para diasResto
+      diasResto.forEach(d => { row.push(x.data === d ? String(x.qtd) : '—') })
+      body.push(row)
+    }
 
     autoTable(doc, {
       startY: doc.lastAutoTable.finalY,
@@ -218,7 +239,7 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
     })
 
     startY = doc.lastAutoTable.finalY + 5
-    if (startY > 175 && cats.indexOf(cat) < cats.length - 1) { doc.addPage(); startY = 14 }
+    if (startY > 175 && todasCats.indexOf(cat) < todasCats.length - 1) { doc.addPage(); startY = 14 }
   }
 
   doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(150,150,150)
@@ -238,8 +259,8 @@ export default function Planejamento({ onIrLogistica }) {
   const [datasAtivas, setDatasAtivas] = useState([])
   const [csvRaw, setCsvRaw] = useState(null)
   const [observacao, setObservacao] = useState('')
-  const [itensExtras, setItensExtras] = useState([]) // [{id, nome, cat, qtd}]
-  const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '' })
+  const [itensExtras, setItensExtras] = useState([]) // [{id, nome, cat, qtd, data}]
+  const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '', data: '' })
   const fileRef = useRef()
 
   useEffect(() => {
@@ -318,13 +339,15 @@ export default function Planejamento({ onIrLogistica }) {
 
   function adicionarExtra() {
     if (!novoExtra.nome.trim() || !novoExtra.qtd) return
+    const dataExtra = novoExtra.data || diaAtual
     setItensExtras(prev => [...prev, {
       id: Date.now(),
       nome: novoExtra.nome.trim(),
       cat: novoExtra.cat,
       qtd: parseInt(novoExtra.qtd) || 0,
+      data: dataExtra,
     }])
-    setNovoExtra(p => ({ ...p, nome: '', qtd: '' }))
+    setNovoExtra(p => ({ ...p, nome: '', qtd: '', data: '' }))
   }
 
   async function exportarPDFProducao() {
@@ -367,14 +390,14 @@ export default function Planejamento({ onIrLogistica }) {
         delivery: diasDelivery[diaAtual]?.[e.codigo] || 0,
         total: (diasBling[diaAtual]?.[e.codigo] || 0) + (diasDelivery[diaAtual]?.[e.codigo] || 0),
       })).filter(i => i.total > 0)
-      // Adiciona extras manuais na categoria correta
-      const extras = itensExtras.filter(x => x.cat === cat && x.qtd > 0)
+      // Adiciona extras manuais na categoria correta — filtra pela data selecionada
+      const extras = itensExtras.filter(x => x.cat === cat && x.qtd > 0 && x.data === diaAtual)
         .map(x => ({ nome: x.nome, sku: null, bling: 0, delivery: 0, total: x.qtd, extra: true, extraId: x.id }))
       const todos = [...itens, ...extras]
       if (todos.length) itensDiaAtual[cat] = todos
     }
     // Extras sem categoria reconhecida vão para "Outros"
-    const semCat = itensExtras.filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0)
+    const semCat = itensExtras.filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 && x.data === diaAtual)
     if (semCat.length) {
       itensDiaAtual['Outros'] = semCat.map(x => ({ nome: x.nome, sku: null, bling: 0, delivery: 0, total: x.qtd, extra: true, extraId: x.id }))
     }
@@ -421,7 +444,7 @@ export default function Planejamento({ onIrLogistica }) {
                 </button>
               )}
               {diaAtual && (
-                <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual)}>
+                <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras)}>
                   <FileText size={14} /> PDF Produção Completa
                 </button>
               )}
@@ -538,10 +561,13 @@ export default function Planejamento({ onIrLogistica }) {
                         // Item extra manual
                         return (
                           <tr key={`extra-${e.extraId}`} style={{ background: '#fffbf0' }}>
-                            <td style={{ padding: '9px 14px', fontWeight: 600, borderBottom: '1px solid var(--gray-100)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ fontSize: 10, background: 'var(--gold)', color: '#fff', padding: '1px 5px', borderRadius: 4, fontWeight: 700 }}>EXTRA</span>
+                            <td style={{ padding: '9px 14px', fontWeight: 600, borderBottom: '1px solid var(--gray-100)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontSize: 10, background: 'var(--gold)', color: '#fff', padding: '1px 5px', borderRadius: 4, fontWeight: 700, flexShrink: 0 }}>EXTRA</span>
                               {e.nome}
-                            </td>
+                              {(() => { const x = itensExtras.find(ix=>ix.id===e.extraId); return x?.data && x.data !== diaAtual ? <span style={{fontSize:10,color:'var(--gray-400)',marginLeft:4}}>({headerDia(x.data)})</span> : null })()}
+                            </div>
+                          </td>
                             {diaAtual && (
                               <>
                                 <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: 'var(--gray-300)', background: 'var(--purple-ghost)' }}>—</td>
@@ -556,7 +582,9 @@ export default function Planejamento({ onIrLogistica }) {
                               </>
                             )}
                             {diasResto.map(d => (
-                              <td key={d} style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: 'var(--gray-300)' }}>—</td>
+                              <td key={d} style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: 'var(--gray-800)', fontWeight: itensExtras.find(x=>x.id===e.extraId)?.data===d?700:300 }}>
+                                {itensExtras.find(x=>x.id===e.extraId)?.data===d ? e.total : '—'}
+                              </td>
                             ))}
                             <td style={{ padding: '0 6px' }}>
                               <button onClick={() => setItensExtras(prev => prev.filter(x => x.id !== e.extraId))}
@@ -606,16 +634,26 @@ export default function Planejamento({ onIrLogistica }) {
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gold)', flexShrink: 0 }}>+ Item extra:</span>
               <input className="form-input" placeholder="Nome do produto"
                 value={novoExtra.nome} onChange={e => setNovoExtra(p => ({ ...p, nome: e.target.value }))}
-                style={{ flex: 1, minWidth: 180, fontSize: 13 }} />
+                style={{ flex: 1, minWidth: 160, fontSize: 13 }} />
               <select className="form-input" value={novoExtra.cat}
                 onChange={e => setNovoExtra(p => ({ ...p, cat: e.target.value }))}
-                style={{ width: 180, fontSize: 13 }}>
+                style={{ width: 170, fontSize: 13 }}>
                 {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               <input type="number" className="form-input" placeholder="Qtd" min={1}
                 value={novoExtra.qtd} onChange={e => setNovoExtra(p => ({ ...p, qtd: e.target.value }))}
-                style={{ width: 80, fontSize: 13 }}
+                style={{ width: 72, fontSize: 13 }}
                 onKeyDown={e => { if (e.key === 'Enter') adicionarExtra() }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11, color: 'var(--gray-500)', flexShrink: 0 }}>Data:</span>
+                <select className="form-input" value={novoExtra.data || diaAtual}
+                  onChange={e => setNovoExtra(p => ({ ...p, data: e.target.value }))}
+                  style={{ width: 120, fontSize: 13 }}>
+                  {diasVisiveis.map(d => (
+                    <option key={d} value={d}>{headerDia(d)}{d === diaAtual ? ' (hoje)' : ''}</option>
+                  ))}
+                </select>
+              </div>
               <button className="btn btn-gold" onClick={adicionarExtra}
                 disabled={!novoExtra.nome.trim() || !novoExtra.qtd}>
                 + Adicionar
