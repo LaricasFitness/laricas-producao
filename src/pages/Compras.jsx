@@ -320,7 +320,7 @@ function gerarPDFCompras(recebimentos) {
     body: recebimentos.map(r => [
       new Date(r.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR'),
       r.numero_nf || '—',
-      (r.recebimento_itens || []).map(i => `${i.embalagens?.nome}: ${fmt(i.quantidade_recebida)} un`).join('\n'),
+      (r.recebimento_itens || []).map(i => `${i.embalagens?.nome || i.nome_livre || 'Item'}: ${fmt(i.quantidade_recebida)} un`).join('\n'),
       r.valor_total ? fmtR(r.valor_total) : '—',
     ]),
     styles: { fontSize: 9, cellPadding: 4 },
@@ -490,8 +490,11 @@ export default function Compras({ tipo = 'rotulo' }) {
                                   {(r.recebimento_itens || []).map(i => (
                                     <tr key={i.id}>
                                       <td>
-                                        <div style={{ fontWeight: 600 }}>{i.embalagens?.nome}</div>
-                                        <div style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{i.embalagens?.codigo}</div>
+                                        <div style={{ fontWeight: 600 }}>
+                                          {i.embalagens?.nome || i.nome_livre || <span style={{color:'var(--gray-400)',fontStyle:'italic'}}>sem nome</span>}
+                                        </div>
+                                        {i.embalagens?.codigo && <div style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{i.embalagens.codigo}</div>}
+                                        {!i.embalagens && i.nome_livre && <div style={{ fontSize: 10, color: 'var(--gold)', fontWeight: 600 }}>não cadastrado</div>}
                                       </td>
                                       <td>{fmt(i.quantidade_recebida)} un</td>
                                       <td>{i.valor_unitario ? fmtR(i.valor_unitario) : '—'}</td>
