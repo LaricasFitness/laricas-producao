@@ -49,16 +49,19 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [filtro, setFiltro] = useState('todos')
+  const [filtroCategoria, setFiltroCategoria] = useState('todas')
   const [expandido, setExpandido] = useState(null)
 
   async function load() {
     setLoading(true)
-    setData([]) // limpa dados antigos imediatamente para evitar flash de tipo errado
+    setData([])
     try { setData(await carregarStatusCompleto(tipo)) } catch(e) { console.error(e) }
     setLoading(false)
   }
 
   useEffect(() => { load() }, [tipo])
+
+  const categorias = [...new Set(data.map(d => d.categoria).filter(Boolean))].sort()
 
   const criticos  = data.filter(d => d.status === 'critico')
   const atencao   = data.filter(d => d.status === 'atencao')
@@ -66,8 +69,11 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
   const semDados  = data.filter(d => d.status === 'sem-dados')
   const precisam  = data.filter(d => d.qtdPedido > 0)
 
-  const filtered = filtro === 'todos' ? data
-    : data.filter(d => d.status === filtro)
+  const filtered = data
+    .filter(d => filtro === 'todos' || d.status === filtro)
+    .filter(d => filtroCategoria === 'todas' || d.categoria === filtroCategoria)
+
+  const valorTotalEstoque = filtered.reduce((s, d) => s + (d.valorEstoque || 0), 0)
 
   return (
     <>
@@ -93,6 +99,15 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
           <div className="kpi-value">{data.length}</div>
           <div className="kpi-detail">{semDados.length} sem histórico</div>
         </div>
+        {valorTotalEstoque > 0 && (
+          <div className="kpi" style={{ borderColor: 'var(--purple)' }}>
+            <div className="kpi-label">💰 Valor em estoque</div>
+            <div className="kpi-value" style={{ color: 'var(--purple)', fontSize: 16 }}>
+              {valorTotalEstoque.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </div>
+            <div className="kpi-detail">{filtroCategoria !== 'todas' ? filtroCategoria : 'todos os itens filtrados'}</div>
+          </div>
+        )}
       </div>
 
       {/* Alertas */}
@@ -126,7 +141,15 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 20px', borderBottom: '1px solid var(--gray-200)' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>Status das embalagens</div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {/* Filtro por categoria */}
+            {categorias.length > 0 && (
+              <select className="form-input" value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)}
+                style={{ fontSize: 12, padding: '4px 8px', height: 28, width: 'auto' }}>
+                <option value="todas">Todas categorias</option>
+                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
             {[['todos','Todas'], ['critico','Críticas'], ['atencao','Atenção'], ['ok','OK']].map(([v, l]) => (
               <button key={v} className={`btn btn-xs ${filtro === v ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setFiltro(v)}>{l}</button>
@@ -149,6 +172,7 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
                   <th>Embalagem</th>
                   <th>Status</th>
                   <th>Estoque atual</th>
+                  <th>Valor estoque</th>
                   <th>Dias restantes</th>
                   <th>Cobertura</th>
                   <th>Consumo/dia</th>
@@ -169,6 +193,14 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
                       </td>
                       <td><span className={`pill ${cfg.cls}`}>{cfg.icon} {cfg.label}</span></td>
                       <td className="fw-bold">{(emb.estoque_atual || 0).toLocaleString('pt-BR')} un</td>
+                      <td style={{ fontSize: 12 }}>
+                        {emb.valorEstoque > 0
+                          ? <span style={{ color: 'var(--purple)', fontWeight: 600 }}>
+                              {emb.valorEstoque.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                          : <span className="text-muted">—</span>
+                        }
+                      </td>
                       <td>
                         {emb.diasRestantes !== null ? (
                           <span style={{ fontWeight: 700, color: emb.diasRestantes <= emb.dias ? 'var(--danger)' : emb.diasRestantes <= emb.dias * 2 ? 'var(--warning)' : 'var(--ok)' }}>
