@@ -138,23 +138,16 @@ function parsearTodosOsPedidos(texto, datasFiltro) {
   return pedidosMap
 }
 
-function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
-  const pedidosMap = parsearTodosOsPedidos(csvTexto, dataFiltro)
-  const todos = Object.values(pedidosMap)
-  if (!todos.length) { alert('Nenhum pedido encontrado para esta data.'); return }
-
-  // Agrupa por transportadora
-  const porTransp = {}
-  for (const p of todos) {
-    const t = p.transportadora
-    if (!porTransp[t]) porTransp[t] = []
-    porTransp[t].push(p)
-  }
+function gerarPDFConferencia(routes, dateStr) {
+  if (!routes || !routes.length) { alert('Nenhum roteiro gerado.'); return }
 
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
-  const totalPedidos = todos.length
-  const totalItens = todos.reduce((s,p) => s + p.itens.reduce((si,i) => si+i.qtd, 0), 0)
+
+  // Agrupa todos os stops por transportadora (lalamove = todas as rotas)
+  const todosPedidos = routes.flatMap(r => r.stops.map(s => ({ ...s, rota: r.label, rota_code: r.code })))
+  const totalPedidos = todosPedidos.length
+  const totalItens = todosPedidos.reduce((s,p) => s + (p.itens||[]).reduce((si,i) => si+i.qtd, 0), 0)
 
   // Header
   doc.setFillColor(82, 46, 100)
@@ -164,30 +157,29 @@ function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
   doc.text('Laricas Fitness — Conferência de Expedição', 14, 14)
   doc.setFontSize(9); doc.setFont(undefined, 'normal')
   doc.setTextColor(255, 255, 255)
-  doc.text(`Data: ${dateStr}   |   ${totalPedidos} pedidos   |   ${totalItens} unidades no total`, 14, 22)
-  doc.text(`Impresso: ${agora}`, 14, 29)
+  doc.text(`Data: ${dateStr}`, 14, 22)
+  doc.text(`Total de pedidos: ${totalPedidos}`, 14, 28)
+  doc.text(`Gerado: ${agora}`, 110, 22)
 
-  let y = 42
+  let y = 44
 
-  for (const [transp, pedidos] of Object.entries(porTransp).sort()) {
-    const totalT = pedidos.reduce((s,p) => s + p.itens.reduce((si,i) => si+i.qtd, 0), 0)
+  // Uma secção por rota
+  for (const r of routes) {
+    if (!r.stops.length) continue
 
-    // Header da transportadora
-    doc.setFillColor(50, 50, 50)
-    doc.rect(14, y, 182, 8, 'F')
-    doc.setTextColor(255, 255, 255)
-    doc.setFontSize(9); doc.setFont(undefined, 'bold')
-    doc.text(`${transp.toUpperCase()}   —   ${pedidos.length} pedido${pedidos.length>1?'s':''}   |   ${totalT} un.`, 17, y+5.5)
-    y += 10
+    // Header da rota
+    doc.setFontSize(11); doc.setFont(undefined, 'bold'); doc.setTextColor(82, 46, 100)
+    doc.text(`Rota ${r.code} — ${r.label} (${r.stops.length} paradas)`, 14, y)
+    y += 6
 
-    const body = pedidos.map((p, i) => {
-      const totalQtd = p.itens.reduce((s,it) => s+it.qtd, 0)
+    const body = r.stops.map((p, i) => {
+      const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
       return [
         { content: '☐', styles: { halign:'center', fontSize:11 } },
         String(i+1),
         `#${p.id}`,
         p.nome || '—',
-        { content: String(totalQtd), styles: { halign:'center', fontStyle:'bold', fontSize:11 } },
+        { content: String(totalQtd) || '—', styles: { halign:'center', fontStyle:'bold', fontSize:11 } },
       ]
     })
 
@@ -208,8 +200,6 @@ function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
         0: { cellWidth:12, halign:'center' },
         1: { cellWidth:10 },
         2: { cellWidth:32 },
-        3: { cellWidth:60 },
-        4: { cellWidth:14, halign:'center' },
       },
       margin: { left:14, right:14 },
     })
@@ -223,10 +213,11 @@ function gerarPDFConferencia(csvTexto, dataFiltro, dateStr) {
   for (let i=1; i<=pageCount; i++) {
     doc.setPage(i)
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
-    doc.text(`Laricas Fitness · Conferência de Expedição · ${dateStr} · Página ${i}/${pageCount}`, 14, 291)
+    doc.text('Laricas Fitness — Conferência de Expedição', 14, 289)
+    doc.text(`Pág ${i}/${pageCount}`, 185, 289)
   }
 
-  doc.save(`Conferencia_Expedicao_${dateStr.replace(/\//g,'-')}.pdf`)
+  doc.save(`Conferencia_${dateStr.replace(/\//g,'-')}.pdf`)
 }
 
 function buildLalamoveCSV(route) {
@@ -869,7 +860,7 @@ export default function Logistica({ csvInicial }) {
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
               {csvRaw && (
-                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(csvRaw, datasAtivas, dateStr)}>
+                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr)}>
                   <FileText size={14}/> PDF Conferência
                 </button>
               )}
