@@ -517,11 +517,42 @@ export default function Pedidos({ abrirNovo, onNovoClosed, tipo = 'rotulo' }) {
                 <span className={`pill ${STATUS_LABEL[p.status]?.cls || 'pill-gray'}`}>
                   {STATUS_LABEL[p.status]?.label || p.status}
                 </span>
+                {/* Gerar PDF novamente */}
+                <button className="btn btn-ghost btn-sm" title="Gerar PDF"
+                  onClick={async () => {
+                    // Carrega itens se ainda não carregados
+                    let itens = itensPedido[p.id]
+                    if (!itens) {
+                      const { data } = await supabase.from('pedido_itens')
+                        .select('*, embalagens(codigo, nome, categoria)').eq('pedido_id', p.id)
+                      itens = data || []
+                      setItensPedido(prev => ({ ...prev, [p.id]: itens }))
+                    }
+                    gerarPDF(p.numero, itens.map(i => ({
+                      codigo: i.embalagens?.codigo,
+                      nome: i.embalagens?.nome,
+                      categoria: i.embalagens?.categoria,
+                      qtd: i.quantidade_solicitada,
+                    })), p.observacao || '')
+                  }}>
+                  📄 PDF
+                </button>
                 {(p.status === 'enviado' || p.status === 'recebido_parcial') && (
                   <button className="btn btn-ghost btn-sm" onClick={() => setConferindo(p)}>
                     📥 Conferir
                   </button>
                 )}
+                {/* Excluir pedido */}
+                <button className="btn btn-ghost btn-sm" title="Excluir pedido"
+                  style={{ color: 'var(--danger)' }}
+                  onClick={async () => {
+                    if (!window.confirm(`Excluir pedido ${p.numero}? Esta ação não pode ser desfeita.`)) return
+                    await supabase.from('pedido_itens').delete().eq('pedido_id', p.id)
+                    await supabase.from('pedidos_grafica').delete().eq('id', p.id)
+                    load()
+                  }}>
+                  🗑️
+                </button>
                 <button className="btn btn-ghost btn-sm" onClick={() => toggleExpand(p.id)}>
                   {expandido === p.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
