@@ -254,6 +254,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   const [itensExtras, setItensExtras] = useState([])
   const [novoItem, setNovoItem] = useState({ nome: '', qtd: '' })
   const [cadastrando, setCadastrando] = useState(null)
+  const [valorTotal, setValorTotal] = useState('')
 
   useEffect(() => {
     supabase.from('pedido_itens').select('*, embalagens(id, codigo, nome, estoque_atual)')
@@ -306,10 +307,9 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           .eq('id', item.embalagem_id)
       }
 
-      // Itens extras — registra no inventário como observação e cria snapshot
+      // Itens extras — registra no log
       for (const extra of itensExtras) {
         if (extra.qtd <= 0) continue
-        // Salva no log de ações para rastreabilidade
         await supabase.from('log_acoes').insert({
           acao: 'recebimento_extra_grafica',
           descricao: `Recebimento não cadastrado: "${extra.nome}" — ${extra.qtd} un (pedido #${pedido.numero})`,
@@ -320,9 +320,56 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
 
       const todosOk = itens.every(i => parseInt(recebidos[i.id]) === i.quantidade_solicitada)
       const temExtras = itensExtras.some(e => e.qtd > 0)
-      await supabase.from('pedidos_grafica').update({
-        status: todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
-      }).eq('id', pedido.id)
+      const novoStatus = todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
+
+      // Integração financeira — cria ou atualiza Conta a Pagar
+      const valor = parseFloat(String(valorTotal).replace(',', '.')) || 0
+      if (valor > 0) {
+        // Busca fornecedor PressPlate
+        const { data: fornecedor } = await supabase
+          .from('fin_fornecedores').select('id').eq('nome_fantasia', 'PressPlate').maybeSingle()
+
+        // Vencimento = data recebimento + 30 dias
+        const venc = new Date(dataRec); venc.setDate(venc.getDate() + 30)
+        const vencStr = venc.toISOString().slice(0, 10)
+
+        if (pedido.fin_lancamento_id) {
+          // Atualiza lançamento existente
+          await supabase.from('fin_lancamentos').update({
+            valor_total: valor,
+            fornecedor_id: fornecedor?.id || null,
+          }).eq('id', pedido.fin_lancamento_id)
+          await supabase.from('fin_parcelas').update({
+            valor, data_vencimento: vencStr, data_competencia: dataRec,
+          }).eq('lancamento_id', pedido.fin_lancamento_id)
+        } else {
+          // Cria novo lançamento de Conta a Pagar
+          const { data: lanc } = await supabase.from('fin_lancamentos').insert({
+            tipo: 'despesa',
+            descricao: `Embalagens gráfica — Pedido ${pedido.numero}`,
+            valor_total: valor,
+            fornecedor_id: fornecedor?.id || null,
+            total_parcelas: 1,
+            criado_por: 'sistema',
+          }).select().single()
+
+          if (lanc) {
+            await supabase.from('fin_parcelas').insert({
+              lancamento_id: lanc.id,
+              numero_parcela: 1,
+              valor,
+              data_vencimento: vencStr,
+              data_competencia: dataRec,
+              status: 'em_aberto',
+            })
+            // Vincula pedido ao lançamento
+            await supabase.from('pedidos_grafica')
+              .update({ fin_lancamento_id: lanc.id }).eq('id', pedido.id)
+          }
+        }
+      }
+
+      await supabase.from('pedidos_grafica').update({ status: novoStatus }).eq('id', pedido.id)
       onSaved()
     } catch (e) { alert('Erro: ' + e.message) }
     setSaving(false)
@@ -336,13 +383,24 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          <p style={{ fontSize: 14, color: 'var(--gray-600)', lineHeight: 1.5 }}>
-            Preencha a quantidade que a gráfica <strong>realmente entregou</strong>.
-            O sistema vai adicionar ao estoque automaticamente.
-          </p>
-          <div className="form-group">
-            <label className="form-label">Data de recebimento</label>
-            <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} style={{ maxWidth: 200 }} />
+          <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div className="form-group" style={{ flex: 1, minWidth: 160, marginBottom: 0 }}>
+              <label className="form-label">Data de recebimento</label>
+              <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
+            </div>
+            <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
+              <label className="form-label">
+                💰 Valor total da nota (R$)
+                <span style={{ fontSize: 11, color: 'var(--gray-400)', marginLeft: 6 }}>→ vence em 30 dias</span>
+              </label>
+              <input type="number" className="form-input" step="0.01" min="0"
+                value={valorTotal} onChange={e => setValorTotal(e.target.value)}
+                placeholder="0,00" />
+              {pedido.fin_lancamento_id
+                ? <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 3 }}>✓ Vinculado ao financeiro — atualiza valor existente</div>
+                : <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 3 }}>Preencha para criar Conta a Pagar no financeiro</div>
+              }
+            </div>
           </div>
           {loading ? <div className="loading"><RefreshCw size={16} className="spin" /></div> : (
             <>
