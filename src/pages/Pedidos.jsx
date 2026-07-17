@@ -23,22 +23,50 @@ function gerarPDF(numero, itens, obs) {
   doc.setTextColor(42, 31, 40); doc.setFontSize(10)
   doc.text(`Emissão: ${hoje.toLocaleDateString('pt-BR')}`, 14, 50)
   doc.text(`Prazo estimado: ${prev.toLocaleDateString('pt-BR')} (10 dias corridos)`, 14, 57)
-  if (obs) doc.text(`Obs: ${obs}`, 14, 64)
+  if (obs) { doc.setTextColor(100,60,140); doc.text(`Obs: ${obs}`, 14, 64) }
+
+  // Agrupa por categoria
+  const porCat = {}
+  for (const i of itens) {
+    const cat = i.categoria || 'Outros'
+    if (!porCat[cat]) porCat[cat] = []
+    porCat[cat].push(i)
+  }
+
+  const body = []
+  for (const [cat, citens] of Object.entries(porCat).sort()) {
+    // Linha de categoria
+    body.push([{
+      content: cat,
+      colSpan: 3,
+      styles: { fillColor: [103,63,124], textColor: 255, fontStyle: 'bold', fontSize: 9, cellPadding: 3 }
+    }])
+    for (const i of citens) {
+      body.push([
+        { content: i.codigo, styles: { fontFamily: 'monospace', fontSize: 9, textColor: [120,80,140] } },
+        i.nome,
+        { content: `${i.qtd.toLocaleString('pt-BR')} un`, styles: { halign: 'right', fontStyle: 'bold' } },
+      ])
+    }
+  }
 
   autoTable(doc, {
     startY: obs ? 72 : 65,
     head: [['Código', 'Embalagem', 'Qtd solicitada']],
-    body: itens.map(i => [i.codigo, i.nome, `${i.qtd.toLocaleString('pt-BR')} un`]),
-    styles: { fontSize: 10, cellPadding: 5 },
-    headStyles: { fillColor: [103, 63, 124], textColor: 255, fontStyle: 'bold' },
+    body,
+    styles: { fontSize: 10, cellPadding: 4 },
+    headStyles: { fillColor: [60, 35, 80], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 240, 248] },
-    columnStyles: { 2: { halign: 'right', fontStyle: 'bold' } },
+    columnStyles: {
+      0: { cellWidth: 36 },
+      2: { halign: 'right', fontStyle: 'bold', cellWidth: 34 },
+    },
   })
 
   const fy = doc.lastAutoTable.finalY + 12
   const total = itens.reduce((s, i) => s + i.qtd, 0)
-  doc.setFont(undefined, 'bold'); doc.setFontSize(11)
-  doc.text(`Total: ${total.toLocaleString('pt-BR')} unidades`, 14, fy)
+  doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(60, 35, 80)
+  doc.text(`Total geral: ${total.toLocaleString('pt-BR')} unidades`, 14, fy)
   doc.setFont(undefined, 'normal'); doc.setFontSize(8); doc.setTextColor(150, 150, 150)
   doc.text('Laricas Fitness — Sistema de Controle de Embalagens', 14, 285)
   doc.text(hoje.toLocaleString('pt-BR'), 155, 285)
@@ -86,7 +114,7 @@ function ModalNovoPedido({ onClose, onSaved, tipo = 'rotulo' }) {
         }))
       )
 
-      gerarPDF(numero, selecionadas.map(e => ({ codigo: e.codigo, nome: e.nome, qtd: parseInt(qtds[e.id]) })), obs)
+      gerarPDF(numero, selecionadas.map(e => ({ codigo: e.codigo, nome: e.nome, qtd: parseInt(qtds[e.id]), categoria: e.categoria })), obs)
       onSaved()
     } catch (e) { alert('Erro: ' + e.message) }
     setSaving(false)
@@ -165,14 +193,67 @@ function ModalNovoPedido({ onClose, onSaved, tipo = 'rotulo' }) {
   )
 }
 
+function ModalCadastrarEmbalagem({ extra, onClose, onSalvar }) {
+  const CATS = ['Pão de Mel 100g','Pão de Mel 30g','Barra 180g','Potão 280g','Potinho 60g','Outros']
+  const [form, setForm] = useState({ nome: extra.nome, codigo: '', categoria: CATS[0], tipo: 'rotulo' })
+  const set = (k,v) => setForm(p=>({...p,[k]:v}))
+  const [saving, setSaving] = useState(false)
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{ maxWidth: 420 }}>
+        <div className="modal-header">
+          <div className="modal-title">Cadastrar embalagem no sistema</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ padding:'8px 12px', background:'var(--purple-pale)', borderRadius:6, fontSize:12, marginBottom:12 }}>
+            Estoque inicial será definido como <strong>{extra.qtd} un</strong> (quantidade recebida hoje)
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nome *</label>
+            <input className="form-input" value={form.nome} onChange={e=>set('nome',e.target.value)} autoFocus />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Código / SKU *</label>
+              <input className="form-input" value={form.codigo} onChange={e=>set('codigo',e.target.value.toUpperCase())} placeholder="Ex: ROT_PAO100" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tipo</label>
+              <select className="form-input" value={form.tipo} onChange={e=>set('tipo',e.target.value)}>
+                <option value="rotulo">🏷️ Rótulo</option>
+                <option value="embalagem">📦 Embalagem primária</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Categoria</label>
+            <select className="form-input" value={form.categoria} onChange={e=>set('categoria',e.target.value)}>
+              {CATS.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" disabled={saving||!form.nome||!form.codigo}
+            onClick={async()=>{ setSaving(true); await onSalvar(extra, form); setSaving(false) }}>
+            {saving ? <RefreshCw size={14} className="spin"/> : '✓ Cadastrar e registrar estoque'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ModalConferencia({ pedido, onClose, onSaved }) {
   const [itens, setItens] = useState([])
   const [recebidos, setRecebidos] = useState({})
   const [dataRec, setDataRec] = useState(new Date().toISOString().slice(0, 10))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [itensExtras, setItensExtras] = useState([]) // itens não cadastrados
+  const [itensExtras, setItensExtras] = useState([])
   const [novoItem, setNovoItem] = useState({ nome: '', qtd: '' })
+  const [cadastrando, setCadastrando] = useState(null)
 
   useEffect(() => {
     supabase.from('pedido_itens').select('*, embalagens(id, codigo, nome, estoque_atual)')
@@ -188,8 +269,26 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
 
   function adicionarItemExtra() {
     if (!novoItem.nome.trim() || !novoItem.qtd) return
-    setItensExtras(prev => [...prev, { id: `extra-${Date.now()}`, nome: novoItem.nome.trim(), qtd: parseInt(novoItem.qtd) || 0 }])
+    setItensExtras(prev => [...prev, { id: `extra-${Date.now()}`, nome: novoItem.nome.trim(), qtd: parseInt(novoItem.qtd) || 0, cadastrado: false }])
     setNovoItem({ nome: '', qtd: '' })
+  }
+
+  async function cadastrarNoSistema(extra, form) {
+    try {
+      const { data: emb } = await supabase.from('embalagens').insert({
+        nome: form.nome, codigo: form.codigo, categoria: form.categoria,
+        tipo: form.tipo, estoque_atual: extra.qtd, estoque_minimo: 0,
+        visivel_estoque: true, visivel_producao: form.tipo === 'rotulo', ativo: true,
+      }).select().single()
+      if (emb) {
+        await supabase.from('inventarios').insert({
+          embalagem_id: emb.id, quantidade: extra.qtd,
+          data_inventario: dataRec, criado_em: new Date().toISOString(),
+        })
+        setItensExtras(prev => prev.map(x => x.id === extra.id ? { ...x, cadastrado: true } : x))
+      }
+      setCadastrando(null)
+    } catch(e) { alert('Erro ao cadastrar: ' + e.message) }
   }
 
   async function salvar() {
@@ -285,23 +384,37 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
                   <thead><tr><th>Descrição</th><th>Qtd</th><th></th></tr></thead>
                   <tbody>
                     {itensExtras.map(e => (
-                      <tr key={e.id}>
+                      <tr key={e.id} style={{ background: e.cadastrado ? '#f0fdf4' : undefined }}>
                         <td>
-                          <input className="form-input" value={e.nome}
+                          <input className="form-input" value={e.nome} disabled={e.cadastrado}
                             onChange={ev => setItensExtras(prev => prev.map(x => x.id===e.id ? {...x, nome:ev.target.value} : x))}
                             style={{ fontSize: 13, padding: '5px 8px' }} />
                         </td>
                         <td>
-                          <input type="number" min={1} className="qty-input"
-                            value={e.qtd}
+                          <input type="number" min={1} className="qty-input" value={e.qtd} disabled={e.cadastrado}
                             onChange={ev => setItensExtras(prev => prev.map(x => x.id===e.id ? {...x, qtd:parseInt(ev.target.value)||0} : x))} />
                         </td>
                         <td>
-                          <button className="btn btn-ghost btn-xs" style={{ color: 'var(--danger)' }}
-                            onClick={() => setItensExtras(prev => prev.filter(x => x.id !== e.id))}>✕</button>
+                          <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+                            {e.cadastrado
+                              ? <span style={{ fontSize:11, color:'var(--ok)', fontWeight:700 }}>✓ Cadastrado</span>
+                              : <button className="btn btn-ghost btn-xs" style={{ color:'var(--purple)', whiteSpace:'nowrap' }}
+                                  onClick={() => setCadastrando(cadastrando===e.id ? null : e.id)}>
+                                  + Cadastrar
+                                </button>
+                            }
+                            {!e.cadastrado && <button className="btn btn-ghost btn-xs" style={{ color:'var(--danger)' }}
+                              onClick={() => setItensExtras(prev => prev.filter(x => x.id !== e.id))}>✕</button>}
+                          </div>
                         </td>
                       </tr>
                     ))}
+                    {/* Mini-form de cadastro inline */}
+                    {cadastrando && (() => {
+                      const extra = itensExtras.find(x => x.id === cadastrando)
+                      if (!extra) return null
+                      return <ModalCadastrarEmbalagem extra={extra} onClose={() => setCadastrando(null)} onSalvar={cadastrarNoSistema} />
+                    })()}
                   </tbody>
                 </table>
               )}
