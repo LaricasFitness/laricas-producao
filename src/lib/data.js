@@ -31,31 +31,29 @@ export async function carregarTodasEmbalagens(tipo = null) {
 
 // Média diária ponderada: últimas 4 semanas valem 2x mais que as 4 anteriores
 export async function calcularMedia(embalagemId) {
-  const desde8s = new Date()
-  desde8s.setDate(desde8s.getDate() - 56)
-  const desde4s = new Date()
-  desde4s.setDate(desde4s.getDate() - 28)
+  // Últimos 3 meses (90 dias) — período mais representativo
+  const desde90 = new Date(); desde90.setDate(desde90.getDate() - 90)
+  const desde45 = new Date(); desde45.setDate(desde45.getDate() - 45)
 
   const { data } = await supabase
     .from('producao_diaria')
     .select('quantidade, data_producao')
     .eq('embalagem_id', embalagemId)
-    .gte('data_producao', desde8s.toISOString().slice(0, 10))
+    .gte('data_producao', desde90.toISOString().slice(0, 10))
 
   if (!data?.length) return 0
 
-  const corte4s = desde4s.toISOString().slice(0, 10)
+  const corte45 = desde45.toISOString().slice(0, 10)
 
-  // Separa as duas janelas
-  const recente   = data.filter(r => r.data_producao >= corte4s)
-  const anterior  = data.filter(r => r.data_producao <  corte4s)
+  // Separa janelas de 45 dias cada
+  const recente  = data.filter(r => r.data_producao >= corte45)
+  const anterior = data.filter(r => r.data_producao <  corte45)
 
   const totalRecente  = recente.reduce((s, r) => s + r.quantidade, 0)
   const totalAnterior = anterior.reduce((s, r) => s + r.quantidade, 0)
 
-  // Média diária ponderada: recente (28 dias) peso 2, anterior (28 dias) peso 1
-  // Equivale a: (totalRecente*2 + totalAnterior*1) / (28*2 + 28*1)
-  const mediaPonderada = (totalRecente * 2 + totalAnterior * 1) / (28 * 2 + 28 * 1)
+  // Média diária ponderada: recente (45d) peso 2, anterior (45d) peso 1
+  const mediaPonderada = (totalRecente * 2 + totalAnterior * 1) / (45 * 2 + 45 * 1)
 
   return mediaPonderada
 }
@@ -165,20 +163,23 @@ export async function carregarStatusCompleto(tipo = null) {
   for (const emb of embs) {
     const mediaPonderada = await calcularMedia(emb.id)
 
-    const desde4s = new Date()
-    desde4s.setDate(desde4s.getDate() - 28)
-    const { data: dados4s } = await supabase
+    const desde90d = new Date(); desde90d.setDate(desde90d.getDate() - 90)
+    const { data: dados90d } = await supabase
       .from('producao_diaria').select('quantidade')
       .eq('embalagem_id', emb.id)
-      .gte('data_producao', desde4s.toISOString().slice(0, 10))
-    const media4s = dados4s?.length
-      ? dados4s.reduce((s, r) => s + r.quantidade, 0) / 28 : 0
+      .gte('data_producao', desde90d.toISOString().slice(0, 10))
+    const media90d = dados90d?.length
+      ? dados90d.reduce((s, r) => s + r.quantidade, 0) / 90 : 0
 
     const dias = emb.dias_producao || diasPorCategoria(emb.categoria)
     const margem = emb.margem_seguranca || 0.10
 
     // Calcula estoque cronologicamente
     const estoque = await calcularEstoqueCronologico(emb.id)
+
+    // Valor em estoque = estoque * custo unitário
+    const custoUnit = emb.custo_unitario || 0
+    const valorEstoque = estoque * custoUnit
 
     const minimoIdeal = Math.ceil(mediaPonderada * dias * (1 + margem))
     const diasRestantes = mediaPonderada > 0 ? Math.floor(estoque / mediaPonderada) : null
@@ -187,8 +188,8 @@ export async function carregarStatusCompleto(tipo = null) {
     const qtdPedido = falta > 0 ? Math.ceil(falta / minG) * minG : 0
 
     const tendencia = mediaPonderada > 0
-      ? media4s > mediaPonderada * 1.1 ? 'up'
-        : media4s < mediaPonderada * 0.9 ? 'down' : 'flat'
+      ? media90d > mediaPonderada * 1.1 ? 'up'
+        : media90d < mediaPonderada * 0.9 ? 'down' : 'flat'
       : 'flat'
 
     const status = estoque === 0 ? 'critico'
@@ -201,7 +202,9 @@ export async function carregarStatusCompleto(tipo = null) {
       ...emb,
       estoque_atual: estoque,
       media: Math.round(mediaPonderada * 10) / 10,
-      media4s: Math.round(media4s * 10) / 10,
+      media90d: Math.round(media90d * 10) / 10,
+      valorEstoque,
+      custoUnit,
       minimoIdeal, diasRestantes, qtdPedido, tendencia, status, dias,
     })
   }
