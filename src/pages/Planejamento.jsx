@@ -48,22 +48,29 @@ function parsearCSV(texto) {
   const resultado = []
 
   if (!isVendas) {
+    // Tenta pegar coluna de nome/descrição (cols[1] geralmente é o nome no Bling)
     for (const cols of rows.slice(1)) {
       if (cols.length < 6) continue
       const sku = cols[0], qtd = parseFloat(cols[3].replace(',', '.')) || 0
       const dataIso = parsearDataBr(cols[5])
+      const nome = cols[1]?.trim() || ''
       if (!sku || qtd <= 0 || !dataIso) continue
-      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome })
     }
   } else {
     const idxSku = header.indexOf('SKU'), idxQtd = header.indexOf('Quantidade'), idxData = header.indexOf('Data Prevista')
+    // Tenta achar coluna de nome do produto
+    const idxNome = header.indexOf('Produto') >= 0 ? header.indexOf('Produto')
+      : header.indexOf('Descrição') >= 0 ? header.indexOf('Descrição')
+      : header.indexOf('Nome') >= 0 ? header.indexOf('Nome') : -1
     if (idxSku < 0 || idxQtd < 0 || idxData < 0) return []
     for (const cols of rows.slice(1)) {
       if (cols.length <= idxData) continue
       const sku = cols[idxSku], qtd = parseFloat((cols[idxQtd] || '0').replace(',', '.')) || 0
       const dataIso = parsearDataBr(cols[idxData])
+      const nome = idxNome >= 0 ? (cols[idxNome]?.trim() || '') : ''
       if (!sku || qtd <= 0 || !dataIso) continue
-      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso })
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome })
     }
   }
   return resultado
@@ -317,20 +324,23 @@ export default function Planejamento({ onIrLogistica }) {
       // Detecta SKUs não cadastrados — sugere como itens extras
       const skusCadastrados = new Set(embalagens.map(e => e.codigo))
       const novaSugestoes = []
-      // Agrupa por SKU: soma qtd por data
-      const skuMap = {} // { sku: { data: qtd } }
-      for (const { sku, qtd, data } of parsed) {
-        if (skusCadastrados.has(sku)) continue // já cadastrado, ignora
+      // Agrupa por SKU: soma qtd por data, guarda nome do produto
+      const skuMap = {} // { sku: { data: { qtd, nome } } }
+      for (const { sku, qtd, data, nome } of parsed) {
+        if (skusCadastrados.has(sku)) continue
         if (!skuMap[sku]) skuMap[sku] = {}
-        skuMap[sku][data] = (skuMap[sku][data] || 0) + qtd
+        if (!skuMap[sku][data]) skuMap[sku][data] = { qtd: 0, nome: nome || '' }
+        skuMap[sku][data].qtd += qtd
+        if (nome && nome !== sku) skuMap[sku][data].nome = nome
       }
-      // Cria uma sugestão por SKU×data
       for (const [sku, porData] of Object.entries(skuMap)) {
-        for (const [data, qtd] of Object.entries(porData)) {
+        for (const [data, { qtd, nome }] of Object.entries(porData)) {
+          // Usa o nome do produto se disponível, senão o SKU
+          const nomeExibir = (nome && nome.trim() && nome !== sku) ? nome.trim() : sku
           novaSugestoes.push({
             id: `${sku}-${data}-${Date.now()}-${Math.random()}`,
             sku,
-            nome: sku, // editável pelo operador
+            nome: nomeExibir,
             qtd,
             data,
             cat: ORDEM_CATS[0],
