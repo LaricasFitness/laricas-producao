@@ -123,7 +123,7 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
   const [nf, setNf] = useState('')
   const [dataRec, setDataRec] = useState(new Date().toISOString().slice(0, 10))
   const [obs, setObs] = useState('')
-  const [itens, setItens] = useState([{ embalagem_id: '', quantidade: '', valor_unitario: '' }])
+  const [itens, setItens] = useState([{ embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }])
   const [saving, setSaving] = useState(false)
   const [pedidoItens, setPedidoItens] = useState([])
 
@@ -136,12 +136,13 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
     setPedidoItens(data || [])
     setItens((data || []).map(i => ({
       embalagem_id: i.embalagem_id,
+      nome_livre: '',
       quantidade: i.quantidade_solicitada,
       valor_unitario: '',
     })))
   }
 
-  function addItem() { setItens(prev => [...prev, { embalagem_id: '', quantidade: '', valor_unitario: '' }]) }
+  function addItem() { setItens(prev => [...prev, { embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }]) }
   function updItem(i, k, v) { setItens(prev => prev.map((it, idx) => idx === i ? { ...it, [k]: v } : it)) }
   function remItem(i) { setItens(prev => prev.filter((_, idx) => idx !== i)) }
 
@@ -152,11 +153,10 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
   }, 0)
 
   async function salvar() {
-    const itensFiltrados = itens.filter(it => it.embalagem_id && it.quantidade > 0)
+    const itensFiltrados = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
     if (!itensFiltrados.length) { alert('Adicione pelo menos um item.'); return }
     setSaving(true)
     try {
-      // Cria recebimento
       const { data: rec, error: re } = await supabase.from('recebimentos').insert({
         pedido_id: pedidoId || null,
         numero_nf: nf || null,
@@ -166,28 +166,55 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
       }).select().single()
       if (re) throw re
 
-      // Itens
+      // Itens cadastrados + livres
       const itensInsert = itensFiltrados.map(it => ({
         recebimento_id: rec.id,
-        embalagem_id: it.embalagem_id,
+        embalagem_id: it.embalagem_id || null,
+        nome_livre: it.embalagem_id ? null : it.nome_livre?.trim(),
         quantidade_recebida: parseInt(it.quantidade),
         valor_unitario: parseFloat(it.valor_unitario) || null,
       }))
       await supabase.from('recebimento_itens').insert(itensInsert)
-      // Não atualiza estoque_atual diretamente — calculado cronologicamente
 
-      // Atualiza status do pedido se vinculado
+      // Atualiza custo_unitario das embalagens cadastradas
+      for (const it of itensFiltrados.filter(i => i.embalagem_id && i.valor_unitario)) {
+        await supabase.from('embalagens')
+          .update({ custo_unitario: parseFloat(it.valor_unitario) })
+          .eq('id', it.embalagem_id)
+      }
+
+      // Atualiza status do pedido vinculado
       if (pedidoId) {
         await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
       }
 
-      // Log
+      // Cria Conta a Pagar se tiver valor
+      if (totalGeral > 0) {
+        const { data: fornecedor } = await supabase
+          .from('fin_fornecedores').select('id').eq('nome_fantasia', 'PressPlate').maybeSingle()
+        const venc = new Date(dataRec); venc.setDate(venc.getDate() + 30)
+        const { data: lanc } = await supabase.from('fin_lancamentos').insert({
+          tipo: 'despesa',
+          descricao: `Embalagens gráfica${nf ? ` — NF ${nf}` : ''}${pedidoId ? ` — Pedido vinculado` : ''}`,
+          valor_total: totalGeral,
+          fornecedor_id: fornecedor?.id || null,
+          total_parcelas: 1,
+          observacao: obs || null,
+          criado_por: 'sistema',
+        }).select().single()
+        if (lanc) {
+          await supabase.from('fin_parcelas').insert({
+            lancamento_id: lanc.id, numero_parcela: 1, valor: totalGeral,
+            data_vencimento: venc.toISOString().slice(0, 10),
+            data_competencia: dataRec, status: 'em_aberto',
+          })
+        }
+      }
+
       await registrarAcao({
         acao: 'recebimento',
-        descricao: `Recebimento de ${itensFiltrados.length} tipo(s) de embalagem${nf ? ` — NF ${nf}` : ''}${totalGeral ? ` — R$ ${totalGeral.toFixed(2)}` : ''}`,
-        tabela: 'recebimentos',
-        registroId: rec.id,
-        dadosAnteriores: { itens: itensFiltrados.map(it => ({ embalagem_id: it.embalagem_id, quantidade_recebida: parseInt(it.quantidade) })) },
+        descricao: `Recebimento de ${itensFiltrados.length} tipo(s)${nf ? ` — NF ${nf}` : ''}${totalGeral ? ` — R$ ${totalGeral.toFixed(2)}` : ''}`,
+        tabela: 'recebimentos', registroId: rec.id,
         dadosNovos: { numero_nf: nf, valor_total: totalGeral },
       })
 
@@ -235,11 +262,18 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
               Itens recebidos
             </div>
             {itens.map((it, i) => (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 110px auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-                <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
-                  <option value="">Selecione...</option>
-                  {embalagens.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                </select>
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px auto', gap: 8, marginBottom: 8, alignItems: 'start' }}>
+                <div>
+                  <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
+                    <option value="">— Não cadastrado / digitar nome —</option>
+                    {embalagens.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                  </select>
+                  {!it.embalagem_id && (
+                    <input className="form-input" placeholder="Nome do item recebido"
+                      value={it.nome_livre || ''} onChange={e => updItem(i, 'nome_livre', e.target.value)}
+                      style={{ fontSize: 12, marginTop: 4 }} />
+                  )}
+                </div>
                 <input type="number" min={0} className="form-input" placeholder="Qtd" value={it.quantidade} onChange={e => updItem(i, 'quantidade', e.target.value)} />
                 <input type="number" min={0} step={0.01} className="form-input" placeholder="R$ unit." value={it.valor_unitario} onChange={e => updItem(i, 'valor_unitario', e.target.value)} />
                 <button className="btn btn-ghost btn-sm" onClick={() => remItem(i)} style={{ color: 'var(--danger)', padding: '7px' }}>✕</button>
