@@ -22,23 +22,29 @@ function fmtHora(iso) {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 }
 
-// Agrupa registros por lote (mesmo criado_em próximo ou mesmo registrado_por no mesmo minuto)
+// Agrupa por timestamp exato do lote (mesmo criado_em = mesmo insert batch)
+// Ignora auto-embalagem (gerado automaticamente junto com o lote principal)
 function agruparLotes(registros) {
   if (!registros.length) return []
-  const sorted = [...registros].sort((a,b) => (a.criado_em||'').localeCompare(b.criado_em||''))
-  const lotes = []
-  let loteAtual = null
 
+  // Filtra auto-embalagem — aparece junto mas não é um lote separado do operador
+  const principal = registros.filter(r => !r.registrado_por?.includes('auto-embalagem'))
+  const sorted = [...principal].sort((a,b) => (a.criado_em||'').localeCompare(b.criado_em||''))
+
+  const mapa = {} // criado_em → lote
   for (const r of sorted) {
-    const ts = r.criado_em ? new Date(r.criado_em).getTime() : 0
-    if (!loteAtual || Math.abs(ts - loteAtual.ts) > 60000 || r.registrado_por !== loteAtual.registrado_por) {
-      // Novo lote: mais de 1 minuto de diferença ou responsável diferente
-      loteAtual = { ts, registrado_por: r.registrado_por, criado_em: r.criado_em, itens: [] }
-      lotes.push(loteAtual)
+    const key = r.criado_em || `sem-ts-${r.registrado_por}`
+    if (!mapa[key]) {
+      mapa[key] = {
+        criado_em: r.criado_em,
+        registrado_por: r.registrado_por,
+        itens: [],
+      }
     }
-    loteAtual.itens.push(r)
+    mapa[key].itens.push(r)
   }
-  return lotes
+
+  return Object.values(mapa).sort((a,b) => (a.criado_em||'').localeCompare(b.criado_em||''))
 }
 
 function BlocoLote({ lote, embs, dataAtual, onSaved }) {
