@@ -153,8 +153,8 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops = {}
     const todosMap = parsearTodosOsPedidos(csvRaw, datasAtivas)
     const idsLalamove = new Set(stopsLalam.map(s => String(s.id)))
     for (const p of Object.values(todosMap)) {
-      const t = p.transportadora || ''
-      if (t.toLowerCase().includes('lalamove') || !t) continue
+      if (idsLalamove.has(String(p.id))) continue
+      const t = p.transportadora || 'Sem transportadora'
       if (!outrasTransp[t]) outrasTransp[t] = []
       outrasTransp[t].push(p)
     }
@@ -1041,13 +1041,14 @@ export default function Logistica({ csvInicial }) {
     {abaLog==='roteiro' && step==='conferencia' && (() => {
       // Monta lista de todos os pedidos agrupados por transportadora
       const stopsLalam = routes.flatMap(r => r.stops)
+      const idsLalamove = new Set(stopsLalam.map(s => String(s.id)))
       const outrasTransp = {}
       if (csvRaw) {
         const todosMap = parsearTodosOsPedidos(csvRaw, datasAtivas)
-        const idsLalamove = new Set(stopsLalam.map(s => String(s.id)))
         for (const p of Object.values(todosMap)) {
-          const t = p.transportadora || ''
-          if (t.toLowerCase().includes('lalamove') || !t) continue
+          // Pula pedidos já nas rotas Lalamove
+          if (idsLalamove.has(String(p.id))) continue
+          const t = p.transportadora || 'Sem transportadora'
           if (!outrasTransp[t]) outrasTransp[t] = []
           outrasTransp[t].push(p)
         }
