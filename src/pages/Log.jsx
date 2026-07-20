@@ -2,9 +2,6 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, AlertTriangle, Download, Pencil, Check, X } from 'lucide-react'
 
-function fmt(n) { return (n || 0).toLocaleString('pt-BR') }
-function fmtDate(s) { return new Date(s + 'T12:00:00').toLocaleDateString('pt-BR') }
-
 function getMesGrid(ano, mes) {
   const primeiroDia = new Date(ano, mes, 1)
   const ultimoDia = new Date(ano, mes + 1, 0)
@@ -19,88 +16,133 @@ const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 
 // Linha editável do detalhe
-function LinhaDetalhe({ r, dataAtual, emb, onSaved }) {
-  const [editando, setEditando] = useState(null) // null | 'qtd' | 'data'
-  const [draftQtd, setDraftQtd] = useState(r.quantidade)
-  const [draftData, setDraftData] = useState(r.data_producao)
+function fmt(n) { return (n || 0).toLocaleString('pt-BR') }
+function fmtHora(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+// Agrupa registros por lote (mesmo criado_em próximo ou mesmo registrado_por no mesmo minuto)
+function agruparLotes(registros) {
+  if (!registros.length) return []
+  const sorted = [...registros].sort((a,b) => (a.criado_em||'').localeCompare(b.criado_em||''))
+  const lotes = []
+  let loteAtual = null
+
+  for (const r of sorted) {
+    const ts = r.criado_em ? new Date(r.criado_em).getTime() : 0
+    if (!loteAtual || Math.abs(ts - loteAtual.ts) > 60000 || r.registrado_por !== loteAtual.registrado_por) {
+      // Novo lote: mais de 1 minuto de diferença ou responsável diferente
+      loteAtual = { ts, registrado_por: r.registrado_por, criado_em: r.criado_em, itens: [] }
+      lotes.push(loteAtual)
+    }
+    loteAtual.itens.push(r)
+  }
+  return lotes
+}
+
+function BlocoLote({ lote, embs, dataAtual, onSaved }) {
+  const [editandoData, setEditandoData] = useState(false)
+  const [novaData, setNovaData] = useState(dataAtual)
   const [saving, setSaving] = useState(false)
 
-  async function salvarQtd() {
-    const novaQtd = parseInt(draftQtd) || 0
+  async function moverLote() {
+    if (novaData === dataAtual) { setEditandoData(false); return }
     setSaving(true)
-    await supabase.from('producao_diaria').update({ quantidade: novaQtd }).eq('id', r.id)
+    const ids = lote.itens.map(r => r.id)
+    await supabase.from('producao_diaria').update({ data_producao: novaData }).in('id', ids)
     setSaving(false)
-    setEditando(null)
-    onSaved(r.id, { quantidade: novaQtd, data_producao: r.data_producao })
+    setEditandoData(false)
+    onSaved(ids, novaData)
   }
 
-  async function salvarData() {
-    if (!draftData) { setEditando(null); return }
-    setSaving(true)
-    await supabase.from('producao_diaria').update({ data_producao: draftData }).eq('id', r.id)
-    setSaving(false)
-    setEditando(null)
-    onSaved(r.id, { quantidade: r.quantidade, data_producao: draftData })
-  }
-
-  const dataMudou = draftData !== dataAtual
+  const total = lote.itens.reduce((s, r) => s + r.quantidade, 0)
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--gray-100)', gap: 8 }}>
-      {/* Nome + editar data */}
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>{emb?.nome || '—'}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-          {editando === 'data' ? (
-            <>
-              <input type="date" value={draftData} onChange={e => setDraftData(e.target.value)}
-                autoFocus
-                style={{ fontSize: 11, padding: '2px 6px', border: '2px solid var(--purple)', borderRadius: 5, outline: 'none' }} />
-              <button onClick={salvarData} disabled={saving} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ok)', padding:1 }}>
-                {saving ? <RefreshCw size={11} className="spin"/> : <Check size={12}/>}
-              </button>
-              <button onClick={() => { setDraftData(r.data_producao); setEditando(null) }}
-                style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)', padding:1 }}>
-                <X size={12}/>
-              </button>
-            </>
-          ) : (
-            <>
-              <span style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{emb?.codigo}</span>
-              <button onClick={() => { setDraftData(r.data_producao); setEditando('data') }}
-                style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-300)', padding:'0 2px', fontSize: 10 }}
-                title="Mover para outra data">
-                📅
-              </button>
-            </>
+    <div style={{ marginBottom: 14, border: '1px solid var(--gray-200)', borderRadius: 8, overflow: 'hidden' }}>
+      {/* Header do lote */}
+      <div style={{ padding: '8px 12px', background: 'var(--gray-50)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="pill purple" style={{ fontSize: 11 }}>👤 {lote.registrado_por || 'Sem responsável'}</span>
+          {lote.criado_em && (
+            <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>⏱ {fmtHora(lote.criado_em)}</span>
           )}
+          <span style={{ fontSize: 11, color: 'var(--gray-500)', fontWeight: 700 }}>{total} un · {lote.itens.length} itens</span>
         </div>
+
+        {/* Mover lote para outra data */}
+        {editandoData ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="date" value={novaData} onChange={e => setNovaData(e.target.value)}
+              style={{ fontSize: 12, padding: '4px 8px', border: '2px solid var(--purple)', borderRadius: 6, outline: 'none' }} />
+            <button onClick={moverLote} disabled={saving}
+              style={{ background: 'var(--purple)', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+              {saving ? '...' : '✓ Mover'}
+            </button>
+            <button onClick={() => { setNovaData(dataAtual); setEditandoData(false) }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 18, lineHeight: 1 }}>×</button>
+          </div>
+        ) : (
+          <button onClick={() => setEditandoData(true)}
+            style={{ background: 'none', border: '1px solid var(--gray-300)', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 11, color: 'var(--gray-600)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            📅 Mover lote
+          </button>
+        )}
       </div>
 
-      {/* Quantidade + editar */}
-      {editando === 'qtd' ? (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <input type="number" min={0} value={draftQtd} onChange={e => setDraftQtd(e.target.value)}
-            onKeyDown={e => { if (e.key==='Enter') salvarQtd(); if (e.key==='Escape') setEditando(null) }}
-            autoFocus
-            style={{ width: 72, padding: '4px 6px', fontSize: 13, fontWeight: 700, border: '2px solid var(--purple)', borderRadius: 6, outline: 'none', textAlign: 'right' }} />
-          <button onClick={salvarQtd} disabled={saving} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ok)', padding:2 }}>
-            {saving ? <RefreshCw size={12} className="spin"/> : <Check size={14}/>}
-          </button>
-          <button onClick={() => setEditando(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)', padding:2 }}>
-            <X size={14}/>
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>{fmt(r.quantidade)}</span>
-          <button onClick={() => { setDraftQtd(r.quantidade); setEditando('qtd') }}
-            style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-300)', padding:2, opacity:.6 }}
-            title="Editar quantidade">
-            <Pencil size={12}/>
-          </button>
-        </div>
-      )}
+      {/* Itens do lote */}
+      <div style={{ padding: '6px 12px' }}>
+        {lote.itens.map((r, i) => {
+          const emb = embs[r.embalagem_id]
+          return (
+            <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: i < lote.itens.length-1 ? '1px solid var(--gray-100)' : 'none' }}>
+              <div>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{emb?.nome || '—'}</span>
+                <span style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace', marginLeft: 6 }}>{emb?.codigo}</span>
+              </div>
+              <EditarQtd r={r} onSaved={(id, qtd) => onSaved([id], dataAtual, qtd)} />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function EditarQtd({ r, onSaved }) {
+  const [editando, setEditando] = useState(false)
+  const [draft, setDraft] = useState(r.quantidade)
+  const [saving, setSaving] = useState(false)
+
+  async function salvar() {
+    const qtd = parseInt(draft) || 0
+    setSaving(true)
+    await supabase.from('producao_diaria').update({ quantidade: qtd }).eq('id', r.id)
+    setSaving(false)
+    setEditando(false)
+    onSaved(r.id, qtd)
+  }
+
+  if (editando) return (
+    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      <input type="number" min={0} value={draft} onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key==='Enter') salvar(); if (e.key==='Escape') setEditando(false) }}
+        autoFocus style={{ width: 64, padding: '3px 6px', fontSize: 13, fontWeight: 700, border: '2px solid var(--purple)', borderRadius: 6, outline: 'none', textAlign: 'right' }} />
+      <button onClick={salvar} disabled={saving} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ok)' }}>
+        {saving ? '...' : <Check size={14}/>}
+      </button>
+      <button onClick={() => setEditando(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)' }}>
+        <X size={14}/>
+      </button>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>{fmt(r.quantidade)}</span>
+      <button onClick={() => { setDraft(r.quantidade); setEditando(true) }}
+        style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-300)', opacity: .6, padding: 2 }}
+        title="Editar quantidade"><Pencil size={12}/></button>
     </div>
   )
 }
@@ -163,24 +205,22 @@ export default function Log() {
     setLoadingDetalhe(false)
   }
 
-  function atualizarDetalhe(id, { quantidade, data_producao }) {
-    const dataMudou = data_producao !== diaSel
+  function atualizarDetalhe(ids, novaData, novaQtd) {
+    const idsArr = Array.isArray(ids) ? ids : [ids]
+    const dataMudou = novaData && novaData !== diaSel
     if (dataMudou) {
-      // Remove do dia atual
-      setDetalhe(prev => prev.filter(r => r.id !== id))
+      setDetalhe(prev => prev.filter(r => !idsArr.includes(r.id)))
       setDados(prev => {
         const clone = { ...prev }
-        if (clone[diaSel]) clone[diaSel] = clone[diaSel].filter(r => r.id !== id)
+        if (clone[diaSel]) clone[diaSel] = clone[diaSel].filter(r => !idsArr.includes(r.id))
         return clone
       })
-    } else {
-      // Atualiza quantidade
-      setDetalhe(prev => prev.map(r => r.id === id ? { ...r, quantidade } : r))
+    } else if (novaQtd !== undefined) {
+      const id = idsArr[0]
+      setDetalhe(prev => prev.map(r => r.id === id ? { ...r, quantidade: novaQtd } : r))
       setDados(prev => {
         const clone = { ...prev }
-        if (diaSel && clone[diaSel]) {
-          clone[diaSel] = clone[diaSel].map(r => r.id === id ? { ...r, quantidade } : r)
-        }
+        if (diaSel && clone[diaSel]) clone[diaSel] = clone[diaSel].map(r => r.id === id ? { ...r, quantidade: novaQtd } : r)
         return clone
       })
     }
@@ -362,11 +402,11 @@ export default function Log() {
                     ))}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--gray-500)', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                    Itens produzidos · clique no ✏️ para editar
+                    Lotes de produção · 📅 Mover lote · ✏️ Editar quantidade
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 0, maxHeight: 420, overflowY: 'auto' }}>
-                    {detalhe.map((r) => (
-                      <LinhaDetalhe key={r.id} r={r} dataAtual={diaSel} emb={embs[r.embalagem_id]} onSaved={atualizarDetalhe} />
+                  <div style={{ maxHeight: 480, overflowY: 'auto' }}>
+                    {agruparLotes(detalhe).map((lote, i) => (
+                      <BlocoLote key={i} lote={lote} embs={embs} dataAtual={diaSel} onSaved={atualizarDetalhe} />
                     ))}
                   </div>
                   <div style={{ marginTop: 12, paddingTop: 10, borderTop: '2px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
