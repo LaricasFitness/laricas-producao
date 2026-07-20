@@ -242,7 +242,7 @@ export default function Log() {
 
       const { data } = await supabase
         .from('producao_diaria')
-        .select('id, data_producao, registrado_por, quantidade, embalagem_id, embalagens!inner(tipo)')
+        .select('id, data_producao, criado_em, registrado_por, quantidade, embalagem_id, embalagens!inner(tipo)')
         .eq('embalagens.tipo', 'rotulo')
         .gte('data_producao', ini)
         .lte('data_producao', fim)
@@ -510,16 +510,21 @@ export default function Log() {
               </thead>
               <tbody>
                 {(() => {
-                  // Agrupa todos os registros do mês em lotes por criado_em exato
-                  const todos = Object.values(dados).flat()
-                    .filter(r => !r.registrado_por?.includes('auto-embalagem'))
+                  // Usa todosRegistros que tem criado_em, não o mapa dados
+                  const principal = todosRegistros.filter(r => !r.registrado_por?.includes('auto-embalagem'))
                   const lotesMap = {}
-                  for (const r of todos) {
+                  for (const r of principal) {
                     const key = r.criado_em || `sem-${r.data_producao}-${r.registrado_por}`
-                    if (!lotesMap[key]) lotesMap[key] = { criado_em: r.criado_em, data_producao: r.data_producao, registrado_por: r.registrado_por, itens: [] }
+                    if (!lotesMap[key]) lotesMap[key] = {
+                      criado_em: r.criado_em,
+                      data_producao: r.data_producao,
+                      registrado_por: r.registrado_por,
+                      itens: []
+                    }
                     lotesMap[key].itens.push(r)
                   }
-                  const lotes = Object.values(lotesMap).sort((a,b) => (b.criado_em||b.data_producao).localeCompare(a.criado_em||a.data_producao))
+                  const lotes = Object.values(lotesMap)
+                    .sort((a,b) => (b.criado_em||b.data_producao).localeCompare(a.criado_em||a.data_producao))
 
                   if (!lotes.length) return (
                     <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--gray-400)' }}>Nenhum registro neste mês</td></tr>
