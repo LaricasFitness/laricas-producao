@@ -255,6 +255,96 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
+function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
+  const [form, setForm] = useState({
+    nome: sugestao.nome || '',
+    codigo: sugestao.sku || '',
+    categoria: sugestao.cat || ORDEM_CATS[0],
+    tipo: 'rotulo',
+    visivel_producao: true,
+    visivel_estoque: true,
+  })
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  const [saving, setSaving] = useState(false)
+
+  async function salvar() {
+    if (!form.nome.trim() || !form.codigo.trim()) return
+    setSaving(true)
+    try {
+      const { data: emb, error } = await supabase.from('embalagens').insert({
+        nome: form.nome.trim(),
+        codigo: form.codigo.trim().toUpperCase(),
+        categoria: form.categoria,
+        tipo: form.tipo,
+        visivel_producao: form.visivel_producao,
+        visivel_estoque: form.visivel_estoque,
+        estoque_atual: 0,
+        estoque_minimo: 0,
+        ativo: true,
+      }).select().single()
+      if (error) throw error
+      onSalvo(sugestao, emb)
+    } catch(e) { alert('Erro: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 440 }}>
+        <div className="modal-header">
+          <div className="modal-title">Cadastrar produto no sistema</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ padding: '8px 12px', background: 'var(--purple-pale)', borderRadius: 6, fontSize: 12, marginBottom: 14 }}>
+            SKU original: <strong style={{ fontFamily: 'monospace' }}>{sugestao.sku}</strong>
+            <br/>Após cadastrar, o sistema vai reconhecer esse SKU automaticamente nas próximas importações.
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nome do produto *</label>
+            <input className="form-input" value={form.nome} onChange={e => set('nome', e.target.value)} autoFocus />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Código / SKU *</label>
+              <input className="form-input" value={form.codigo} onChange={e => set('codigo', e.target.value.toUpperCase())} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tipo</label>
+              <select className="form-input" value={form.tipo} onChange={e => set('tipo', e.target.value)}>
+                <option value="rotulo">🏷️ Rótulo</option>
+                <option value="embalagem">📦 Embalagem</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Categoria</label>
+            <select className="form-input" value={form.categoria} onChange={e => set('categoria', e.target.value)}>
+              {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.visivel_producao} onChange={e => set('visivel_producao', e.target.checked)} style={{ accentColor: 'var(--purple)' }} />
+              Aparece no planejamento
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.visivel_estoque} onChange={e => set('visivel_estoque', e.target.checked)} style={{ accentColor: 'var(--purple)' }} />
+              Aparece no estoque
+            </label>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" disabled={saving || !form.nome.trim() || !form.codigo.trim()} onClick={salvar}>
+            {saving ? <RefreshCw size={14} className="spin" /> : '✓ Cadastrar produto'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Planejamento({ onIrLogistica }) {
   const [embalagens, setEmbalagens] = useState([])
   const [loading, setLoading] = useState(true)
@@ -268,7 +358,8 @@ export default function Planejamento({ onIrLogistica }) {
   const [observacao, setObservacao] = useState('')
   const [itensExtras, setItensExtras] = useState([]) // [{id, nome, cat, qtd, data}]
   const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '', data: '' })
-  const [sugestoes, setSugestoes] = useState([]) // [{id, sku, nome, qtd, data, cat, confirmado}]
+  const [sugestoes, setSugestoes] = useState([])
+  const [sugestoesCadastrando, setSugestoeCadastrando] = useState(null) // [{id, sku, nome, qtd, data, cat, confirmado}]
   const fileRef = useRef()
 
   useEffect(() => {
@@ -542,14 +633,15 @@ export default function Planejamento({ onIrLogistica }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--gold)' }}>
-                ⚠️ {sugestoes.filter(s=>!s.confirmado).length} produto(s) não cadastrado(s) encontrado(s) no CSV
+                ⚠️ {sugestoes.filter(s=>!s.confirmado&&!s.cadastrado).length} produto(s) não cadastrado(s) encontrado(s) no CSV
               </div>
               <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 2 }}>
-                Verifique nome, quantidade e data — confirme para adicionar como item extra
+                <strong>Cadastrar</strong> → entra no sistema permanentemente e aparece na produção normalmente ·
+                <strong> Confirmar</strong> → adiciona só para hoje como item extra
               </div>
             </div>
-            {sugestoes.every(s=>s.confirmado) && (
-              <span style={{ fontSize: 12, color: 'var(--ok)', fontWeight: 700 }}>✓ Todos confirmados</span>
+            {sugestoes.every(s=>s.confirmado||s.cadastrado) && (
+              <span style={{ fontSize: 12, color: 'var(--ok)', fontWeight: 700 }}>✓ Todos resolvidos</span>
             )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -557,64 +649,79 @@ export default function Planejamento({ onIrLogistica }) {
               <div key={s.id} style={{
                 display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
                 padding: '10px 12px', borderRadius: 8,
-                background: s.confirmado ? '#f0fdf4' : '#fffbf0',
-                border: `1px solid ${s.confirmado ? 'var(--ok)' : 'var(--gold)'}`,
-                opacity: s.confirmado ? 0.7 : 1,
+                background: s.cadastrado ? '#f0fdf4' : s.confirmado ? '#fffbf0' : 'var(--white)',
+                border: `1px solid ${s.cadastrado ? 'var(--ok)' : s.confirmado ? 'var(--gold)' : 'var(--gray-200)'}`,
+                opacity: (s.confirmado || s.cadastrado) ? 0.75 : 1,
               }}>
-                {/* SKU original — read only hint */}
                 <span style={{ fontSize: 11, color: 'var(--gray-400)', fontFamily: 'monospace', flexShrink: 0 }}>
                   SKU: {s.sku}
                 </span>
-                {/* Nome editável */}
                 <input className="form-input" value={s.nome}
-                  disabled={s.confirmado}
+                  disabled={s.confirmado || s.cadastrado}
                   onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, nome:e.target.value} : x))}
                   placeholder="Nome do produto" style={{ flex: 1, minWidth: 160, fontSize: 13 }} />
-                {/* Categoria */}
                 <select className="form-input" value={s.cat}
-                  disabled={s.confirmado}
+                  disabled={s.confirmado || s.cadastrado}
                   onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, cat:e.target.value} : x))}
                   style={{ width: 160, fontSize: 13 }}>
                   {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                {/* Quantidade editável */}
                 <input type="number" className="form-input" value={s.qtd} min={1}
-                  disabled={s.confirmado}
+                  disabled={s.confirmado || s.cadastrado}
                   onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, qtd:parseInt(e.target.value)||0} : x))}
                   style={{ width: 72, fontSize: 13 }} />
-                {/* Data editável */}
                 <select className="form-input" value={s.data}
-                  disabled={s.confirmado}
+                  disabled={s.confirmado || s.cadastrado}
                   onChange={e => setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, data:e.target.value} : x))}
                   style={{ width: 120, fontSize: 13 }}>
                   {diasOrdenados.map(d => <option key={d} value={d}>{headerDia(d)}</option>)}
                 </select>
-                {/* Ações */}
-                {!s.confirmado ? (
-                  <button className="btn btn-sm" style={{ background:'var(--gold)',color:'#fff',border:'none',flexShrink:0 }}
-                    onClick={() => {
-                      setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, confirmado:true} : x))
-                      setItensExtras(prev => [...prev, { id: s.id, nome: s.nome, cat: s.cat, qtd: s.qtd, data: s.data }])
-                    }}>
-                    ✓ Confirmar
-                  </button>
-                ) : (
-                  <button className="btn btn-ghost btn-sm" style={{ color:'var(--gray-400)',flexShrink:0 }}
+
+                {s.cadastrado ? (
+                  <span style={{ fontSize: 12, color: 'var(--ok)', fontWeight: 700, flexShrink: 0 }}>✓ Cadastrado</span>
+                ) : s.confirmado ? (
+                  <button className="btn btn-ghost btn-sm" style={{ color:'var(--gray-400)', flexShrink:0 }}
                     onClick={() => {
                       setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, confirmado:false} : x))
                       setItensExtras(prev => prev.filter(x => x.id !== s.id))
-                    }}>
-                    ↩ Desfazer
-                  </button>
+                    }}>↩ Desfazer</button>
+                ) : (
+                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    {/* Cadastrar permanentemente */}
+                    <button className="btn btn-sm btn-primary" style={{ fontSize: 12, padding: '5px 10px' }}
+                      onClick={() => setSugestoeCadastrando(s)}>
+                      + Cadastrar
+                    </button>
+                    {/* Só para hoje */}
+                    <button className="btn btn-sm" style={{ background:'var(--gold)', color:'#fff', border:'none', fontSize: 12, padding: '5px 10px' }}
+                      onClick={() => {
+                        setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, confirmado:true} : x))
+                        setItensExtras(prev => [...prev, { id: s.id, nome: s.nome, cat: s.cat, qtd: s.qtd, data: s.data }])
+                      }}>
+                      Só hoje
+                    </button>
+                    <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)' }}
+                      onClick={() => setSugestoes(prev => prev.filter(x => x.id !== s.id))}>✕</button>
+                  </div>
                 )}
-                <button className="btn btn-ghost btn-sm" style={{ color:'var(--danger)',flexShrink:0 }}
-                  onClick={() => setSugestoes(prev => prev.filter(x => x.id !== s.id))}>
-                  ✕
-                </button>
               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {/* Modal cadastro rápido de produto */}
+      {sugestoesCadastrando && (
+        <ModalCadastrarProduto
+          sugestao={sugestoesCadastrando}
+          onClose={() => setSugestoeCadastrando(null)}
+          onSalvo={(s, embalagem) => {
+            // Marca como cadastrado e adiciona ao embalagens local para reconhecimento imediato
+            setSugestoes(prev => prev.map(x => x.id===s.id ? {...x, cadastrado:true} : x))
+            setEmbalagens(prev => [...prev, embalagem])
+            setSugestoeCadastrando(null)
+          }}
+        />
       )}
 
       {/* Aviso sem data */}
