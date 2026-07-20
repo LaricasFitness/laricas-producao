@@ -1,203 +1,123 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { registrarAcao } from '../lib/log'
-import { Plus, RefreshCw, Save, Package, Pencil } from 'lucide-react'
+import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 function fmt(n) { return (n || 0).toLocaleString('pt-BR') }
 function fmtR(n) { return (n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
 
-function ModalEditarCompra({ recebimento, embalagens, onClose, onSaved }) {
-  const [nf, setNf] = useState(recebimento.numero_nf || '')
-  const [dataRec, setDataRec] = useState(recebimento.data_recebimento || new Date().toISOString().slice(0, 10))
-  const [obs, setObs] = useState(recebimento.observacao || '')
-  const [itens, setItens] = useState(
-    (recebimento.recebimento_itens || []).map(i => ({
-      id: i.id,
-      embalagem_id: i.embalagem_id,
-      quantidade: String(i.quantidade_recebida),
-      valor_unitario: i.valor_unitario ? String(i.valor_unitario) : '',
-    }))
-  )
+// ── Seletor de fornecedor com cadastro inline ─────────────────────────────────
+function FornecedorSelect({ value, onChange, fornecedores, onNovoCadastrado }) {
+  const [criando, setCriando] = useState(false)
+  const [novoNome, setNovoNome] = useState('')
   const [saving, setSaving] = useState(false)
 
-  function addItem() { setItens(prev => [...prev, { id: null, embalagem_id: '', quantidade: '', valor_unitario: '' }]) }
-  function updItem(i, k, v) { setItens(prev => prev.map((it, idx) => idx === i ? { ...it, [k]: v } : it)) }
-  function remItem(i) { setItens(prev => prev.filter((_, idx) => idx !== i)) }
-
-  const totalGeral = itens.reduce((s, it) => {
-    return s + (parseFloat(it.quantidade) || 0) * (parseFloat(it.valor_unitario) || 0)
-  }, 0)
-
-  async function salvar() {
-    const itensFiltrados = itens.filter(it => it.embalagem_id && it.quantidade > 0)
-    if (!itensFiltrados.length) { alert('Adicione pelo menos um item.'); return }
+  async function cadastrar() {
+    if (!novoNome.trim()) return
     setSaving(true)
-    try {
-      // Atualiza cabeçalho
-      await supabase.from('recebimentos').update({
-        numero_nf: nf || null,
-        data_recebimento: dataRec,
-        observacao: obs || null,
-        valor_total: totalGeral || null,
-      }).eq('id', recebimento.id)
-
-      // Deleta itens antigos e reinssere
-      await supabase.from('recebimento_itens').delete().eq('recebimento_id', recebimento.id)
-      await supabase.from('recebimento_itens').insert(
-        itensFiltrados.map(it => ({
-          recebimento_id: recebimento.id,
-          embalagem_id: it.embalagem_id,
-          quantidade_recebida: parseInt(it.quantidade),
-          valor_unitario: parseFloat(it.valor_unitario) || null,
-        }))
-      )
-
-      onSaved()
-    } catch(e) { alert('Erro: ' + e.message) }
+    const { data } = await supabase.from('fin_fornecedores')
+      .insert({ razao_social: novoNome.trim(), nome_fantasia: novoNome.trim(), tipo_pessoa: 'pj', ativo: true })
+      .select().single()
+    if (data) {
+      onNovoCadastrado(data)
+      onChange(data.id)
+    }
+    setNovoNome('')
+    setCriando(false)
     setSaving(false)
   }
 
+  if (criando) return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input className="form-input" value={novoNome} onChange={e => setNovoNome(e.target.value)}
+        placeholder="Nome do fornecedor" autoFocus style={{ flex: 1 }}
+        onKeyDown={e => { if (e.key === 'Enter') cadastrar(); if (e.key === 'Escape') setCriando(false) }} />
+      <button className="btn btn-primary btn-sm" onClick={cadastrar} disabled={saving || !novoNome.trim()}>
+        {saving ? <RefreshCw size={12} className="spin"/> : '✓'}
+      </button>
+      <button className="btn btn-ghost btn-sm" onClick={() => setCriando(false)}><X size={12}/></button>
+    </div>
+  )
+
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 580 }}>
-        <div className="modal-header">
-          <div className="modal-title">✏️ Editar recebimento</div>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
-        </div>
-        <div className="modal-body">
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">Data de recebimento</label>
-              <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Número da NF</label>
-              <input className="form-input" placeholder="NF-001234" value={nf} onChange={e => setNf(e.target.value)} />
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Observação</label>
-            <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} />
-          </div>
-
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
-              Itens recebidos
-            </div>
-            {itens.map((it, i) => (
-              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 90px 110px auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-                <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
-                  <option value="">Selecione...</option>
-                  {embalagens.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
-                </select>
-                <input type="number" min={0} className="form-input" placeholder="Qtd" value={it.quantidade} onChange={e => updItem(i, 'quantidade', e.target.value)} />
-                <input type="number" min={0} step={0.01} className="form-input" placeholder="R$ unit." value={it.valor_unitario} onChange={e => updItem(i, 'valor_unitario', e.target.value)} />
-                <button className="btn btn-ghost btn-sm" onClick={() => remItem(i)} style={{ color: 'var(--danger)', padding: '7px' }}>✕</button>
-              </div>
-            ))}
-            <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12} /> Adicionar item</button>
-          </div>
-
-          {totalGeral > 0 && (
-            <div style={{ background: 'var(--purple-pale)', borderRadius: 8, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
-              <span>Total</span>
-              <span style={{ color: 'var(--purple)', fontSize: 16 }}>{fmtR(totalGeral)}</span>
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
-            {saving ? <RefreshCw size={14} className="spin" /> : <><Save size={14} /> Salvar alterações</>}
-          </button>
-        </div>
-      </div>
+    <div style={{ display: 'flex', gap: 6 }}>
+      <select className="form-input" value={value} onChange={e => onChange(e.target.value)} style={{ flex: 1 }}>
+        <option value="">Selecione o fornecedor...</option>
+        {fornecedores.map(f => <option key={f.id} value={f.id}>{f.nome_fantasia || f.razao_social}</option>)}
+      </select>
+      <button className="btn btn-ghost btn-sm" onClick={() => setCriando(true)} title="Cadastrar novo">+ Novo</button>
     </div>
   )
 }
 
-function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
+// ── Modal novo recebimento ────────────────────────────────────────────────────
+function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClose, onSaved, onNovoFornecedor }) {
+  const [fornecedores, setFornecedores] = useState(fornInicial)
+  const [fornecedorId, setFornecedorId] = useState('')
   const [pedidoId, setPedidoId] = useState('')
   const [nf, setNf] = useState('')
   const [dataRec, setDataRec] = useState(new Date().toISOString().slice(0, 10))
   const [obs, setObs] = useState('')
   const [itens, setItens] = useState([{ embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }])
   const [saving, setSaving] = useState(false)
-  const [pedidoItens, setPedidoItens] = useState([])
-
-  async function carregarItensPedido(pid) {
-    if (!pid) { setItens([{ embalagem_id: '', quantidade: '', valor_unitario: '' }]); return }
-    const { data } = await supabase
-      .from('pedido_itens')
-      .select('embalagem_id, quantidade_solicitada')
-      .eq('pedido_id', pid)
-    setPedidoItens(data || [])
-    setItens((data || []).map(i => ({
-      embalagem_id: i.embalagem_id,
-      nome_livre: '',
-      quantidade: i.quantidade_solicitada,
-      valor_unitario: '',
-    })))
-  }
+  const [prazo, setPrazo] = useState(30)
 
   function addItem() { setItens(prev => [...prev, { embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }]) }
   function updItem(i, k, v) { setItens(prev => prev.map((it, idx) => idx === i ? { ...it, [k]: v } : it)) }
   function remItem(i) { setItens(prev => prev.filter((_, idx) => idx !== i)) }
 
-  const totalGeral = itens.reduce((s, it) => {
-    const qtd = parseFloat(it.quantidade) || 0
-    const val = parseFloat(it.valor_unitario) || 0
-    return s + qtd * val
-  }, 0)
+  async function carregarItensPedido(pid) {
+    if (!pid) { setItens([{ embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }]); return }
+    const { data } = await supabase.from('pedido_itens').select('embalagem_id, quantidade_solicitada').eq('pedido_id', pid)
+    setItens((data || []).map(i => ({ embalagem_id: i.embalagem_id, nome_livre: '', quantidade: i.quantidade_solicitada, valor_unitario: '' })))
+    // Auto-preenche PressPlate
+    const press = fornecedores.find(f => f.nome_fantasia === 'PressPlate' || f.razao_social?.includes('PressPlate'))
+    if (press) setFornecedorId(press.id)
+  }
+
+  const totalGeral = itens.reduce((s, it) => s + (parseFloat(it.quantidade) || 0) * (parseFloat(it.valor_unitario) || 0), 0)
 
   async function salvar() {
-    const itensFiltrados = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
-    if (!itensFiltrados.length) { alert('Adicione pelo menos um item.'); return }
+    const fil = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
+    if (!fil.length) { alert('Adicione pelo menos um item.'); return }
     setSaving(true)
     try {
-      const { data: rec, error: re } = await supabase.from('recebimentos').insert({
+      const { data: rec, error } = await supabase.from('recebimentos').insert({
         pedido_id: pedidoId || null,
+        fornecedor_id: fornecedorId || null,
         numero_nf: nf || null,
         data_recebimento: dataRec,
         observacao: obs || null,
         valor_total: totalGeral || null,
       }).select().single()
-      if (re) throw re
+      if (error) throw error
 
-      // Itens cadastrados + livres
-      const itensInsert = itensFiltrados.map(it => ({
+      await supabase.from('recebimento_itens').insert(fil.map(it => ({
         recebimento_id: rec.id,
         embalagem_id: it.embalagem_id || null,
         nome_livre: it.embalagem_id ? null : it.nome_livre?.trim(),
         quantidade_recebida: parseInt(it.quantidade),
         valor_unitario: parseFloat(it.valor_unitario) || null,
-      }))
-      await supabase.from('recebimento_itens').insert(itensInsert)
+      })))
 
-      // Atualiza custo_unitario das embalagens cadastradas
-      for (const it of itensFiltrados.filter(i => i.embalagem_id && i.valor_unitario)) {
-        await supabase.from('embalagens')
-          .update({ custo_unitario: parseFloat(it.valor_unitario) })
-          .eq('id', it.embalagem_id)
+      // Atualiza custo_unitario
+      for (const it of fil.filter(i => i.embalagem_id && i.valor_unitario)) {
+        await supabase.from('embalagens').update({ custo_unitario: parseFloat(it.valor_unitario) }).eq('id', it.embalagem_id)
       }
 
-      // Atualiza status do pedido vinculado
-      if (pedidoId) {
-        await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
-      }
+      if (pedidoId) await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
 
-      // Cria Conta a Pagar se tiver valor
+      // Conta a Pagar
       if (totalGeral > 0) {
-        const { data: fornecedor } = await supabase
-          .from('fin_fornecedores').select('id').eq('nome_fantasia', 'PressPlate').maybeSingle()
-        const venc = new Date(dataRec); venc.setDate(venc.getDate() + 30)
+        const venc = new Date(dataRec); venc.setDate(venc.getDate() + prazo)
+        const fornNome = fornecedores.find(f => f.id === fornecedorId)?.nome_fantasia || 'Fornecedor'
         const { data: lanc } = await supabase.from('fin_lancamentos').insert({
           tipo: 'despesa',
-          descricao: `Embalagens gráfica${nf ? ` — NF ${nf}` : ''}${pedidoId ? ` — Pedido vinculado` : ''}`,
+          descricao: `Compra embalagens — ${fornNome}${nf ? ` NF ${nf}` : ''}`,
           valor_total: totalGeral,
-          fornecedor_id: fornecedor?.id || null,
+          fornecedor_id: fornecedorId || null,
           total_parcelas: 1,
           observacao: obs || null,
           criado_por: 'sistema',
@@ -211,13 +131,7 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
         }
       }
 
-      await registrarAcao({
-        acao: 'recebimento',
-        descricao: `Recebimento de ${itensFiltrados.length} tipo(s)${nf ? ` — NF ${nf}` : ''}${totalGeral ? ` — R$ ${totalGeral.toFixed(2)}` : ''}`,
-        tabela: 'recebimentos', registroId: rec.id,
-        dadosNovos: { numero_nf: nf, valor_total: totalGeral },
-      })
-
+      await registrarAcao({ acao: 'recebimento', descricao: `Recebimento de ${fil.length} item(s)${nf ? ` — NF ${nf}` : ''}`, tabela: 'recebimentos', registroId: rec.id, dadosNovos: { valor_total: totalGeral } })
       onSaved()
     } catch(e) { alert('Erro: ' + e.message) }
     setSaving(false)
@@ -225,19 +139,27 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 580 }}>
+      <div className="modal" style={{ maxWidth: 600, maxHeight: '90vh', overflowY: 'auto' }}>
         <div className="modal-header">
-          <div className="modal-title">📥 Registrar recebimento de embalagens</div>
+          <div className="modal-title">🚚 Registrar recebimento de embalagens</div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          {/* Info básica */}
+          {/* Fornecedor */}
+          <div className="form-group">
+            <label className="form-label">Fornecedor</label>
+            <FornecedorSelect value={fornecedorId} onChange={setFornecedorId}
+              fornecedores={fornecedores}
+              onNovoCadastrado={f => { setFornecedores(p => [...p, f]); onNovoFornecedor(f) }} />
+          </div>
+
+          {/* Pedido vinculado + data + NF */}
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Pedido vinculado (opcional)</label>
               <select className="form-input" value={pedidoId} onChange={e => { setPedidoId(e.target.value); carregarItensPedido(e.target.value) }}>
                 <option value="">Sem pedido vinculado</option>
-                {pedidos.map(p => <option key={p.id} value={p.id}>{p.numero} — {new Date(p.enviado_em || p.criado_em).toLocaleDateString('pt-BR')}</option>)}
+                {pedidos.map(p => <option key={p.id} value={p.id}>#{p.numero}</option>)}
               </select>
             </div>
             <div className="form-group">
@@ -245,15 +167,21 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
               <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
             </div>
           </div>
+
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Número da NF (opcional)</label>
-              <input className="form-input" placeholder="NF-001234" value={nf} onChange={e => setNf(e.target.value)} />
+              <input className="form-input" value={nf} onChange={e => setNf(e.target.value)} placeholder="NF-001234" />
             </div>
             <div className="form-group">
-              <label className="form-label">Observação</label>
-              <input className="form-input" placeholder="Ex: Chegou com atraso" value={obs} onChange={e => setObs(e.target.value)} />
+              <label className="form-label">Prazo de pagamento (dias)</label>
+              <input type="number" className="form-input" value={prazo} onChange={e => setPrazo(parseInt(e.target.value)||0)} min={0} />
             </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} placeholder="Ex: Chegou com atraso" />
           </div>
 
           {/* Itens */}
@@ -266,7 +194,12 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
                 <div>
                   <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
                     <option value="">— Não cadastrado / digitar nome —</option>
-                    {embalagens.map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    <optgroup label="🏷️ Rótulos">
+                      {embalagens.filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </optgroup>
+                    <optgroup label="📦 Embalagens">
+                      {embalagens.filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </optgroup>
                   </select>
                   {!it.embalagem_id && (
                     <input className="form-input" placeholder="Nome do item recebido"
@@ -283,9 +216,12 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
           </div>
 
           {totalGeral > 0 && (
-            <div style={{ background: 'var(--purple-pale)', borderRadius: 8, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
-              <span>Total a pagar à gráfica</span>
-              <span style={{ color: 'var(--purple)', fontSize: 16 }}>{fmtR(totalGeral)}</span>
+            <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--purple-pale)', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 13, color: 'var(--purple)' }}>
+                Total: <strong>{fmtR(totalGeral)}</strong>
+                {prazo > 0 && <span style={{ fontSize: 11, marginLeft: 8, color: 'var(--gray-400)' }}>→ vence em {prazo} dias</span>}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--ok)' }}>✓ Conta a Pagar será criada automaticamente</div>
             </div>
           )}
         </div>
@@ -300,77 +236,60 @@ function ModalNovaCompra({ pedidos, embalagens, onClose, onSaved }) {
   )
 }
 
-function gerarPDFCompras(recebimentos) {
-  const doc = new jsPDF()
-  const hoje = new Date()
-
-  doc.setFillColor(82, 46, 100)
-  doc.rect(0, 0, 210, 36, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(18); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 16)
-  doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
-  doc.text('Relatório de Compras — Embalagens', 14, 24)
-  doc.text(`Gerado em ${hoje.toLocaleDateString('pt-BR')}`, 14, 31)
-
-  const totalGeral = recebimentos.reduce((s, r) => s + (r.valor_total || 0), 0)
-
-  autoTable(doc, {
-    startY: 44,
-    head: [['Data', 'NF', 'Itens', 'Total pago']],
-    body: recebimentos.map(r => [
-      new Date(r.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR'),
-      r.numero_nf || '—',
-      (r.recebimento_itens || []).map(i => `${i.embalagens?.nome || i.nome_livre || 'Item'}: ${fmt(i.quantidade_recebida)} un`).join('\n'),
-      r.valor_total ? fmtR(r.valor_total) : '—',
-    ]),
-    styles: { fontSize: 9, cellPadding: 4 },
-    headStyles: { fillColor: [103, 63, 124], textColor: 255 },
-    alternateRowStyles: { fillColor: [245, 240, 248] },
-    columnStyles: { 3: { halign: 'right', fontStyle: 'bold' } },
-    columnWidths: [30, 30, 110, 30],
-  })
-
-  const fy = doc.lastAutoTable.finalY + 10
-  doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(30,30,30)
-  doc.text(`Total pago no período: ${fmtR(totalGeral)}`, 14, fy)
-
-  doc.save(`Compras_Embalagens_${hoje.toISOString().slice(0,10)}.pdf`)
-}
-
+// ── Componente principal ──────────────────────────────────────────────────────
 export default function Compras({ tipo = 'rotulo' }) {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
   const [ini, setIni] = useState(mesIni)
   const [fim, setFim] = useState(hoje.toISOString().slice(0,10))
+  const [filtroForn, setFiltroForn] = useState('')
+  const [filtroTipo, setFiltroTipo] = useState('todos') // todos | rotulo | embalagem | outros
   const [recebimentos, setRecebimentos] = useState([])
   const [pedidos, setPedidos] = useState([])
   const [embalagens, setEmbalagens] = useState([])
+  const [fornecedores, setFornecedores] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [expandido, setExpandido] = useState(null)
-  const [editando, setEditando] = useState(null)
 
   async function load() {
     setLoading(true)
-    const [{ data: recs }, { data: peds }, { data: embs }] = await Promise.all([
+    const [{ data: recs }, { data: peds }, { data: embs }, { data: forns }] = await Promise.all([
       supabase.from('recebimentos')
-        .select('*, recebimento_itens(*, embalagens(nome, codigo))')
+        .select('*, fornecedor:fornecedor_id(id,razao_social,nome_fantasia), recebimento_itens(*, embalagens(nome, codigo, tipo))')
         .gte('data_recebimento', ini).lte('data_recebimento', fim)
         .order('data_recebimento', { ascending: false }),
-      supabase.from('pedidos_grafica').select('id, numero, enviado_em, criado_em').order('criado_em', { ascending: false }).limit(20),
-      supabase.from('embalagens').select('id, nome, codigo').eq('ativo', true).eq('tipo', tipo).order('nome'),
+      supabase.from('pedidos_grafica').select('id, numero').order('criado_em', { ascending: false }).limit(30),
+      supabase.from('embalagens').select('id, nome, codigo, tipo, categoria').eq('ativo', true).order('tipo').order('nome'),
+      supabase.from('fin_fornecedores').select('id, razao_social, nome_fantasia').eq('ativo', true).order('razao_social'),
     ])
     setRecebimentos(recs || [])
     setPedidos(peds || [])
     setEmbalagens(embs || [])
+    setFornecedores(forns || [])
     setLoading(false)
   }
 
   useEffect(() => { load() }, [ini, fim])
 
-  const totalPeriodo = recebimentos.reduce((s, r) => s + (r.valor_total || 0), 0)
-  const totalUnidades = recebimentos.reduce((s, r) =>
+  // Filtra recebimentos
+  const recFiltrados = recebimentos.filter(r => {
+    if (filtroForn && r.fornecedor_id !== filtroForn) return false
+    if (filtroTipo === 'todos') return true
+    return (r.recebimento_itens || []).some(i => {
+      if (filtroTipo === 'outros') return !i.embalagens
+      return i.embalagens?.tipo === filtroTipo
+    })
+  })
+
+  const totalPeriodo = recFiltrados.reduce((s, r) => s + (r.valor_total || 0), 0)
+  const totalUnidades = recFiltrados.reduce((s, r) =>
     s + (r.recebimento_itens || []).reduce((ss, i) => ss + i.quantidade_recebida, 0), 0)
+
+  // Detecta tipos presentes nos recebimentos para mostrar filtros úteis
+  const temRotulos = recebimentos.some(r => r.recebimento_itens?.some(i => i.embalagens?.tipo === 'rotulo'))
+  const temEmbalagens = recebimentos.some(r => r.recebimento_itens?.some(i => i.embalagens?.tipo === 'embalagem'))
+  const temOutros = recebimentos.some(r => r.recebimento_itens?.some(i => !i.embalagens))
 
   return (
     <>
@@ -385,13 +304,34 @@ export default function Compras({ tipo = 'rotulo' }) {
             <label className="form-label">Até</label>
             <input type="date" className="form-input" value={fim} onChange={e => setFim(e.target.value)} />
           </div>
-          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14} /> Atualizar</button>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            {recebimentos.length > 0 && (
-              <button className="btn btn-outline btn-sm" onClick={() => gerarPDFCompras(recebimentos)}>
-                📄 Exportar PDF
-              </button>
-            )}
+
+          {/* Filtro fornecedor */}
+          <div className="form-group">
+            <label className="form-label">Fornecedor</label>
+            <select className="form-input" value={filtroForn} onChange={e => setFiltroForn(e.target.value)}>
+              <option value="">Todos</option>
+              {fornecedores.map(f => <option key={f.id} value={f.id}>{f.nome_fantasia || f.razao_social}</option>)}
+            </select>
+          </div>
+
+          {/* Filtro tipo */}
+          <div className="form-group">
+            <label className="form-label">Tipo</label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { v: 'todos', l: 'Todos' },
+                ...(temRotulos ? [{ v: 'rotulo', l: '🏷️ Rótulos' }] : []),
+                ...(temEmbalagens ? [{ v: 'embalagem', l: '📦 Embalagens' }] : []),
+                ...(temOutros ? [{ v: 'outros', l: 'Outros' }] : []),
+              ].map(({ v, l }) => (
+                <button key={v} className={`btn btn-xs ${filtroTipo === v ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setFiltroTipo(v)}>{l}</button>
+              ))}
+            </div>
+          </div>
+
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14} /></button>
+          <div style={{ marginLeft: 'auto' }}>
             <button className="btn btn-primary" onClick={() => setShowModal(true)}>
               <Plus size={14} /> Registrar recebimento
             </button>
@@ -400,110 +340,121 @@ export default function Compras({ tipo = 'rotulo' }) {
       </div>
 
       {/* KPIs */}
-      <div className="kpi-row">
-        <div className="kpi neutral">
-          <div className="kpi-label">📦 Recebimentos</div>
-          <div className="kpi-value">{recebimentos.length}</div>
-          <div className="kpi-detail">no período</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+        <div className="card card-pad kpi">
+          <div className="kpi-label">Total pago no período</div>
+          <div className="kpi-value" style={{ color: 'var(--danger)' }}>{fmtR(totalPeriodo)}</div>
         </div>
-        <div className="kpi neutral">
-          <div className="kpi-label">🔢 Unidades recebidas</div>
+        <div className="card card-pad kpi">
+          <div className="kpi-label">Unidades recebidas</div>
           <div className="kpi-value">{fmt(totalUnidades)}</div>
-          <div className="kpi-detail">total de embalagens</div>
         </div>
-        <div className="kpi neutral" style={{ borderTop: '3px solid var(--purple)' }}>
-          <div className="kpi-label">💰 Total pago à gráfica</div>
-          <div className="kpi-value" style={{ fontSize: 22, color: 'var(--purple)' }}>{fmtR(totalPeriodo)}</div>
-          <div className="kpi-detail">no período selecionado</div>
-        </div>
-        <div className="kpi neutral">
-          <div className="kpi-label">📊 Custo médio/recebimento</div>
-          <div className="kpi-value" style={{ fontSize: 22 }}>{recebimentos.length > 0 ? fmtR(totalPeriodo / recebimentos.length) : '—'}</div>
-          <div className="kpi-detail">valor médio por entrada</div>
+        <div className="card card-pad kpi">
+          <div className="kpi-label">Recebimentos</div>
+          <div className="kpi-value">{recFiltrados.length}</div>
         </div>
       </div>
 
-      {/* Tabela */}
+      {/* Lista de recebimentos */}
       <div className="card">
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 14 }}>
-          Histórico de recebimentos
-        </div>
-        {loading ? (
-          <div className="loading"><RefreshCw size={14} className="spin" /></div>
-        ) : recebimentos.length === 0 ? (
-          <div className="empty">
-            <div className="empty-icon"><Package size={32} color="var(--gray-300)" /></div>
-            <div className="empty-title">Nenhum recebimento no período</div>
-            <div className="empty-sub">Clique em "Registrar recebimento" para adicionar</div>
-          </div>
-        ) : (
-          <div className="tbl-wrap">
-            <table>
+        {loading ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : (
+          recFiltrados.length === 0 ? (
+            <div className="empty card-pad">
+              <div className="empty-icon">📦</div>
+              <div className="empty-title">Nenhum recebimento no período</div>
+              <div className="empty-sub">Ajuste os filtros ou registre um novo recebimento</div>
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr>
-                  <th></th>
-                  <th>Data</th>
-                  <th>NF</th>
-                  <th>Itens</th>
-                  <th>Total un.</th>
-                  <th>Valor pago</th>
-                  <th>Observação</th>
-                  <th></th>
+                <tr style={{ background: 'var(--gray-50)' }}>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Data</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Fornecedor</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>NF</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'left' }}>Itens</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'right' }}>Total un.</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'right' }}>Valor pago</th>
+                  <th style={{ padding: '10px 14px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {recebimentos.map(r => {
+                {recFiltrados.map(r => {
                   const totalUn = (r.recebimento_itens || []).reduce((s, i) => s + i.quantidade_recebida, 0)
                   const exp = expandido === r.id
+                  const fornNome = r.fornecedor?.nome_fantasia || r.fornecedor?.razao_social || '—'
+
+                  // Detecta tipos no recebimento
+                  const tipos = [...new Set((r.recebimento_itens||[]).map(i => i.embalagens?.tipo || 'outro'))]
+
                   return (
                     <>
-                      <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => setExpandido(exp ? null : r.id)}>
-                        <td style={{ color: 'var(--gray-400)', fontSize: 12 }}>{exp ? '▼' : '▶'}</td>
-                        <td style={{ fontWeight: 700 }}>{new Date(r.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
-                        <td style={{ color: 'var(--gray-500)' }}>{r.numero_nf || '—'}</td>
-                        <td><span className="pill purple">{(r.recebimento_itens || []).length} itens</span></td>
-                        <td style={{ fontWeight: 700 }}>{fmt(totalUn)} un</td>
-                        <td style={{ fontWeight: 800, color: r.valor_total ? 'var(--purple)' : 'var(--gray-400)' }}>
+                      <tr key={r.id} style={{ borderTop: '1px solid var(--gray-100)', cursor: 'pointer' }}
+                        onClick={() => setExpandido(exp ? null : r.id)}>
+                        <td style={{ padding: '10px 14px', fontWeight: 700 }}>
+                          {new Date(r.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span style={{ fontWeight: 600 }}>{fornNome}</span>
+                        </td>
+                        <td style={{ padding: '10px 14px', color: 'var(--gray-500)', fontSize: 12 }}>
+                          {r.numero_nf || '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span className="pill neutral" style={{ fontSize: 11 }}>
+                            {(r.recebimento_itens||[]).length} {(r.recebimento_itens||[]).length === 1 ? 'item' : 'itens'}
+                          </span>
+                          {tipos.map(t => (
+                            <span key={t} className="pill" style={{ fontSize: 10, marginLeft: 4, background: t==='rotulo'?'var(--purple-pale)':t==='embalagem'?'#e0f0ff':'var(--gray-100)', color: t==='rotulo'?'var(--purple)':t==='embalagem'?'#1a6fb5':'var(--gray-500)' }}>
+                              {t === 'rotulo' ? '🏷️' : t === 'embalagem' ? '📦' : '•'} {t==='rotulo'?'Rótulo':t==='embalagem'?'Embalagem':'Outro'}
+                            </span>
+                          ))}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700 }}>
+                          {fmt(totalUn)} un
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--danger)' }}>
                           {r.valor_total ? fmtR(r.valor_total) : '—'}
                         </td>
-                        <td style={{ color: 'var(--gray-500)', fontSize: 12 }}>{r.observacao || '—'}</td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <button className="btn btn-ghost btn-xs" onClick={() => setEditando(r)} title="Editar">
-                            <Pencil size={12} />
-                          </button>
+                        <td style={{ padding: '10px 14px' }}>
+                          {exp ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
                         </td>
                       </tr>
                       {exp && (
-                        <tr key={r.id + '-exp'}>
-                          <td colSpan={7} style={{ padding: 0 }}>
-                            <div style={{ background: 'var(--purple-ghost)', padding: '12px 20px 12px 40px' }}>
-                              <table style={{ fontSize: 12 }}>
-                                <thead>
-                                  <tr>
-                                    <th>Embalagem</th>
-                                    <th>Qtd recebida</th>
-                                    <th>Valor unit.</th>
-                                    <th>Subtotal</th>
+                        <tr key={`${r.id}-det`}>
+                          <td colSpan={7} style={{ padding: '0 14px 14px', background: 'var(--gray-50)' }}>
+                            {r.observacao && (
+                              <div style={{ fontSize: 12, color: 'var(--gray-500)', fontStyle: 'italic', padding: '8px 0 4px' }}>
+                                📝 {r.observacao}
+                              </div>
+                            )}
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 }}>
+                              <thead>
+                                <tr style={{ color: 'var(--gray-400)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase' }}>
+                                  <th style={{ padding: '4px 0', textAlign: 'left' }}>Embalagem</th>
+                                  <th style={{ padding: '4px 8px', textAlign: 'center' }}>Qtd recebida</th>
+                                  <th style={{ padding: '4px 8px', textAlign: 'right' }}>Valor unit.</th>
+                                  <th style={{ padding: '4px 0', textAlign: 'right' }}>Subtotal</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(r.recebimento_itens || []).map(i => (
+                                  <tr key={i.id} style={{ borderTop: '1px solid var(--gray-200)' }}>
+                                    <td style={{ padding: '6px 0' }}>
+                                      <div style={{ fontWeight: 600 }}>
+                                        {i.embalagens?.nome || i.nome_livre || <span style={{color:'var(--gray-300)',fontStyle:'italic'}}>sem nome</span>}
+                                      </div>
+                                      {i.embalagens?.codigo && <div style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{i.embalagens.codigo}</div>}
+                                      {!i.embalagens && i.nome_livre && <div style={{ fontSize: 10, color: 'var(--gold)', fontWeight: 600 }}>não cadastrado</div>}
+                                    </td>
+                                    <td style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 700 }}>{fmt(i.quantidade_recebida)} un</td>
+                                    <td style={{ padding: '6px 8px', textAlign: 'right', color: 'var(--gray-600)' }}>{i.valor_unitario ? fmtR(i.valor_unitario) : '—'}</td>
+                                    <td style={{ padding: '6px 0', textAlign: 'right', fontWeight: 700 }}>
+                                      {i.valor_unitario ? fmtR(i.quantidade_recebida * i.valor_unitario) : '—'}
+                                    </td>
                                   </tr>
-                                </thead>
-                                <tbody>
-                                  {(r.recebimento_itens || []).map(i => (
-                                    <tr key={i.id}>
-                                      <td>
-                                        <div style={{ fontWeight: 600 }}>
-                                          {i.embalagens?.nome || i.nome_livre || <span style={{color:'var(--gray-400)',fontStyle:'italic'}}>sem nome</span>}
-                                        </div>
-                                        {i.embalagens?.codigo && <div style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{i.embalagens.codigo}</div>}
-                                        {!i.embalagens && i.nome_livre && <div style={{ fontSize: 10, color: 'var(--gold)', fontWeight: 600 }}>não cadastrado</div>}
-                                      </td>
-                                      <td>{fmt(i.quantidade_recebida)} un</td>
-                                      <td>{i.valor_unitario ? fmtR(i.valor_unitario) : '—'}</td>
-                                      <td style={{ fontWeight: 700 }}>{i.valor_total ? fmtR(i.valor_total) : '—'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                                ))}
+                              </tbody>
+                            </table>
                           </td>
                         </tr>
                       )}
@@ -512,7 +463,7 @@ export default function Compras({ tipo = 'rotulo' }) {
                 })}
               </tbody>
             </table>
-          </div>
+          )
         )}
       </div>
 
@@ -520,16 +471,10 @@ export default function Compras({ tipo = 'rotulo' }) {
         <ModalNovaCompra
           pedidos={pedidos}
           embalagens={embalagens}
+          fornecedores={fornecedores}
+          onNovoFornecedor={f => setFornecedores(p => [...p, f])}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load() }}
-        />
-      )}
-      {editando && (
-        <ModalEditarCompra
-          recebimento={editando}
-          embalagens={embalagens}
-          onClose={() => setEditando(null)}
-          onSaved={() => { setEditando(null); load() }}
         />
       )}
     </>
