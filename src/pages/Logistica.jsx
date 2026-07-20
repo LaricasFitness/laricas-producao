@@ -909,7 +909,7 @@ export default function Logistica({ csvInicial }) {
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
               {csvRaw && (
-                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops)}>
+                <button className="btn btn-ghost" onClick={()=>setStep('conferencia')}>
                   <FileText size={14}/> PDF Conferência
                 </button>
               )}
@@ -1001,7 +1001,6 @@ export default function Logistica({ csvInicial }) {
                         background: idx%2===0 ? '#fff' : '#f9f8ff',
                         fontSize:13, cursor:'grab',
                       }}>
-                      {/* Drag handle */}
                       <span style={{ color:'var(--gray-300)', fontSize:14, userSelect:'none' }}>⠿</span>
                       <span style={{ fontWeight:800, color:'#1565C0', textAlign:'center' }}>{idx+1}</span>
                       <span style={{ fontFamily:'monospace', color:'var(--gray-500)', fontSize:12 }}>#{stop.id}</span>
@@ -1009,14 +1008,6 @@ export default function Logistica({ csvInicial }) {
                       <span style={{ color:'var(--gray-600)', fontSize:12 }}>
                         {stop.rua}, {stop.numero}{stop.complemento?` - ${stop.complemento}`:''} · {stop.bairro} · {stop.cidade}/{stop.uf}
                       </span>
-                      {/* Observação por pedido */}
-                      <input
-                        placeholder="Obs..."
-                        value={obsStops[stop.id] || ''}
-                        onChange={e => setObsStops(p => ({ ...p, [stop.id]: e.target.value }))}
-                        onClick={e => e.stopPropagation()}
-                        style={{ fontSize:11, padding:'2px 6px', border:'1px solid var(--gray-200)', borderRadius:4, outline:'none', width:130, color:'var(--gray-600)', background: obsStops[stop.id] ? '#fffbf0' : 'transparent' }}
-                      />
                       <button
                         onClick={() => {
                           if (!window.confirm(`Excluir pedido #${stop.id} desta rota?`)) return
@@ -1045,6 +1036,131 @@ export default function Logistica({ csvInicial }) {
         </div>
       )}
     </>) /* fim abaLog==='roteiro' */}
+
+    {/* ── Tela de conferência — preview editável antes de gerar PDF ── */}
+    {abaLog==='roteiro' && step==='conferencia' && (() => {
+      // Monta lista de todos os pedidos agrupados por transportadora
+      const stopsLalam = routes.flatMap(r => r.stops)
+      const outrasTransp = {}
+      if (csvRaw) {
+        const todosMap = parsearTodosOsPedidos(csvRaw, datasAtivas)
+        const idsLalamove = new Set(stopsLalam.map(s => String(s.id)))
+        for (const p of Object.values(todosMap)) {
+          const t = p.transportadora || ''
+          if (t.toLowerCase().includes('lalamove') || !t) continue
+          if (!outrasTransp[t]) outrasTransp[t] = []
+          outrasTransp[t].push(p)
+        }
+      }
+
+      return (
+        <div style={{ background:'var(--white)', border:'1px solid var(--gray-200)', borderRadius:10, overflow:'hidden', marginTop:12 }}>
+          {/* Header da tela */}
+          <div style={{ background:'var(--purple-dark,#3d1f5e)', padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <div>
+              <div style={{ color:'#eab782', fontWeight:800, fontSize:16 }}>Laricas Fitness — Conferência de Expedição</div>
+              <div style={{ color:'#fff', fontSize:12, marginTop:2 }}>Data: {dateStr} · Adicione observações e gere o PDF</div>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="btn btn-primary" onClick={()=>gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops)}>
+                📄 Gerar PDF
+              </button>
+              <button className="btn btn-ghost" style={{ color:'#fff', borderColor:'rgba(255,255,255,.3)' }} onClick={()=>setStep('ready')}>
+                ← Voltar
+              </button>
+            </div>
+          </div>
+
+          <div style={{ padding:20, display:'flex', flexDirection:'column', gap:20 }}>
+            {/* Lalamove */}
+            {stopsLalam.length > 0 && (
+              <div>
+                <div style={{ background:'#323232', color:'#fff', fontWeight:800, fontSize:13, padding:'8px 14px', borderRadius:'6px 6px 0 0' }}>
+                  LALAMOVE — {stopsLalam.length} pedido{stopsLalam.length>1?'s':''}
+                </div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:'#f0ecf8' }}>
+                      <th style={{ padding:'7px 10px', textAlign:'left', width:28, color:'var(--gray-500)', fontSize:11 }}>✓</th>
+                      <th style={{ padding:'7px 10px', textAlign:'left', width:24, color:'var(--gray-500)', fontSize:11 }}>#</th>
+                      <th style={{ padding:'7px 10px', textAlign:'left', width:80, color:'var(--gray-500)', fontSize:11 }}>Pedido</th>
+                      <th style={{ padding:'7px 10px', textAlign:'left', color:'var(--gray-500)', fontSize:11 }}>Cliente</th>
+                      <th style={{ padding:'7px 10px', textAlign:'center', width:60, color:'var(--gray-500)', fontSize:11 }}>Itens</th>
+                      <th style={{ padding:'7px 10px', textAlign:'left', width:200, color:'var(--gray-500)', fontSize:11 }}>Observação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stopsLalam.map((p, i) => {
+                      const totalQtd = (p.itens||[]).reduce((s,it)=>s+it.qtd,0)
+                      return (
+                        <tr key={p.id} style={{ borderTop:'1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafaf8' }}>
+                          <td style={{ padding:'8px 10px', textAlign:'center', fontSize:16, color:'var(--gray-300)' }}>☐</td>
+                          <td style={{ padding:'8px 10px', fontWeight:700, color:'var(--purple)' }}>{i+1}</td>
+                          <td style={{ padding:'8px 10px', fontFamily:'monospace', fontSize:12, color:'var(--gray-500)' }}>#{p.id}</td>
+                          <td style={{ padding:'8px 10px', fontWeight:600 }}>{p.nome}</td>
+                          <td style={{ padding:'8px 10px', textAlign:'center', fontWeight:800 }}>{totalQtd||'—'}</td>
+                          <td style={{ padding:'6px 10px' }}>
+                            <input className="form-input"
+                              value={obsStops[p.id]||''}
+                              onChange={e=>setObsStops(prev=>({...prev,[p.id]:e.target.value}))}
+                              placeholder="Observação (opcional)..."
+                              style={{ fontSize:12, padding:'4px 8px', background: obsStops[p.id]?'#fffbf0':'transparent', borderColor: obsStops[p.id]?'var(--gold)':'var(--gray-200)' }}
+                            />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Outras transportadoras */}
+            {Object.entries(outrasTransp).sort().map(([transp, stops]) => (
+              <div key={transp}>
+                <div style={{ background:'#505050', color:'#fff', fontWeight:800, fontSize:13, padding:'8px 14px', borderRadius:'6px 6px 0 0' }}>
+                  {transp.toUpperCase()} — {stops.length} pedido{stops.length>1?'s':''}
+                </div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:'#f0ecf8' }}>
+                      <th style={{ padding:'7px 10px', width:28, color:'var(--gray-500)', fontSize:11 }}>✓</th>
+                      <th style={{ padding:'7px 10px', width:24, color:'var(--gray-500)', fontSize:11 }}>#</th>
+                      <th style={{ padding:'7px 10px', width:80, color:'var(--gray-500)', fontSize:11 }}>Pedido</th>
+                      <th style={{ padding:'7px 10px', color:'var(--gray-500)', fontSize:11 }}>Cliente</th>
+                      <th style={{ padding:'7px 10px', textAlign:'center', width:60, color:'var(--gray-500)', fontSize:11 }}>Itens</th>
+                      <th style={{ padding:'7px 10px', width:200, color:'var(--gray-500)', fontSize:11 }}>Observação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stops.map((p, i) => {
+                      const totalQtd = (p.itens||[]).reduce((s,it)=>s+it.qtd,0)
+                      return (
+                        <tr key={p.id} style={{ borderTop:'1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafaf8' }}>
+                          <td style={{ padding:'8px 10px', textAlign:'center', fontSize:16, color:'var(--gray-300)' }}>☐</td>
+                          <td style={{ padding:'8px 10px', fontWeight:700, color:'var(--purple)' }}>{i+1}</td>
+                          <td style={{ padding:'8px 10px', fontFamily:'monospace', fontSize:12, color:'var(--gray-500)' }}>#{p.id}</td>
+                          <td style={{ padding:'8px 10px', fontWeight:600 }}>{p.nome}</td>
+                          <td style={{ padding:'8px 10px', textAlign:'center', fontWeight:800 }}>{totalQtd||'—'}</td>
+                          <td style={{ padding:'6px 10px' }}>
+                            <input className="form-input"
+                              value={obsStops[p.id]||''}
+                              onChange={e=>setObsStops(prev=>({...prev,[p.id]:e.target.value}))}
+                              placeholder="Observação (opcional)..."
+                              style={{ fontSize:12, padding:'4px 8px', background: obsStops[p.id]?'#fffbf0':'transparent', borderColor: obsStops[p.id]?'var(--gold)':'var(--gray-200)' }}
+                            />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    })()}
     </>
   )
 }
