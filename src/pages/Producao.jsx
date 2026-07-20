@@ -221,11 +221,12 @@ export default function Producao() {
     try {
       const dataStr = data
       const registradoPor = nome
+      const criadoEm = new Date().toISOString() // mesmo timestamp = mesmo lote
 
       // Fase 1 — desconta embalagens
       const fase1 = embalagens
         .filter(e => qtdsFase1[e.id] && parseInt(qtdsFase1[e.id]) > 0)
-        .map(e => ({ embalagem_id: e.id, quantidade: parseInt(qtdsFase1[e.id]), data_producao: dataStr, registrado_por: registradoPor }))
+        .map(e => ({ embalagem_id: e.id, quantidade: parseInt(qtdsFase1[e.id]), data_producao: dataStr, registrado_por: registradoPor, criado_em: criadoEm }))
 
       if (fase1.length > 0) {
         const { data: inseridos } = await supabase.from('producao_diaria').insert(fase1).select()
