@@ -138,33 +138,29 @@ function parsearTodosOsPedidos(texto, datasFiltro) {
   return pedidosMap
 }
 
-function gerarPDFConferencia(routes, dateStr) {
+function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas) {
   if (!routes || !routes.length) { alert('Nenhum roteiro gerado.'); return }
 
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 
-  // Todos os stops das rotas Lalamove
-  const stopsLalamove = routes.flatMap(r => r.stops.map(s => ({ ...s, rota: r.label, rota_code: r.code })))
+  // Pedidos Lalamove — vêm das rotas montadas
+  const stopsLalam = routes.flatMap(r => r.stops)
 
-  // Stops de outras transportadoras (vêm no estado separado do CSV mas passados junto)
-  // Agrupa stops não-Lalamove por transportadora
+  // Outras transportadoras — extraídas do CSV original
   const outrasTransp = {}
-  for (const r of routes) {
-    for (const stop of r.stops) {
-      const transp = stop.transportadora || ''
-      const isLalamove = !transp || transp.toLowerCase().includes('lalamove') || transp === ''
-      if (!isLalamove) {
-        if (!outrasTransp[transp]) outrasTransp[transp] = []
-        outrasTransp[transp].push({ ...stop, rota: r.label })
-      }
+  if (csvRaw) {
+    const todosMap = parsearTodosOsPedidos(csvRaw, datasAtivas)
+    const idsLalamove = new Set(stopsLalam.map(s => String(s.id)))
+    for (const p of Object.values(todosMap)) {
+      const t = p.transportadora || ''
+      if (t.toLowerCase().includes('lalamove') || !t) continue
+      if (!outrasTransp[t]) outrasTransp[t] = []
+      outrasTransp[t].push(p)
     }
   }
 
-  const totalPedidos = stopsLalamove.filter(s => {
-    const t = s.transportadora || ''
-    return !t || t.toLowerCase().includes('lalamove') || t === ''
-  }).length + Object.values(outrasTransp).flat().length
+  const totalPedidos = stopsLalam.length + Object.values(outrasTransp).flat().length
 
   // Header
   doc.setFillColor(82, 46, 100)
@@ -201,11 +197,6 @@ function gerarPDFConferencia(routes, dateStr) {
   }
 
   // ── Seção Lalamove — lista única sem divisão por rota ───────────────────────
-  const stopsLalam = routes.flatMap(r => r.stops).filter(s => {
-    const t = s.transportadora || ''
-    return !t || t.toLowerCase().includes('lalamove') || t === ''
-  })
-
   if (stopsLalam.length) {
     doc.setFillColor(50, 50, 50)
     doc.rect(14, y, 182, 9, 'F')
@@ -906,7 +897,7 @@ export default function Logistica({ csvInicial }) {
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
               {csvRaw && (
-                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr)}>
+                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas)}>
                   <FileText size={14}/> PDF Conferência
                 </button>
               )}
