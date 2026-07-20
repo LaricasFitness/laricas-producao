@@ -138,7 +138,7 @@ function parsearTodosOsPedidos(texto, datasFiltro) {
   return pedidosMap
 }
 
-function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas) {
+function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops = {}) {
   if (!routes || !routes.length) { alert('Nenhum roteiro gerado.'); return }
 
   const doc = new jsPDF()
@@ -182,15 +182,22 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas) {
       head: [[
         { content: '✓', styles:{ halign:'center', cellWidth:12 } },
         { content: '#', styles:{ cellWidth:10 } },
-        { content: 'Pedido', styles:{ cellWidth:32 } },
-        { content: 'Cliente', styles:{ cellWidth:100 } },
-        { content: 'Itens', styles:{ halign:'center', cellWidth:28 } },
+        { content: 'Pedido', styles:{ cellWidth:28 } },
+        { content: 'Cliente', styles:{ cellWidth:78 } },
+        { content: 'Itens', styles:{ halign:'center', cellWidth:20 } },
+        { content: 'Observação', styles:{ cellWidth:34 } },
       ]],
       body,
       styles: { fontSize: 9, cellPadding: 4 },
       headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold', fontSize:9 },
       alternateRowStyles: { fillColor:[250,248,255] },
-      columnStyles: { 0: { cellWidth:12, halign:'center' }, 1: { cellWidth:10 }, 2: { cellWidth:32 } },
+      columnStyles: {
+        0: { cellWidth:12, halign:'center' },
+        1: { cellWidth:10 },
+        2: { cellWidth:28 },
+        4: { cellWidth:20, halign:'center' },
+        5: { cellWidth:34, fontSize:8, textColor:[120,80,0] },
+      },
       margin: { left:14, right:14 },
     })
     return doc.lastAutoTable.finalY + 8
@@ -207,12 +214,14 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas) {
 
     const body = stopsLalam.map((p, i) => {
       const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
+      const obs = obsStops[p.id] || ''
       return [
         { content: '☐', styles:{ halign:'center' } },
         String(i+1),
         `#${p.id}`,
         p.nome || '—',
         { content: totalQtd > 0 ? String(totalQtd) : '—', styles:{ halign:'center', fontStyle:'bold' } },
+        { content: obs, styles:{ fontSize:8, textColor:[120,80,0], fontStyle: obs ? 'italic' : 'normal' } },
       ]
     })
     y = renderTabela(body, y)
@@ -233,12 +242,14 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas) {
 
     const body = stops.map((p, i) => {
       const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
+      const obs = obsStops[p.id] || ''
       return [
         { content: '☐', styles:{ halign:'center' } },
         String(i+1),
         `#${p.id}`,
         p.nome || '—',
         { content: totalQtd > 0 ? String(totalQtd) : '—', styles:{ halign:'center', fontStyle:'bold' } },
+        { content: obs, styles:{ fontSize:8, textColor:[120,80,0], fontStyle: obs ? 'italic' : 'normal' } },
       ]
     })
     y = renderTabela(body, y)
@@ -376,6 +387,7 @@ export default function Logistica({ csvInicial }) {
   const [manualAddr, setManualAddr] = useState({})
   const [enderecoCache, setEnderecoCache] = useState({})
   const [sugestoes, setSugestoes] = useState({})
+  const [obsStops, setObsStops] = useState({}) // { stopId: 'observação' }
   const [importando, setImportando] = useState(false)
   // Busca por pedido
   const [buscaPedido, setBuscaPedido] = useState('')
@@ -897,7 +909,7 @@ export default function Logistica({ csvInicial }) {
                 <Download size={14}/> Baixar todos (ZIP)
               </button>
               {csvRaw && (
-                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas)}>
+                <button className="btn btn-ghost" onClick={()=>gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops)}>
                   <FileText size={14}/> PDF Conferência
                 </button>
               )}
@@ -997,6 +1009,14 @@ export default function Logistica({ csvInicial }) {
                       <span style={{ color:'var(--gray-600)', fontSize:12 }}>
                         {stop.rua}, {stop.numero}{stop.complemento?` - ${stop.complemento}`:''} · {stop.bairro} · {stop.cidade}/{stop.uf}
                       </span>
+                      {/* Observação por pedido */}
+                      <input
+                        placeholder="Obs..."
+                        value={obsStops[stop.id] || ''}
+                        onChange={e => setObsStops(p => ({ ...p, [stop.id]: e.target.value }))}
+                        onClick={e => e.stopPropagation()}
+                        style={{ fontSize:11, padding:'2px 6px', border:'1px solid var(--gray-200)', borderRadius:4, outline:'none', width:130, color:'var(--gray-600)', background: obsStops[stop.id] ? '#fffbf0' : 'transparent' }}
+                      />
                       <button
                         onClick={() => {
                           if (!window.confirm(`Excluir pedido #${stop.id} desta rota?`)) return
