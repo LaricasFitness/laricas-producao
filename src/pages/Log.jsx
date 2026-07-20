@@ -153,6 +153,67 @@ function EditarQtd({ r, onSaved }) {
   )
 }
 
+function LoteLinha({ lote, embs, onDataSalva }) {
+  const [editandoData, setEditandoData] = useState(false)
+  const [novaData, setNovaData] = useState(lote.data_producao)
+  const [saving, setSaving] = useState(false)
+
+  const total = lote.itens.reduce((s, r) => s + r.quantidade, 0)
+  const skus = [...new Set(lote.itens.map(r => embs[r.embalagem_id]?.nome).filter(Boolean))]
+  const d = new Date(lote.data_producao + 'T12:00:00')
+
+  async function salvarData() {
+    if (!novaData || novaData === lote.data_producao) { setEditandoData(false); return }
+    setSaving(true)
+    const ids = lote.itens.map(r => r.id)
+    await supabase.from('producao_diaria').update({ data_producao: novaData }).in('id', ids)
+    setSaving(false)
+    setEditandoData(false)
+    onDataSalva(novaData)
+  }
+
+  return (
+    <tr style={{ borderBottom: '1px solid var(--gray-100)' }}>
+      <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+        {editandoData ? (
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input type="date" value={novaData} onChange={e => setNovaData(e.target.value)}
+              autoFocus style={{ fontSize: 12, padding: '3px 6px', border: '2px solid var(--purple)', borderRadius: 5, outline: 'none', width: 130 }} />
+            <button onClick={salvarData} disabled={saving}
+              style={{ background: 'var(--purple)', color: '#fff', border: 'none', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+              {saving ? '...' : '✓'}
+            </button>
+            <button onClick={() => { setNovaData(lote.data_producao); setEditandoData(false) }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 16, lineHeight: 1 }}>×</button>
+          </div>
+        ) : (
+          <span style={{ cursor: 'default' }}>{d.toLocaleDateString('pt-BR')}</span>
+        )}
+      </td>
+      <td style={{ color: 'var(--gray-400)', fontSize: 12, whiteSpace: 'nowrap' }}>
+        {lote.criado_em ? fmtHora(lote.criado_em) : d.toLocaleDateString('pt-BR', { weekday: 'short' })}
+      </td>
+      <td>
+        <span className="pill purple" style={{ fontSize: 11 }}>{lote.registrado_por || '—'}</span>
+      </td>
+      <td style={{ fontSize: 12, color: 'var(--gray-600)', maxWidth: 300 }}>
+        {skus.slice(0,4).join(', ')}{skus.length > 4 ? ` +${skus.length - 4}` : ''}
+      </td>
+      <td style={{ fontWeight: 800, color: 'var(--purple)', textAlign: 'right', whiteSpace: 'nowrap' }}>
+        {fmt(total)} un
+      </td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        {!editandoData && (
+          <button onClick={() => { setNovaData(lote.data_producao); setEditandoData(true) }}
+            style={{ background: 'none', border: '1px solid var(--gray-200)', borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 11, color: 'var(--gray-500)', display: 'flex', alignItems: 'center', gap: 3 }}>
+            📅 Data
+          </button>
+        )}
+      </td>
+    </tr>
+  )
+}
+
 export default function Log() {
   const hoje = new Date()
   const [ano, setAno] = useState(hoje.getFullYear())
@@ -426,7 +487,7 @@ export default function Log() {
         </div>
       </div>
 
-      {/* Tabela completa do mês */}
+      {/* Tabela completa do mês — uma linha por lote */}
       <div className="card">
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontWeight: 700, fontSize: 14 }}>Todos os registros — {MESES[mes]} {ano}</span>
@@ -440,33 +501,53 @@ export default function Log() {
               <thead>
                 <tr>
                   <th>Data</th>
-                  <th>Dia</th>
+                  <th>Horário</th>
                   <th>Responsável</th>
                   <th>Itens registrados</th>
-                  <th>Total produzido</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(dados).sort(([a],[b]) => b.localeCompare(a)).map(([dateStr, rows]) => {
-                  const d = new Date(dateStr + 'T12:00:00')
-                  const total = rows.reduce((s, r) => s + r.quantidade, 0)
-                  const resp = [...new Set(rows.map(r => r.registrado_por).filter(Boolean))]
-                  const skus = [...new Set(rows.map(r => embs[r.embalagem_id]?.nome).filter(Boolean))]
-                  return (
-                    <tr key={dateStr} style={{ cursor: 'pointer' }} onClick={() => verDetalhe(dateStr)}>
-                      <td style={{ fontWeight: 700 }}>{d.toLocaleDateString('pt-BR')}</td>
-                      <td style={{ color: 'var(--gray-500)' }}>{d.toLocaleDateString('pt-BR', { weekday: 'long' })}</td>
-                      <td>{resp.map(r => <span key={r} className="pill purple" style={{ marginRight: 4 }}>{r}</span>)}</td>
-                      <td style={{ fontSize: 12, color: 'var(--gray-600)', maxWidth: 260 }}>
-                        {skus.slice(0,4).join(', ')}{skus.length > 4 ? ` +${skus.length - 4}` : ''}
-                      </td>
-                      <td style={{ fontWeight: 800, color: 'var(--purple)' }}>{fmt(total)} un</td>
-                    </tr>
+                {(() => {
+                  // Agrupa todos os registros do mês em lotes por criado_em exato
+                  const todos = Object.values(dados).flat()
+                    .filter(r => !r.registrado_por?.includes('auto-embalagem'))
+                  const lotesMap = {}
+                  for (const r of todos) {
+                    const key = r.criado_em || `sem-${r.data_producao}-${r.registrado_por}`
+                    if (!lotesMap[key]) lotesMap[key] = { criado_em: r.criado_em, data_producao: r.data_producao, registrado_por: r.registrado_por, itens: [] }
+                    lotesMap[key].itens.push(r)
+                  }
+                  const lotes = Object.values(lotesMap).sort((a,b) => (b.criado_em||b.data_producao).localeCompare(a.criado_em||a.data_producao))
+
+                  if (!lotes.length) return (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--gray-400)' }}>Nenhum registro neste mês</td></tr>
                   )
-                })}
-                {Object.keys(dados).length === 0 && (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32, color: 'var(--gray-400)' }}>Nenhum registro neste mês</td></tr>
-                )}
+
+                  return lotes.map((lote, i) => (
+                    <LoteLinha key={lote.criado_em || i} lote={lote} embs={embs}
+                      onDataSalva={(novaData) => {
+                        // Atualiza data_producao localmente
+                        setDados(prev => {
+                          const clone = { ...prev }
+                          const ids = lote.itens.map(r => r.id)
+                          // Remove do dia antigo
+                          const dataAntiga = lote.data_producao
+                          if (clone[dataAntiga]) {
+                            clone[dataAntiga] = clone[dataAntiga].filter(r => !ids.includes(r.id))
+                            if (!clone[dataAntiga].length) delete clone[dataAntiga]
+                          }
+                          // Adiciona no novo dia
+                          if (!clone[novaData]) clone[novaData] = []
+                          clone[novaData] = [...clone[novaData], ...lote.itens.map(r => ({...r, data_producao: novaData}))]
+                          return clone
+                        })
+                        lote.data_producao = novaData
+                      }}
+                    />
+                  ))
+                })()}
               </tbody>
             </table>
           </div>
