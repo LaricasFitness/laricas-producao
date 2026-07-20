@@ -1054,7 +1054,7 @@ export default function Logistica({ csvInicial }) {
       }
 
       return (
-        <div style={{ background:'var(--white)', border:'1px solid var(--gray-200)', borderRadius:10, overflow:'hidden', marginTop:12 }}>
+        <div style={{ background:'var(--white)', border:'1px solid var(--gray-200)', borderRadius:10, overflow:'visible', marginTop:12 }}>
           {/* Header da tela */}
           <div style={{ background:'var(--purple-dark,#3d1f5e)', padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <div>
