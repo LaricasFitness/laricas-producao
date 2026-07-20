@@ -1045,13 +1045,15 @@ export default function Logistica({ csvInicial }) {
       const outrasTransp = {}
       if (csvRaw) {
         const todosMap = parsearTodosOsPedidos(csvRaw, datasAtivas)
+        console.log('DEBUG todos pedidos:', Object.values(todosMap).map(p => ({ id: p.id, transp: p.transportadora })))
+        console.log('DEBUG idsLalamove:', [...idsLalamove])
         for (const p of Object.values(todosMap)) {
-          // Pula pedidos já nas rotas Lalamove
-          if (idsLalamove.has(String(p.id))) continue
+          if (idsLalamove.has(String(p.id))) { console.log('SKIP (lalamove):', p.id); continue }
           const t = p.transportadora || 'Sem transportadora'
           if (!outrasTransp[t]) outrasTransp[t] = []
           outrasTransp[t].push(p)
         }
+        console.log('DEBUG outrasTransp:', outrasTransp)
       }
 
       return (
