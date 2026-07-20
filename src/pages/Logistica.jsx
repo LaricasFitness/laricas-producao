@@ -144,10 +144,27 @@ function gerarPDFConferencia(routes, dateStr) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 
-  // Agrupa todos os stops por transportadora (lalamove = todas as rotas)
-  const todosPedidos = routes.flatMap(r => r.stops.map(s => ({ ...s, rota: r.label, rota_code: r.code })))
-  const totalPedidos = todosPedidos.length
-  const totalItens = todosPedidos.reduce((s,p) => s + (p.itens||[]).reduce((si,i) => si+i.qtd, 0), 0)
+  // Todos os stops das rotas Lalamove
+  const stopsLalamove = routes.flatMap(r => r.stops.map(s => ({ ...s, rota: r.label, rota_code: r.code })))
+
+  // Stops de outras transportadoras (vêm no estado separado do CSV mas passados junto)
+  // Agrupa stops não-Lalamove por transportadora
+  const outrasTransp = {}
+  for (const r of routes) {
+    for (const stop of r.stops) {
+      const transp = stop.transportadora || ''
+      const isLalamove = !transp || transp.toLowerCase().includes('lalamove') || transp === ''
+      if (!isLalamove) {
+        if (!outrasTransp[transp]) outrasTransp[transp] = []
+        outrasTransp[transp].push({ ...stop, rota: r.label })
+      }
+    }
+  }
+
+  const totalPedidos = stopsLalamove.filter(s => {
+    const t = s.transportadora || ''
+    return !t || t.toLowerCase().includes('lalamove') || t === ''
+  }).length + Object.values(outrasTransp).flat().length
 
   // Header
   doc.setFillColor(82, 46, 100)
@@ -163,48 +180,77 @@ function gerarPDFConferencia(routes, dateStr) {
 
   let y = 44
 
-  // Uma secção por rota
-  for (const r of routes) {
-    if (!r.stops.length) continue
-
-    // Header da rota
-    doc.setFontSize(11); doc.setFont(undefined, 'bold'); doc.setTextColor(82, 46, 100)
-    doc.text(`Rota ${r.code} — ${r.label} (${r.stops.length} paradas)`, 14, y)
-    y += 6
-
-    const body = r.stops.map((p, i) => {
-      const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
-      return [
-        { content: '☐', styles: { halign:'center', fontSize:11 } },
-        String(i+1),
-        `#${p.id}`,
-        p.nome || '—',
-        { content: String(totalQtd) || '—', styles: { halign:'center', fontStyle:'bold', fontSize:11 } },
-      ]
-    })
-
+  function renderTabela(body, startY) {
     autoTable(doc, {
-      startY: y,
+      startY,
       head: [[
         { content: '✓', styles:{ halign:'center', cellWidth:12 } },
         { content: '#', styles:{ cellWidth:10 } },
         { content: 'Pedido', styles:{ cellWidth:32 } },
         { content: 'Cliente', styles:{ cellWidth:100 } },
-        { content: 'Total Itens', styles:{ halign:'center', cellWidth:28 } },
+        { content: 'Itens', styles:{ halign:'center', cellWidth:28 } },
       ]],
       body,
       styles: { fontSize: 9, cellPadding: 4 },
       headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold', fontSize:9 },
       alternateRowStyles: { fillColor:[250,248,255] },
-      columnStyles: {
-        0: { cellWidth:12, halign:'center' },
-        1: { cellWidth:10 },
-        2: { cellWidth:32 },
-      },
+      columnStyles: { 0: { cellWidth:12, halign:'center' }, 1: { cellWidth:10 }, 2: { cellWidth:32 } },
       margin: { left:14, right:14 },
     })
+    return doc.lastAutoTable.finalY + 8
+  }
 
-    y = doc.lastAutoTable.finalY + 8
+  // ── Seção Lalamove — lista única sem divisão por rota ───────────────────────
+  const stopsLalam = routes.flatMap(r => r.stops).filter(s => {
+    const t = s.transportadora || ''
+    return !t || t.toLowerCase().includes('lalamove') || t === ''
+  })
+
+  if (stopsLalam.length) {
+    doc.setFillColor(50, 50, 50)
+    doc.rect(14, y, 182, 9, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(10); doc.setFont(undefined, 'bold')
+    doc.text(`LALAMOVE — ${stopsLalam.length} pedido${stopsLalam.length > 1 ? 's' : ''}`, 18, y + 6.5)
+    y += 12
+
+    const body = stopsLalam.map((p, i) => {
+      const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
+      return [
+        { content: '☐', styles:{ halign:'center' } },
+        String(i+1),
+        `#${p.id}`,
+        p.nome || '—',
+        { content: totalQtd > 0 ? String(totalQtd) : '—', styles:{ halign:'center', fontStyle:'bold' } },
+      ]
+    })
+    y = renderTabela(body, y)
+    if (y > 260) { doc.addPage(); y = 14 }
+  }
+
+  // ── Outras transportadoras ────────────────────────────────────────────────
+  for (const [transp, stops] of Object.entries(outrasTransp).sort()) {
+    if (y > 240) { doc.addPage(); y = 14 }
+
+    // Banner transportadora
+    doc.setFillColor(80, 80, 80)
+    doc.rect(14, y, 182, 9, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(10); doc.setFont(undefined, 'bold')
+    doc.text(`${transp.toUpperCase()} — ${stops.length} pedido${stops.length > 1 ? 's' : ''}`, 18, y + 6.5)
+    y += 12
+
+    const body = stops.map((p, i) => {
+      const totalQtd = (p.itens||[]).reduce((s,it) => s+it.qtd, 0)
+      return [
+        { content: '☐', styles:{ halign:'center' } },
+        String(i+1),
+        `#${p.id}`,
+        p.nome || '—',
+        { content: totalQtd > 0 ? String(totalQtd) : '—', styles:{ halign:'center', fontStyle:'bold' } },
+      ]
+    })
+    y = renderTabela(body, y)
     if (y > 260) { doc.addPage(); y = 14 }
   }
 
