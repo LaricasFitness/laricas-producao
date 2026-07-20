@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { registrarAcao } from '../lib/log'
-import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -236,6 +236,141 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
   )
 }
 
+// ── Modal editar recebimento ──────────────────────────────────────────────────
+function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial, onClose, onSaved, onNovoFornecedor }) {
+  const [fornecedores, setFornecedores] = useState(fornInicial)
+  const [fornecedorId, setFornecedorId] = useState(recebimento.fornecedor_id || '')
+  const [nf, setNf] = useState(recebimento.numero_nf || '')
+  const [dataRec, setDataRec] = useState(recebimento.data_recebimento || '')
+  const [obs, setObs] = useState(recebimento.observacao || '')
+  const [itens, setItens] = useState(
+    (recebimento.recebimento_itens || []).map(i => ({
+      id: i.id,
+      embalagem_id: i.embalagem_id || '',
+      nome_livre: i.nome_livre || '',
+      quantidade: String(i.quantidade_recebida),
+      valor_unitario: i.valor_unitario ? String(i.valor_unitario) : '',
+    }))
+  )
+  const [saving, setSaving] = useState(false)
+
+  function addItem() { setItens(p => [...p, { id: null, embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }]) }
+  function updItem(i, k, v) { setItens(p => p.map((it, idx) => idx === i ? { ...it, [k]: v } : it)) }
+  function remItem(i) { setItens(p => p.filter((_, idx) => idx !== i)) }
+
+  const totalGeral = itens.reduce((s, it) => s + (parseFloat(it.quantidade)||0) * (parseFloat(it.valor_unitario)||0), 0)
+
+  async function salvar() {
+    const fil = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
+    if (!fil.length) { alert('Adicione pelo menos um item.'); return }
+    setSaving(true)
+    try {
+      // Atualiza cabeçalho
+      await supabase.from('recebimentos').update({
+        fornecedor_id: fornecedorId || null,
+        numero_nf: nf || null,
+        data_recebimento: dataRec,
+        observacao: obs || null,
+        valor_total: totalGeral || null,
+      }).eq('id', recebimento.id)
+
+      // Recria itens (delete + insert)
+      await supabase.from('recebimento_itens').delete().eq('recebimento_id', recebimento.id)
+      await supabase.from('recebimento_itens').insert(fil.map(it => ({
+        recebimento_id: recebimento.id,
+        embalagem_id: it.embalagem_id || null,
+        nome_livre: it.embalagem_id ? null : it.nome_livre?.trim(),
+        quantidade_recebida: parseInt(it.quantidade),
+        valor_unitario: parseFloat(it.valor_unitario) || null,
+      })))
+
+      // Atualiza custo_unitario
+      for (const it of fil.filter(i => i.embalagem_id && i.valor_unitario)) {
+        await supabase.from('embalagens').update({ custo_unitario: parseFloat(it.valor_unitario) }).eq('id', it.embalagem_id)
+      }
+
+      onSaved()
+    } catch(e) { alert('Erro: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 600, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="modal-header">
+          <div className="modal-title">✏️ Editar recebimento</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label className="form-label">Fornecedor</label>
+            <FornecedorSelect value={fornecedorId} onChange={setFornecedorId}
+              fornecedores={fornecedores}
+              onNovoCadastrado={f => { setFornecedores(p => [...p, f]); onNovoFornecedor(f) }} />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Data de recebimento</label>
+              <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Número da NF (opcional)</label>
+              <input className="form-input" value={nf} onChange={e => setNf(e.target.value)} placeholder="NF-001234" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
+              Itens recebidos
+            </div>
+            {itens.map((it, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 100px auto', gap: 8, marginBottom: 8, alignItems: 'start' }}>
+                <div>
+                  <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
+                    <option value="">— Não cadastrado / digitar nome —</option>
+                    <optgroup label="🏷️ Rótulos">
+                      {embalagens.filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </optgroup>
+                    <optgroup label="📦 Embalagens">
+                      {embalagens.filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </optgroup>
+                  </select>
+                  {!it.embalagem_id && (
+                    <input className="form-input" placeholder="Nome do item"
+                      value={it.nome_livre || ''} onChange={e => updItem(i, 'nome_livre', e.target.value)}
+                      style={{ fontSize: 12, marginTop: 4 }} />
+                  )}
+                </div>
+                <input type="number" min={0} className="form-input" placeholder="Qtd" value={it.quantidade} onChange={e => updItem(i, 'quantidade', e.target.value)} />
+                <input type="number" min={0} step={0.01} className="form-input" placeholder="R$ unit." value={it.valor_unitario} onChange={e => updItem(i, 'valor_unitario', e.target.value)} />
+                <button className="btn btn-ghost btn-sm" onClick={() => remItem(i)} style={{ color: 'var(--danger)', padding: '7px' }}>✕</button>
+              </div>
+            ))}
+            <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12} /> Adicionar item</button>
+          </div>
+
+          {totalGeral > 0 && (
+            <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--purple-pale)', borderRadius: 8, display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 13, color: 'var(--purple)' }}>Total: <strong>{fmtR(totalGeral)}</strong></span>
+              <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>O lançamento financeiro não é atualizado automaticamente — ajuste em Financeiro → A Pagar se necessário</span>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+            {saving ? <><RefreshCw size={14} className="spin" /> Salvando...</> : <><Save size={14} /> Salvar</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 export default function Compras({ tipo = 'rotulo' }) {
   const hoje = new Date()
@@ -251,6 +386,7 @@ export default function Compras({ tipo = 'rotulo' }) {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [expandido, setExpandido] = useState(null)
+  const [editando, setEditando] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -416,7 +552,13 @@ export default function Compras({ tipo = 'rotulo' }) {
                           {r.valor_total ? fmtR(r.valor_total) : '—'}
                         </td>
                         <td style={{ padding: '10px 14px' }}>
-                          {exp ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <button className="btn btn-ghost btn-xs" title="Editar"
+                              onClick={e => { e.stopPropagation(); setEditando(r) }}>
+                              <Pencil size={12}/>
+                            </button>
+                            {exp ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                          </div>
                         </td>
                       </tr>
                       {exp && (
@@ -475,6 +617,17 @@ export default function Compras({ tipo = 'rotulo' }) {
           onNovoFornecedor={f => setFornecedores(p => [...p, f])}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load() }}
+        />
+      )}
+
+      {editando && (
+        <ModalEditarCompra
+          recebimento={editando}
+          embalagens={embalagens}
+          fornecedores={fornecedores}
+          onNovoFornecedor={f => setFornecedores(p => [...p, f])}
+          onClose={() => setEditando(null)}
+          onSaved={() => { setEditando(null); load() }}
         />
       )}
     </>
