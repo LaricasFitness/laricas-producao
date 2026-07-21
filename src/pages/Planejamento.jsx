@@ -216,7 +216,12 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
       const del = diasDelivery[diaAtual]?.[e.codigo] || 0
       const tot = b + del
       const row = [e.nome, b > 0 ? b : '—', del > 0 ? del : '—', tot > 0 ? tot : '—']
-      diasResto.forEach(d => { const bR = diasBling[d]?.[e.codigo] || 0; row.push(bR > 0 ? bR : '—') })
+      diasResto.forEach(d => {
+        const bR = diasBling[d]?.[e.codigo] || 0
+        const dR = diasDelivery[d]?.[e.codigo] || 0
+        const totR = bR + dR
+        row.push(totR > 0 ? totR : '—')
+      })
       body.push(row)
     }
 
@@ -821,7 +826,7 @@ export default function Planejamento({ onIrLogistica }) {
                       const bAtual = diaAtual ? (diasBling[diaAtual]?.[e.codigo] || 0) : 0
                       const del = diaAtual ? (diasDelivery[diaAtual]?.[e.codigo] || 0) : 0
                       const tot = bAtual + del
-                      const temResto = diasResto.some(d => (diasBling[d]?.[e.codigo] || 0) > 0)
+                      const temResto = diasResto.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0)
                       if (e.extra) {
                         // Item extra manual
                         return (
@@ -878,9 +883,11 @@ export default function Planejamento({ onIrLogistica }) {
                           )}
                           {diasResto.map(d => {
                             const bR = diasBling[d]?.[e.codigo] || 0
+                            const dR = diasDelivery[d]?.[e.codigo] || 0
+                            const totR = bR + dR
                             return (
-                              <td key={d} style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: bR > 0 ? 'var(--gray-800)' : 'var(--gray-300)', fontWeight: bR > 0 ? 600 : 400 }}>
-                                {bR > 0 ? bR : '—'}
+                              <td key={d} style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: totR > 0 ? 'var(--gray-800)' : 'var(--gray-300)', fontWeight: totR > 0 ? 600 : 400 }}>
+                                {totR > 0 ? totR : '—'}
                               </td>
                             )
                           })}
