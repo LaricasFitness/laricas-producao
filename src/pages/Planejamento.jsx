@@ -165,7 +165,24 @@ function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
 }
 
 // ── PDF Produção Completa ─────────────────────────────────────────────────────
-function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras=[]) {
+function proximosDiasUteis(dataBase, n = 3) {
+  const DIAS_PT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab']
+  const resultado = []
+  const d = new Date(dataBase + 'T12:00:00')
+  while (resultado.length < n) {
+    d.setDate(d.getDate() + 1)
+    const dow = d.getDay()
+    if (dow !== 0 && dow !== 6) { // pula sáb e dom
+      resultado.push({
+        data: d.toISOString().slice(0, 10),
+        dow: DIAS_PT[dow],
+      })
+    }
+  }
+  return resultado
+}
+
+function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras=[], previsaoDelivery={}) {
   const doc = new jsPDF('l', 'mm', 'a4')
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
   doc.setFillColor(82, 46, 100); doc.rect(0, 0, 297, 38, 'F')
@@ -175,28 +192,50 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
   doc.text('Produção Completa — Previsão Semanal', 14, 23)
   doc.text(`Gerado: ${agora}`, 14, 30)
 
-  const diasResto = diasVisiveis.slice(1)
+  // Próximos 3 dias úteis (ignora sáb e dom), com dados do CSV quando disponíveis
+  const DIAS_PT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab']
+  const proximosDias = proximosDiasUteis(diaAtual, 3)
   const colHead = ['Produto', 'Bling', 'Delivery', 'Total']
-  diasResto.forEach(d => colHead.push(headerDia(d)))
+  proximosDias.forEach(({ data }) => colHead.push(headerDia(data)))
 
-  // Categorias com dados (CSV ou extras)
+  // Delivery dos próximos dias: previsão (com regra sexta = 4 dias)
+  function deliveryParaDia({ data, dow }) {
+    const diasSomar = dow === 'sex' ? ['sex', 'sab', 'dom', 'seg'] : [dow]
+    const porSku = {}
+    for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
+      // Usa diasDelivery se já existir (editado), senão usa previsão
+      const fromState = diasDelivery[data]?.[sku]
+      if (fromState !== undefined) { porSku[sku] = fromState; continue }
+      const qtd = diasSomar.reduce((s, d) => s + (pDias[d] || 0), 0)
+      if (qtd > 0) porSku[sku] = qtd
+    }
+    return porSku
+  }
+
+  // Categorias com dados (dia atual ou próximos dias)
   const catsComDados = ORDEM_CATS.filter(cat => {
-    const temCSV = embalagens.some(e => e.categoria === cat &&
-      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0))
-    const temExtra = itensExtras.some(x => x.cat === cat && x.qtd > 0 && diasVisiveis.includes(x.data))
-    return temCSV || temExtra
+    const temAtual = embalagens.some(e => e.categoria === cat &&
+      ((diasBling[diaAtual]?.[e.codigo] || 0) + (diasDelivery[diaAtual]?.[e.codigo] || 0) > 0))
+    const temProximo = proximosDias.some(pd => embalagens.some(e => e.categoria === cat &&
+      ((diasBling[pd.data]?.[e.codigo] || 0) + (deliveryParaDia(pd)[e.codigo] || 0)) > 0))
+    const temExtra = itensExtras.some(x => x.cat === cat && x.qtd > 0 &&
+      (x.data === diaAtual || proximosDias.some(pd => pd.data === x.data)))
+    return temAtual || temProximo || temExtra
   })
-  // Extras em categorias não reconhecidas
   const catsExtras = [...new Set(itensExtras
-    .filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 && diasVisiveis.includes(x.data))
+    .filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 &&
+      (x.data === diaAtual || proximosDias.some(pd => pd.data === x.data)))
     .map(x => x.cat))]
   const todasCats = [...catsComDados, ...catsExtras]
 
   let startY = 46
   for (const cat of todasCats) {
-    const itensCSV = embalagens.filter(e => e.categoria === cat &&
-      diasVisiveis.some(d => (diasBling[d]?.[e.codigo] || 0) + (diasDelivery[d]?.[e.codigo] || 0) > 0))
-    const extrasNaCat = itensExtras.filter(x => x.cat === cat && x.qtd > 0 && diasVisiveis.includes(x.data))
+    const itensCSV = embalagens.filter(e => e.categoria === cat && (
+      (diasBling[diaAtual]?.[e.codigo] || 0) + (diasDelivery[diaAtual]?.[e.codigo] || 0) > 0 ||
+      proximosDias.some(pd => (diasBling[pd.data]?.[e.codigo] || 0) + (deliveryParaDia(pd)[e.codigo] || 0) > 0)
+    ))
+    const extrasNaCat = itensExtras.filter(x => x.cat === cat && x.qtd > 0 &&
+      (x.data === diaAtual || proximosDias.some(pd => pd.data === x.data)))
 
     if (!itensCSV.length && !extrasNaCat.length) continue
 
@@ -210,28 +249,26 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
 
     const body = []
 
-    // Itens do CSV
+    // Itens do CSV + previsão
     for (const e of itensCSV) {
       const b = diasBling[diaAtual]?.[e.codigo] || 0
       const del = diasDelivery[diaAtual]?.[e.codigo] || 0
       const tot = b + del
       const row = [e.nome, b > 0 ? b : '—', del > 0 ? del : '—', tot > 0 ? tot : '—']
-      diasResto.forEach(d => {
-        const bR = diasBling[d]?.[e.codigo] || 0
-        const dR = diasDelivery[d]?.[e.codigo] || 0
+      proximosDias.forEach(pd => {
+        const bR = diasBling[pd.data]?.[e.codigo] || 0
+        const dR = deliveryParaDia(pd)[e.codigo] || 0
         const totR = bR + dR
         row.push(totR > 0 ? totR : '—')
       })
       body.push(row)
     }
 
-    // Itens extras — aparecem na coluna da sua data
+    // Itens extras
     for (const x of extrasNaCat) {
       const row = [`${x.nome} ✦`, '—', '—', '—']
-      // Para diaAtual
-      if (x.data === diaAtual) { row[1] = '—'; row[2] = String(x.qtd); row[3] = String(x.qtd) }
-      // Para diasResto
-      diasResto.forEach(d => { row.push(x.data === d ? String(x.qtd) : '—') })
+      if (x.data === diaAtual) { row[2] = String(x.qtd); row[3] = String(x.qtd) }
+      proximosDias.forEach(pd => { row.push(pd.data === x.data ? String(x.qtd) : '—') })
       body.push(row)
     }
 
@@ -245,7 +282,7 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
         1: { halign: 'center', cellWidth: 18 },
         2: { halign: 'center', cellWidth: 20 },
         3: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
-        ...Object.fromEntries(diasResto.map((_, i) => [i+4, { halign: 'center', cellWidth: 22 }]))
+        ...Object.fromEntries(proximosDias.map((_, i) => [i+4, { halign: 'center', cellWidth: 22 }]))
       },
       margin: { left: 14, right: 14 },
     })
@@ -617,7 +654,7 @@ export default function Planejamento({ onIrLogistica }) {
                 </button>
               )}
               {diaAtual && (
-                <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras)}>
+                <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras, previsaoDelivery)}>
                   <FileText size={14} /> PDF Produção Completa
                 </button>
               )}
