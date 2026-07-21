@@ -454,9 +454,20 @@ export default function Planejamento({ onIrLogistica }) {
     setSugestoes([]); setItensExtras([])
   }
 
-  const diasVisiveis = diasOrdenados.filter(d => datasAtivas.includes(d))
-  const diaAtual = diasVisiveis[0]
-  const diasResto = diasVisiveis.slice(1)
+  const [previsaoDelivery, setPrevisaoDelivery] = useState({}) // { sku: { seg: n, ter: n, ... } }
+
+  // Carrega previsão de delivery do banco
+  useEffect(() => {
+    supabase.from('delivery_previsao').select('sku, dia_semana, quantidade')
+      .then(({ data }) => {
+        const map = {}
+        for (const r of (data || [])) {
+          if (!map[r.sku]) map[r.sku] = {}
+          map[r.sku][r.dia_semana] = r.quantidade
+        }
+        setPrevisaoDelivery(map)
+      })
+  }, [])
 
   function setDel(sku, val) {
     if (!diaAtual) return
@@ -532,6 +543,34 @@ export default function Planejamento({ onIrLogistica }) {
     }
   }
   const totalDiaAtual = Object.values(itensDiaAtual).flat().reduce((s, i) => s + i.total, 0)
+  const DIAS_SEMANA_PT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab']
+  const diasVisiveis = diasOrdenados.filter(d => datasAtivas.includes(d))
+  const diaAtual = diasVisiveis[0] || null
+  const diasResto = diasVisiveis.slice(1)
+
+  // Pré-preenche delivery com previsão ao selecionar datas (não sobrescreve valores já editados)
+  useEffect(() => {
+    if (!diaAtual || Object.keys(previsaoDelivery).length === 0) return
+    setDiasDelivery(prev => {
+      const novo = { ...prev }
+      for (const dia of diasVisiveis) {
+        if (novo[dia] && Object.keys(novo[dia]).length > 0) continue
+        const dow = DIAS_SEMANA_PT[new Date(dia + 'T12:00:00').getDay()] // 0=dom,1=seg...5=sex,6=sab
+        const diasSomar = dow === 'sex'
+          ? ['sex', 'sab', 'dom', 'seg'] // Sexta cobre 4 dias
+          : [dow]                         // Outros dias cobrem só o próprio dia
+
+        const previsaoDia = {}
+        for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
+          const qtd = diasSomar.reduce((s, d) => s + (pDias[d] || 0), 0)
+          if (qtd > 0) previsaoDia[sku] = qtd
+        }
+        if (Object.keys(previsaoDia).length > 0) novo[dia] = previsaoDia
+      }
+      return novo
+    })
+  }, [diaAtual, previsaoDelivery])
+
   const temDados = diasOrdenados.length > 0
 
   if (loading) return <div className="loading"><RefreshCw size={16} className="spin" /> Carregando...</div>
