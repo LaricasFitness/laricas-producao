@@ -363,6 +363,138 @@ function AdminCatEmbalagem() {
   )
 }
 
+// ── Componente de Previsão de Delivery ───────────────────────────────────────
+function AdminDeliveryPrevisao() {
+  const DIAS = ['seg','ter','qua','qui','sex','sab','dom']
+  const DIAS_LABEL = { seg:'Seg',ter:'Ter',qua:'Qua',qui:'Qui',sex:'Sex',sab:'Sáb',dom:'Dom' }
+  const [dados, setDados] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [editados, setEditados] = useState(new Set())
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('delivery_previsao').select('*').order('nome')
+    const map = {}
+    for (const r of (data || [])) {
+      if (!map[r.sku]) map[r.sku] = { sku: r.sku, nome: r.nome, seg:0,ter:0,qua:0,qui:0,sex:0,sab:0,dom:0 }
+      map[r.sku][r.dia_semana] = r.quantidade
+    }
+    setDados(Object.values(map))
+    setEditados(new Set())
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  function atualizar(sku, dia, valor) {
+    setDados(prev => prev.map(r => r.sku === sku ? { ...r, [dia]: parseInt(valor) || 0 } : r))
+    setEditados(prev => new Set([...prev, sku]))
+  }
+
+  async function salvar() {
+    setSaving(true)
+    for (const r of dados.filter(r => editados.has(r.sku))) {
+      for (const dia of DIAS) {
+        await supabase.from('delivery_previsao')
+          .update({ quantidade: r[dia], nome: r.nome })
+          .eq('sku', r.sku).eq('dia_semana', dia)
+      }
+    }
+    setEditados(new Set())
+    setSaving(false)
+  }
+
+  const totalSemana = r => DIAS.reduce((s, d) => s + (r[d]||0), 0)
+  const totalSexta  = r => (r.sex||0)+(r.sab||0)+(r.dom||0)+(r.seg||0)
+
+  return (
+    <div className="card">
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 20px', borderBottom:'1px solid var(--gray-200)' }}>
+        <div>
+          <div style={{ fontWeight:800, fontSize:15 }}>📊 Previsão de Delivery por Dia da Semana</div>
+          <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:3 }}>
+            Valores usados para pré-preencher a coluna Delivery no Planejamento · Sexta = Sex+Sáb+Dom+Seg acumulado
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          {editados.size > 0 && (
+            <span style={{ fontSize:12, color:'var(--gold)', fontWeight:700 }}>
+              {editados.size} SKU(s) editado(s)
+            </span>
+          )}
+          <button className="btn btn-primary" onClick={salvar} disabled={saving || editados.size === 0}>
+            {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar alterações</>}
+          </button>
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        </div>
+      </div>
+
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead>
+              <tr style={{ background:'var(--gray-50)' }}>
+                <th style={{ padding:'10px 14px', textAlign:'left', minWidth:220 }}>Produto / SKU</th>
+                {DIAS.map(d => (
+                  <th key={d} style={{ padding:'10px 8px', textAlign:'center', minWidth:70,
+                    background: d==='sex' ? '#f0eaff' : undefined,
+                    color: d==='sex' ? 'var(--purple)' : 'var(--gray-600)', fontWeight:700, fontSize:12 }}>
+                    {DIAS_LABEL[d]}
+                    {d==='sex' && <div style={{fontSize:9, fontWeight:400}}>+Sáb+Dom+Seg</div>}
+                  </th>
+                ))}
+                <th style={{ padding:'10px 8px', textAlign:'center', color:'var(--gray-400)', fontSize:12 }}>Semana</th>
+                <th style={{ padding:'10px 8px', textAlign:'center', color:'var(--purple)', fontSize:12 }}>Sex→Seg</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dados.map((r, i) => (
+                <tr key={r.sku} style={{ borderTop:'1px solid var(--gray-100)', background: editados.has(r.sku)?'#fffbf0': i%2===0?'#fff':'#fafafa' }}>
+                  <td style={{ padding:'8px 14px' }}>
+                    <div style={{ fontWeight:600 }}>{r.nome}</div>
+                    <div style={{ fontSize:11, color:'var(--gray-400)', fontFamily:'monospace' }}>{r.sku}</div>
+                    {editados.has(r.sku) && <span style={{ fontSize:10, color:'var(--gold)', fontWeight:700 }}>● editado</span>}
+                  </td>
+                  {DIAS.map(d => (
+                    <td key={d} style={{ padding:'5px 5px', textAlign:'center', background: d==='sex'?'#f9f5ff':undefined }}>
+                      <input type="number" min={0} value={r[d]||0}
+                        onChange={e => atualizar(r.sku, d, e.target.value)}
+                        style={{ width:56, textAlign:'center', padding:'5px 4px', fontSize:13, fontWeight:600,
+                          border:'1.5px solid var(--gray-200)', borderRadius:6, outline:'none',
+                          background: d==='sex'?'#ede8fa':'transparent',
+                          color: d==='sex'?'var(--purple)':'inherit' }} />
+                    </td>
+                  ))}
+                  <td style={{ padding:'8px 8px', textAlign:'center', fontWeight:700, color:'var(--gray-500)' }}>{totalSemana(r)}</td>
+                  <td style={{ padding:'8px 8px', textAlign:'center', fontWeight:800, color:'var(--purple)' }}>{totalSexta(r)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop:'2px solid var(--gray-200)', background:'var(--gray-50)' }}>
+                <td style={{ padding:'10px 14px', fontWeight:800, color:'var(--gray-600)' }}>Total por dia</td>
+                {DIAS.map(d => (
+                  <td key={d} style={{ padding:'10px 8px', textAlign:'center', fontWeight:800,
+                    color: d==='sex'?'var(--purple)':'var(--gray-700)', background: d==='sex'?'#f0eaff':undefined }}>
+                    {dados.reduce((s, r) => s + (r[d]||0), 0)}
+                  </td>
+                ))}
+                <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:800, color:'var(--gray-500)' }}>
+                  {dados.reduce((s, r) => s + totalSemana(r), 0)}
+                </td>
+                <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:800, color:'var(--purple)' }}>
+                  {dados.reduce((s, r) => s + totalSexta(r), 0)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Admin() {
   const [tab, setTab] = useState('embalagens')
   const [embs, setEmbs] = useState([])
@@ -422,12 +554,15 @@ export default function Admin() {
       <div className="tabs">
         <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Embalagens</button>
         <button className={`tab${tab === 'cat_embalagem' ? ' active' : ''}`} onClick={() => setTab('cat_embalagem')}>📦 Emb. por Categoria</button>
+        <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
 
       {tab === 'usuarios' && <Usuarios />}
 
       {tab === 'cat_embalagem' && <AdminCatEmbalagem />}
+
+      {tab === 'delivery_previsao' && <AdminDeliveryPrevisao />}
 
       {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
