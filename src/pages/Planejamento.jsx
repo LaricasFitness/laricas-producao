@@ -291,6 +291,46 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
     if (startY > 175 && todasCats.indexOf(cat) < todasCats.length - 1) { doc.addPage(); startY = 14 }
   }
 
+  // Linha de totais por coluna
+  const totaisRow = ['TOTAL GERAL']
+  const totAtual = embalagens.reduce((s, e) => {
+    const b = diasBling[diaAtual]?.[e.codigo] || 0
+    const d = diasDelivery[diaAtual]?.[e.codigo] || 0
+    return s + b + d
+  }, 0) + itensExtras.filter(x => x.data === diaAtual).reduce((s, x) => s + x.qtd, 0)
+  totaisRow.push('—', '—', String(totAtual))
+  proximosDias.forEach(pd => {
+    const totD = embalagens.reduce((s, e) => {
+      const bR = diasBling[pd.data]?.[e.codigo] || 0
+      const dR = deliveryParaDia(pd)[e.codigo] || 0
+      return s + bR + dR
+    }, 0) + itensExtras.filter(x => x.data === pd.data).reduce((s, x) => s + x.qtd, 0)
+    totaisRow.push(String(totD))
+  })
+
+  if (startY > 170) { doc.addPage(); startY = 14 }
+  autoTable(doc, {
+    startY,
+    body: [totaisRow.map((v, i) => ({
+      content: v,
+      styles: {
+        fontStyle: 'bold',
+        fillColor: [82, 46, 100],
+        textColor: [255, 255, 255],
+        fontSize: i === 0 ? 10 : 11,
+        halign: i >= 3 ? 'center' : i === 0 ? 'left' : 'center',
+      }
+    }))],
+    margin: { left: 14, right: 14 },
+    columnStyles: {
+      0: { cellWidth: 'auto' },
+      1: { cellWidth: 18, halign: 'center' },
+      2: { cellWidth: 20, halign: 'center' },
+      3: { cellWidth: 18, halign: 'center' },
+      ...Object.fromEntries(proximosDias.map((_, i) => [i+4, { cellWidth: 22, halign: 'center' }]))
+    },
+  })
+
   doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(150,150,150)
   doc.text('Laricas Fitness — Planejamento de Produção Completo', 14, 198)
   doc.save('Producao_Completa_semana.pdf')
@@ -844,7 +884,7 @@ export default function Planejamento({ onIrLogistica }) {
                     </>
                   )}
                   {diasResto.map(d => (
-                    <th key={d} style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}>Bling</th>
+                    <th key={d} style={{ textAlign: 'center', padding: '6px 10px', background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)', fontSize: 11, color: 'var(--gray-400)', fontWeight: 700 }}>Total</th>
                   ))}
                 </tr>
               </thead>
@@ -969,10 +1009,32 @@ export default function Planejamento({ onIrLogistica }) {
             </div>
           )}
 
+          {/* Totais por dia */}
           {totalDiaAtual > 0 && (
-            <div style={{ padding: '12px 20px', borderTop: '2px solid var(--purple-pale)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>Total {headerDia(diaAtual)}</span>
-              <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--purple)' }}>{totalDiaAtual.toLocaleString('pt-BR')} un</span>
+            <div style={{ padding: '10px 20px', borderTop: '2px solid var(--purple-pale)', display: 'flex', gap: 0, overflowX: 'auto' }}>
+              {/* Dia atual */}
+              <div style={{ flex: '0 0 auto', padding: '6px 20px 6px 0', borderRight: '1px solid var(--gray-200)', marginRight: 20 }}>
+                <div style={{ fontSize: 11, color: 'var(--purple)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>🎯 {headerDia(diaAtual)}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--purple)' }}>{totalDiaAtual.toLocaleString('pt-BR')} un</div>
+              </div>
+              {/* Dias restantes */}
+              {diasResto.map(d => {
+                const totalD = Object.values(embalagens
+                  .reduce((acc, e) => {
+                    const bR = diasBling[d]?.[e.codigo] || 0
+                    const dR = diasDelivery[d]?.[e.codigo] || 0
+                    acc[e.codigo] = (bR + dR)
+                    return acc
+                  }, {})).reduce((s, v) => s + v, 0)
+                + itensExtras.filter(x => x.data === d).reduce((s, x) => s + x.qtd, 0)
+                if (!totalD) return null
+                return (
+                  <div key={d} style={{ flex: '0 0 auto', padding: '6px 20px 6px 0', marginRight: 20 }}>
+                    <div style={{ fontSize: 11, color: 'var(--gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>{headerDia(d)}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--gray-700)' }}>{totalD.toLocaleString('pt-BR')} un</div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
