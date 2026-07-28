@@ -321,7 +321,6 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
         visivel_producao: form.visivel_producao,
         visivel_estoque: form.visivel_estoque,
         estoque_atual: 0,
-        estoque_minimo: 0,
         ativo: true,
       }).select().single()
       if (error) throw error
