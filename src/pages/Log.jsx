@@ -224,7 +224,8 @@ export default function Log() {
   const [detalhe, setDetalhe] = useState([])
   const [loadingDetalhe, setLoadingDetalhe] = useState(false)
   const [embs, setEmbs] = useState({})
-  const [todosRegistros, setTodosRegistros] = useState([]) // para export CSV
+  const [todosRegistros, setTodosRegistros] = useState([])
+  const [aba, setAba] = useState('log') // 'log' | 'pvr'
 
   useEffect(() => {
     supabase.from('embalagens').select('id,nome,codigo,categoria').then(({ data }) => {
@@ -336,6 +337,26 @@ export default function Log() {
 
   return (
     <>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+        <button className={`tab${aba === 'log' ? ' active' : ''}`} onClick={() => setAba('log')}>
+          📋 Log de Produção
+        </button>
+        <button className={`tab${aba === 'pvr' ? ' active' : ''}`} onClick={() => setAba('pvr')}>
+          📊 Previsto × Realizado
+        </button>
+      </div>
+
+      {aba === 'pvr' && (
+        <PvrDia ano={ano} mes={mes} embs={embs} navMes={(delta) => {
+          let nm = mes + delta, na = ano
+          if (nm < 0) { nm = 11; na-- }
+          if (nm > 11) { nm = 0; na++ }
+          setMes(nm); setAno(na)
+        }} />
+      )}
+
+      {aba === 'log' && (<>
       {/* Alertas */}
       {diasSemDados.length > 0 && (
         <div className="alert-banner danger">
@@ -557,6 +578,257 @@ export default function Log() {
             </table>
           </div>
         )}
+      </div>
+      </>)} {/* fim aba log */}
+    </>
+  )
+}
+
+// ── Previsto × Realizado por dia ─────────────────────────────────────────────
+function PvrDia({ ano, mes, embs, navMes }) {
+  const [dados, setDados] = useState([]) // [{data, previsto, realizado, desvio, itens}]
+  const [loading, setLoading] = useState(false)
+  const [diaSel, setDiaSel] = useState(null)
+  const [detalheItens, setDetalheItens] = useState([])
+
+  useEffect(() => { load() }, [ano, mes])
+
+  async function load() {
+    setLoading(true)
+    setDiaSel(null)
+    const ini = `${ano}-${String(mes+1).padStart(2,'0')}-01`
+    const fim = new Date(ano, mes+1, 0).toISOString().slice(0,10)
+
+    // Planejamentos do período
+    const { data: plans } = await supabase
+      .from('planejamentos').select('id, data_planejamento')
+      .gte('data_planejamento', ini).lte('data_planejamento', fim)
+
+    const planIds = (plans||[]).map(p => p.id)
+    const planDataMap = {}
+    ;(plans||[]).forEach(p => { planDataMap[p.id] = p.data_planejamento })
+
+    // Itens planejados
+    let planPorData = {} // { 'YYYY-MM-DD': { embId: qtd } }
+    if (planIds.length) {
+      const { data: itens } = await supabase
+        .from('planejamento_itens').select('planejamento_id, embalagem_id, quantidade_total')
+        .in('planejamento_id', planIds)
+      for (const i of (itens||[])) {
+        const dt = planDataMap[i.planejamento_id]
+        if (!dt) continue
+        if (!planPorData[dt]) planPorData[dt] = {}
+        planPorData[dt][i.embalagem_id] = (planPorData[dt][i.embalagem_id]||0) + i.quantidade_total
+      }
+    }
+
+    // Produção real
+    const { data: prod } = await supabase
+      .from('producao_diaria').select('data_producao, embalagem_id, quantidade')
+      .gte('data_producao', ini).lte('data_producao', fim)
+      .not('registrado_por', 'ilike', '%auto-embalagem%')
+
+    const realPorData = {} // { 'YYYY-MM-DD': { embId: qtd } }
+    for (const r of (prod||[])) {
+      if (!realPorData[r.data_producao]) realPorData[r.data_producao] = {}
+      realPorData[r.data_producao][r.embalagem_id] = (realPorData[r.data_producao][r.embalagem_id]||0) + r.quantidade
+    }
+
+    // Consolida por dia
+    const todasDatas = [...new Set([...Object.keys(planPorData), ...Object.keys(realPorData)])].sort()
+    const resultado = todasDatas.map(dt => {
+      const pMap = planPorData[dt] || {}
+      const rMap = realPorData[dt] || {}
+      const previsto = Object.values(pMap).reduce((s,v)=>s+v,0)
+      const realizado = Object.values(rMap).reduce((s,v)=>s+v,0)
+      const desvio = previsto > 0 ? ((realizado - previsto) / previsto) * 100 : null
+
+      // Detalhe por produto
+      const todosEmbs = [...new Set([...Object.keys(pMap), ...Object.keys(rMap)])]
+      const itens = todosEmbs.map(id => ({
+        id, nome: embs[id]?.nome || '?',
+        previsto: pMap[id]||0, realizado: rMap[id]||0,
+        desvio: pMap[id] > 0 ? ((rMap[id]||0) - pMap[id]) / pMap[id] * 100 : null
+      })).sort((a,b) => b.previsto - a.previsto)
+
+      return { data: dt, previsto, realizado, desvio, itens }
+    })
+
+    setDados(resultado)
+    setLoading(false)
+  }
+
+  function statusIcon(desvio, previsto) {
+    if (previsto === 0) return { icon: '—', cor: 'var(--gray-300)' }
+    if (desvio === null) return { icon: '—', cor: 'var(--gray-300)' }
+    if (desvio >= -5) return { icon: '✅', cor: 'var(--ok)' }
+    if (desvio >= -20) return { icon: '⚠️', cor: 'var(--warning)' }
+    return { icon: '🚨', cor: 'var(--danger)' }
+  }
+
+  const totalPrevisto = dados.reduce((s,d)=>s+d.previsto,0)
+  const totalRealizado = dados.reduce((s,d)=>s+d.realizado,0)
+  const desvioGeral = totalPrevisto > 0 ? ((totalRealizado-totalPrevisto)/totalPrevisto*100) : null
+
+  return (
+    <>
+      {/* Header */}
+      <div className="card card-pad" style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button className="btn btn-ghost btn-sm" onClick={()=>navMes(-1)}>‹</button>
+          <span style={{ fontWeight:800, fontSize:15 }}>{MESES[mes]} {ano}</span>
+          <button className="btn btn-ghost btn-sm" onClick={()=>navMes(1)}>›</button>
+        </div>
+        {/* KPIs */}
+        <div style={{ display:'flex', gap:20 }}>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:11, color:'var(--gray-400)', fontWeight:700, textTransform:'uppercase' }}>Previsto</div>
+            <div style={{ fontSize:18, fontWeight:800, color:'var(--gray-700)' }}>{fmt(totalPrevisto)} un</div>
+          </div>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:11, color:'var(--gray-400)', fontWeight:700, textTransform:'uppercase' }}>Realizado</div>
+            <div style={{ fontSize:18, fontWeight:800, color:'var(--purple)' }}>{fmt(totalRealizado)} un</div>
+          </div>
+          {desvioGeral !== null && (
+            <div style={{ textAlign:'center' }}>
+              <div style={{ fontSize:11, color:'var(--gray-400)', fontWeight:700, textTransform:'uppercase' }}>Desvio</div>
+              <div style={{ fontSize:18, fontWeight:800, color: desvioGeral >= -5 ? 'var(--ok)' : desvioGeral >= -20 ? 'var(--warning)' : 'var(--danger)' }}>
+                {desvioGeral > 0 ? '+' : ''}{desvioGeral.toFixed(1)}%
+              </div>
+            </div>
+          )}
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={14}/></button>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 380px', gap:16 }}>
+        {/* Tabela por dia */}
+        <div className="card">
+          {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+            dados.length === 0 ? (
+              <div className="empty card-pad">
+                <div className="empty-icon">📊</div>
+                <div className="empty-title">Nenhum planejamento ou produção em {MESES[mes]}</div>
+              </div>
+            ) : (
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                <thead>
+                  <tr style={{ background:'var(--gray-50)', borderBottom:'2px solid var(--gray-200)' }}>
+                    <th style={{ padding:'10px 14px', textAlign:'left' }}>Data</th>
+                    <th style={{ padding:'10px 10px', textAlign:'right' }}>Previsto</th>
+                    <th style={{ padding:'10px 10px', textAlign:'right' }}>Realizado</th>
+                    <th style={{ padding:'10px 10px', textAlign:'right' }}>Desvio</th>
+                    <th style={{ padding:'10px 10px', textAlign:'center' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dados.map((d, i) => {
+                    const dt = new Date(d.data + 'T12:00:00')
+                    const { icon, cor } = statusIcon(d.desvio, d.previsto)
+                    const sel = diaSel === d.data
+                    return (
+                      <tr key={d.data}
+                        onClick={() => { setDiaSel(sel ? null : d.data); setDetalheItens(d.itens) }}
+                        style={{ borderTop:'1px solid var(--gray-100)', cursor:'pointer',
+                          background: sel ? 'var(--purple-pale)' : i%2===0?'#fff':'#fafafa' }}>
+                        <td style={{ padding:'10px 14px', fontWeight:700 }}>
+                          {dt.toLocaleDateString('pt-BR')}
+                          <span style={{ marginLeft:8, fontSize:11, color:'var(--gray-400)', fontWeight:400 }}>
+                            {dt.toLocaleDateString('pt-BR',{weekday:'short'})}
+                          </span>
+                        </td>
+                        <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--gray-600)' }}>
+                          {d.previsto > 0 ? `${fmt(d.previsto)} un` : '—'}
+                        </td>
+                        <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:700, color:'var(--purple)' }}>
+                          {d.realizado > 0 ? `${fmt(d.realizado)} un` : '—'}
+                        </td>
+                        <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:700,
+                          color: d.desvio === null ? 'var(--gray-300)' : d.desvio >= 0 ? 'var(--ok)' : d.desvio >= -20 ? 'var(--warning)' : 'var(--danger)' }}>
+                          {d.desvio !== null ? `${d.desvio > 0 ? '+' : ''}${d.desvio.toFixed(1)}%` : '—'}
+                        </td>
+                        <td style={{ padding:'10px 10px', textAlign:'center', fontSize:16 }}>{icon}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop:'2px solid var(--gray-200)', background:'var(--gray-50)' }}>
+                    <td style={{ padding:'10px 14px', fontWeight:800 }}>Total {MESES[mes]}</td>
+                    <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800, color:'var(--gray-600)' }}>{fmt(totalPrevisto)} un</td>
+                    <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>{fmt(totalRealizado)} un</td>
+                    <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800,
+                      color: desvioGeral === null ? 'var(--gray-300)' : desvioGeral >= 0 ? 'var(--ok)' : desvioGeral >= -20 ? 'var(--warning)' : 'var(--danger)' }}>
+                      {desvioGeral !== null ? `${desvioGeral > 0 ? '+' : ''}${desvioGeral.toFixed(1)}%` : '—'}
+                    </td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            )
+          )}
+        </div>
+
+        {/* Painel detalhe do dia */}
+        <div className="card" style={{ alignSelf:'start', position:'sticky', top:0 }}>
+          {!diaSel ? (
+            <div className="empty card-pad">
+              <div className="empty-icon">📅</div>
+              <div className="empty-title">Clique em um dia</div>
+              <div className="empty-sub">para ver o detalhe produto a produto</div>
+            </div>
+          ) : (
+            <>
+              <div style={{ padding:'14px 20px', borderBottom:'1px solid var(--gray-200)', fontWeight:800, fontSize:14 }}>
+                {new Date(diaSel+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}
+              </div>
+              <div style={{ maxHeight:520, overflowY:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'var(--gray-50)', position:'sticky', top:0 }}>
+                      <th style={{ padding:'8px 12px', textAlign:'left' }}>Produto</th>
+                      <th style={{ padding:'8px 8px', textAlign:'right', color:'var(--gray-500)' }}>Prev.</th>
+                      <th style={{ padding:'8px 8px', textAlign:'right', color:'var(--purple)' }}>Real.</th>
+                      <th style={{ padding:'8px 8px', textAlign:'right' }}>Δ%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalheItens.map(it => (
+                      <tr key={it.id} style={{ borderTop:'1px solid var(--gray-100)' }}>
+                        <td style={{ padding:'7px 12px', fontWeight:600, fontSize:12 }}>{it.nome}</td>
+                        <td style={{ padding:'7px 8px', textAlign:'right', color:'var(--gray-500)' }}>
+                          {it.previsto > 0 ? fmt(it.previsto) : '—'}
+                        </td>
+                        <td style={{ padding:'7px 8px', textAlign:'right', fontWeight:700, color:'var(--purple)' }}>
+                          {it.realizado > 0 ? fmt(it.realizado) : '—'}
+                        </td>
+                        <td style={{ padding:'7px 8px', textAlign:'right', fontSize:11, fontWeight:700,
+                          color: it.desvio === null ? 'var(--gray-300)' : it.desvio >= -5 ? 'var(--ok)' : it.desvio >= -20 ? 'var(--warning)' : 'var(--danger)' }}>
+                          {it.desvio !== null ? `${it.desvio > 0 ? '+' : ''}${it.desvio.toFixed(0)}%` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding:'10px 14px', borderTop:'2px solid var(--gray-200)', display:'flex', justifyContent:'space-between', fontSize:13, fontWeight:800 }}>
+                <span>Total</span>
+                <span>
+                  <span style={{ color:'var(--gray-500)', marginRight:16 }}>
+                    {fmt(detalheItens.reduce((s,i)=>s+i.previsto,0))} prev.
+                  </span>
+                  <span style={{ color:'var(--purple)' }}>
+                    {fmt(detalheItens.reduce((s,i)=>s+i.realizado,0))} real.
+                  </span>
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div style={{ marginTop:12, fontSize:11, color:'var(--gray-400)' }}>
+        ✅ OK = desvio dentro de 5% · ⚠️ Abaixo = até -20% · 🚨 Crítico = mais de -20% abaixo do planejado
       </div>
     </>
   )
