@@ -599,17 +599,17 @@ function PvrDia({ ano, mes, embs, navMes }) {
     const ini = `${ano}-${String(mes+1).padStart(2,'0')}-01`
     const fim = new Date(ano, mes+1, 0).toISOString().slice(0,10)
 
-    // Planejamentos do período
+    // Planejamentos do período — usa data_producao igual à Análise
     const { data: plans } = await supabase
-      .from('planejamentos').select('id, data_planejamento')
-      .gte('data_planejamento', ini).lte('data_planejamento', fim)
+      .from('planejamentos').select('id, data_producao')
+      .gte('data_producao', ini).lte('data_producao', fim)
 
     const planIds = (plans||[]).map(p => p.id)
     const planDataMap = {}
-    ;(plans||[]).forEach(p => { planDataMap[p.id] = p.data_planejamento })
+    ;(plans||[]).forEach(p => { planDataMap[p.id] = p.data_producao })
 
     // Itens planejados
-    let planPorData = {} // { 'YYYY-MM-DD': { embId: qtd } }
+    let planPorData = {}
     if (planIds.length) {
       const { data: itens } = await supabase
         .from('planejamento_itens').select('planejamento_id, embalagem_id, quantidade_total')
@@ -622,13 +622,17 @@ function PvrDia({ ano, mes, embs, navMes }) {
       }
     }
 
-    // Produção real
+    // Produção real — só rótulos, igual à Análise
+    const { data: embsRotulo } = await supabase
+      .from('embalagens').select('id').eq('tipo', 'rotulo')
+    const idsRotulo = (embsRotulo||[]).map(e => e.id)
+
     const { data: prod } = await supabase
       .from('producao_diaria').select('data_producao, embalagem_id, quantidade')
       .gte('data_producao', ini).lte('data_producao', fim)
-      .not('registrado_por', 'ilike', '%auto-embalagem%')
+      .in('embalagem_id', idsRotulo)
 
-    const realPorData = {} // { 'YYYY-MM-DD': { embId: qtd } }
+    const realPorData = {}
     for (const r of (prod||[])) {
       if (!realPorData[r.data_producao]) realPorData[r.data_producao] = {}
       realPorData[r.data_producao][r.embalagem_id] = (realPorData[r.data_producao][r.embalagem_id]||0) + r.quantidade
