@@ -280,12 +280,20 @@ export default function Analise() {
     async function loadPvR() {
       setPvrLoading(true)
       try {
-        // Busca planejamentos no período
-        const { data: plans } = await supabase
+        // Busca planejamentos no período — apenas o mais recente por dia
+        const { data: plansAll } = await supabase
           .from('planejamentos')
-          .select('id, data_producao')
+          .select('id, data_producao, criado_em')
           .gte('data_producao', pvrIni)
           .lte('data_producao', pvrFim)
+          .order('criado_em', { ascending: false })
+
+        // Filtra: só o mais recente por data_producao
+        const ultimoPorDia = {}
+        for (const p of (plansAll || [])) {
+          if (!ultimoPorDia[p.data_producao]) ultimoPorDia[p.data_producao] = p
+        }
+        const plans = Object.values(ultimoPorDia)
 
         if (!plans?.length) { setPvr([]); setPvrCat([]); setPvrLoading(false); return }
 
