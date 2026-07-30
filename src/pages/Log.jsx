@@ -623,7 +623,7 @@ function HistoricoInterno({ ano, mes, navMes }) {
       .gte('data_producao', ini)
       .lte('data_producao', fim)
       .order('data_producao', { ascending: false })
-      .order('criado_em', { ascending: false })
+      .order('registrado_em', { ascending: false })
     setDados(data || [])
     setLoading(false)
   }
@@ -705,7 +705,7 @@ function HistoricoInterno({ ano, mes, navMes }) {
                     </div>
                     <div style={{ fontWeight:700, fontSize:13, marginTop:2 }}>{t.item}</div>
                     <div style={{ fontSize:18, fontWeight:800, color: fl?.cor || 'var(--purple)' }}>
-                      {t.total % 1 === 0 ? t.total : t.total.toFixed(1)}
+                      {(() => { const n = parseFloat(t.total) || 0; return n % 1 === 0 ? n : n.toFixed(1) })()}
                       <span style={{ fontSize:12, fontWeight:400, color:'var(--gray-500)', marginLeft:4 }}>
                         {UNIDADE_LABEL[t.unidade] || t.unidade}
                       </span>
@@ -760,7 +760,11 @@ function HistoricoInterno({ ano, mes, navMes }) {
                         </td>
                         <td style={{ padding:'8px 10px', fontWeight:600 }}>{r.item}</td>
                         <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>
-                          {r.quantidade != null ? `${r.fase === 'cobertura' ? r.quantidade : (r.quantidade % 1 === 0 ? r.quantidade : r.quantidade.toFixed(1))} ${UNIDADE_LABEL[r.unidade] || r.unidade || ''}` : '—'}
+                          {r.quantidade != null ? (() => {
+                            const n = parseFloat(r.quantidade) || 0
+                            const v = r.fase === 'cobertura' ? n : (n % 1 === 0 ? n : n.toFixed(1))
+                            return `${v} ${UNIDADE_LABEL[r.unidade] || r.unidade || ''}`
+                          })() : '—'}
                         </td>
                         <td style={{ padding:'8px 10px', fontSize:12, color:'var(--gray-500)' }}>{r.registrado_por}</td>
                         <td style={{ padding:'8px 10px', fontSize:12, color:'var(--gray-500)', fontStyle: r.observacao ? 'italic' : 'normal' }}>{r.observacao || '—'}</td>
