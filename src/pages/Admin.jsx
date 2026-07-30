@@ -569,7 +569,7 @@ function AdminPreparacoes() {
   const rendLiquido = (prep) => {
     const bruto = parseFloat(prep.rendimento_estimado) || 0
     const perda = parseFloat(prep.perda_percentual) || 0
-    return (bruto - bruto * perda / 100).toFixed(1)
+    return ((bruto - bruto * perda / 100)).toFixed(1)
   }
 
   if (editando !== null) return (
@@ -617,7 +617,7 @@ function AdminPreparacoes() {
                 </td>
                 <td style={{ padding:'10px 10px', fontSize:12 }}>{TIPO_LABEL[p.tipo] || p.tipo}</td>
                 <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:600 }}>
-                  {p.rendimento_estimado} {p.unidade_rendimento}
+                  {parseFloat(p.rendimento_estimado || 0).toFixed(1)} {p.unidade_rendimento}
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--danger)' }}>
                   {p.perda_percentual}%
