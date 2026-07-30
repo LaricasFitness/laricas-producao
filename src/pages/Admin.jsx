@@ -495,6 +495,476 @@ function AdminDeliveryPrevisao() {
   )
 }
 
+// ── Preparações ──────────────────────────────────────────────────────────────
+function AdminPreparacoes() {
+  const TIPOS = ['massa','recheio','creme','cobertura','cha','outro']
+  const TIPO_LABEL = { massa:'🍞 Massa', recheio:'🥄 Recheio', creme:'🍮 Creme', cobertura:'🍫 Cobertura', cha:'🍵 Chá', outro:'📦 Outro' }
+  const [lista, setLista] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editando, setEditando] = useState(null) // preparacao sendo editada
+  const [salvando, setSalvando] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*)').order('tipo').order('nome')
+    setLista(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function salvar(prep) {
+    setSalvando(true)
+    try {
+      if (prep.id) {
+        await supabase.from('preparacoes').update({
+          nome: prep.nome, tipo: prep.tipo,
+          unidade_rendimento: prep.unidade_rendimento,
+          rendimento_estimado: parseFloat(prep.rendimento_estimado) || 0,
+          perda_percentual: parseFloat(prep.perda_percentual) || 0,
+          margem_seguranca: parseFloat(prep.margem_seguranca) || 0,
+          observacao: prep.observacao || null,
+          atualizado_em: new Date().toISOString(),
+        }).eq('id', prep.id)
+        // Ingredientes: recria
+        await supabase.from('preparacao_composicao').delete().eq('preparacao_id', prep.id)
+        if (prep.ingredientes?.length) {
+          await supabase.from('preparacao_composicao').insert(
+            prep.ingredientes.filter(i => i.ingrediente?.trim()).map((i, idx) => ({
+              preparacao_id: prep.id,
+              ingrediente: i.ingrediente,
+              quantidade: parseFloat(i.quantidade) || 0,
+              unidade: i.unidade || 'g',
+              ordem: idx + 1,
+            }))
+          )
+        }
+      } else {
+        const { data: nova } = await supabase.from('preparacoes').insert({
+          codigo: prep.codigo?.toUpperCase(),
+          nome: prep.nome, tipo: prep.tipo,
+          unidade_rendimento: prep.unidade_rendimento || 'g',
+          rendimento_estimado: parseFloat(prep.rendimento_estimado) || 0,
+          perda_percentual: parseFloat(prep.perda_percentual) || 0,
+          margem_seguranca: parseFloat(prep.margem_seguranca) || 5,
+          observacao: prep.observacao || null,
+        }).select().single()
+        if (nova && prep.ingredientes?.length) {
+          await supabase.from('preparacao_composicao').insert(
+            prep.ingredientes.filter(i => i.ingrediente?.trim()).map((i, idx) => ({
+              preparacao_id: nova.id,
+              ingrediente: i.ingrediente,
+              quantidade: parseFloat(i.quantidade) || 0,
+              unidade: i.unidade || 'g',
+              ordem: idx + 1,
+            }))
+          )
+        }
+      }
+      setEditando(null)
+      load()
+    } catch(e) { alert('Erro: ' + e.message) }
+    setSalvando(false)
+  }
+
+  const rendLiquido = (prep) => {
+    const bruto = parseFloat(prep.rendimento_estimado) || 0
+    const perda = parseFloat(prep.perda_percentual) || 0
+    return bruto * (1 - perda / 100)
+  }
+
+  if (editando !== null) return (
+    <ModalPreparacao
+      prep={editando === 'novo' ? { codigo:'', nome:'', tipo:'recheio', unidade_rendimento:'g', rendimento_estimado:'', perda_percentual:10, margem_seguranca:5, observacao:'', ingredientes:[] } : editando}
+      onClose={() => setEditando(null)}
+      onSalvar={salvar}
+      salvando={salvando}
+      TIPOS={TIPOS} TIPO_LABEL={TIPO_LABEL}
+    />
+  )
+
+  return (
+    <div className="card">
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 20px', borderBottom:'1px solid var(--gray-200)' }}>
+        <div>
+          <div style={{ fontWeight:800, fontSize:15 }}>🧪 Preparações / Receitas</div>
+          <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>Fichas técnicas das massas, recheios, cremes e coberturas</div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <button className="btn btn-primary" onClick={() => setEditando('novo')}><Plus size={14}/> Nova preparação</button>
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        </div>
+      </div>
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'var(--gray-50)', borderBottom:'2px solid var(--gray-200)' }}>
+              <th style={{ padding:'10px 14px', textAlign:'left' }}>Preparação</th>
+              <th style={{ padding:'10px 10px', textAlign:'left' }}>Tipo</th>
+              <th style={{ padding:'10px 10px', textAlign:'right' }}>Rend. estimado</th>
+              <th style={{ padding:'10px 10px', textAlign:'right' }}>Perda</th>
+              <th style={{ padding:'10px 10px', textAlign:'right' }}>Rend. líquido</th>
+              <th style={{ padding:'10px 10px', textAlign:'right' }}>Margem</th>
+              <th style={{ padding:'10px 10px', textAlign:'center' }}>Ingredientes</th>
+              <th style={{ padding:'10px 10px' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {lista.map((p, i) => (
+              <tr key={p.id} style={{ borderTop:'1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafafa' }}>
+                <td style={{ padding:'10px 14px' }}>
+                  <div style={{ fontWeight:700 }}>{p.nome}</div>
+                  <div style={{ fontSize:11, color:'var(--gray-400)', fontFamily:'monospace' }}>{p.codigo}</div>
+                </td>
+                <td style={{ padding:'10px 10px', fontSize:12 }}>{TIPO_LABEL[p.tipo] || p.tipo}</td>
+                <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:600 }}>
+                  {p.rendimento_estimado} {p.unidade_rendimento}
+                </td>
+                <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--danger)' }}>
+                  {p.perda_percentual}%
+                </td>
+                <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>
+                  {rendLiquido(p).toFixed(1)} {p.unidade_rendimento}
+                </td>
+                <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--ok)' }}>
+                  +{p.margem_seguranca}%
+                </td>
+                <td style={{ padding:'10px 10px', textAlign:'center' }}>
+                  <span className="pill neutral" style={{ fontSize:11 }}>
+                    {(p.preparacao_composicao||[]).length} ingredientes
+                  </span>
+                </td>
+                <td style={{ padding:'10px 10px' }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setEditando({ ...p, ingredientes: p.preparacao_composicao || [] })}>
+                    <Pencil size={12}/>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL }) {
+  const [form, setForm] = useState({ ...prep })
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  const setIng = (idx, k, v) => setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => n === idx ? { ...i, [k]: v } : i) }))
+  const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g' }] }))
+  const remIng = (idx) => setForm(p => ({ ...p, ingredientes: p.ingredientes.filter((_, n) => n !== idx) }))
+
+  const rendLiquido = () => {
+    const b = parseFloat(form.rendimento_estimado) || 0
+    const p = parseFloat(form.perda_percentual) || 0
+    return (b * (1 - p/100)).toFixed(1)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 640, maxHeight:'92vh', overflowY:'auto' }}>
+        <div className="modal-header">
+          <div className="modal-title">🧪 {form.id ? 'Editar' : 'Nova'} preparação</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {/* Dados principais */}
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Nome *</label>
+              <input className="form-input" value={form.nome} onChange={e => set('nome', e.target.value)} autoFocus />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Código *</label>
+              <input className="form-input" value={form.codigo} onChange={e => set('codigo', e.target.value.toUpperCase())} disabled={!!form.id} placeholder="Ex: REC01" />
+            </div>
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Tipo</label>
+              <select className="form-input" value={form.tipo} onChange={e => set('tipo', e.target.value)}>
+                {TIPOS.map(t => <option key={t} value={t}>{TIPO_LABEL[t]}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Unidade de rendimento</label>
+              <select className="form-input" value={form.unidade_rendimento} onChange={e => set('unidade_rendimento', e.target.value)}>
+                <option value="g">g (gramas)</option>
+                <option value="ml">ml (mililitros)</option>
+                <option value="un">un (unidades)</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-grid-2" style={{ alignItems:'end' }}>
+            <div className="form-group">
+              <label className="form-label">Rendimento estimado (bruto)</label>
+              <input type="number" className="form-input" value={form.rendimento_estimado} onChange={e => set('rendimento_estimado', e.target.value)} />
+            </div>
+            <div style={{ paddingBottom: 14 }}>
+              <div style={{ fontSize:12, color:'var(--gray-500)' }}>Rendimento líquido:</div>
+              <div style={{ fontSize:20, fontWeight:800, color:'var(--purple)' }}>{rendLiquido()} {form.unidade_rendimento}</div>
+            </div>
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Perda % <span style={{fontSize:11,color:'var(--gray-400)'}}>(desconto do rendimento)</span></label>
+              <input type="number" className="form-input" value={form.perda_percentual} onChange={e => set('perda_percentual', e.target.value)} min={0} max={100} step={0.5} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Margem de segurança % <span style={{fontSize:11,color:'var(--gray-400)'}}>(extra sugerido)</span></label>
+              <input type="number" className="form-input" value={form.margem_seguranca} onChange={e => set('margem_seguranca', e.target.value)} min={0} max={50} step={0.5} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={form.observacao||''} onChange={e => set('observacao', e.target.value)} />
+          </div>
+
+          {/* Ingredientes */}
+          <div style={{ marginTop:16 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+              <div style={{ fontWeight:700, fontSize:13 }}>Ingredientes da receita</div>
+              <button className="btn btn-ghost btn-sm" onClick={addIng}><Plus size={12}/> Adicionar</button>
+            </div>
+            {(form.ingredientes||[]).length === 0 && (
+              <div style={{ fontSize:12, color:'var(--gray-400)', fontStyle:'italic', padding:'8px 0' }}>
+                Nenhum ingrediente cadastrado ainda
+              </div>
+            )}
+            {(form.ingredientes||[]).map((ing, idx) => (
+              <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 90px 70px auto', gap:6, marginBottom:6, alignItems:'center' }}>
+                <input className="form-input" placeholder="Ingrediente" value={ing.ingrediente||''} onChange={e => setIng(idx,'ingrediente',e.target.value)} style={{ fontSize:13 }} />
+                <input type="number" className="form-input" placeholder="Qtd" value={ing.quantidade||''} onChange={e => setIng(idx,'quantidade',e.target.value)} style={{ fontSize:13 }} />
+                <select className="form-input" value={ing.unidade||'g'} onChange={e => setIng(idx,'unidade',e.target.value)} style={{ fontSize:13 }}>
+                  <option value="g">g</option>
+                  <option value="ml">ml</option>
+                  <option value="un">un</option>
+                </select>
+                <button className="btn btn-ghost btn-sm" onClick={() => remIng(idx)} style={{ color:'var(--danger)' }}>✕</button>
+              </div>
+            ))}
+            {(form.ingredientes||[]).length > 0 && (
+              <div style={{ fontSize:12, color:'var(--gray-500)', marginTop:6, textAlign:'right' }}>
+                Total: {(form.ingredientes||[]).reduce((s,i) => s + (parseFloat(i.quantidade)||0), 0).toFixed(1)} {form.unidade_rendimento === 'un' ? 'g/ml' : form.unidade_rendimento}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" disabled={salvando || !form.nome || !form.codigo} onClick={() => onSalvar(form)}>
+            {salvando ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Composição dos Produtos ───────────────────────────────────────────────────
+function AdminComposicaoProdutos() {
+  const [embs, setEmbs] = useState([])
+  const [preps, setPreps] = useState([])
+  const [composicoes, setComposicoes] = useState({}) // { sku: [{ id, prep, qtd, unidade }] }
+  const [loading, setLoading] = useState(true)
+  const [editandoSku, setEditandoSku] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+  const [filtro, setFiltro] = useState('')
+
+  async function load() {
+    setLoading(true)
+    const [{ data: embsData }, { data: prepsData }, { data: compData }] = await Promise.all([
+      supabase.from('embalagens').select('id, nome, codigo, categoria').eq('tipo', 'rotulo').eq('ativo', true).order('categoria').order('nome'),
+      supabase.from('preparacoes').select('id, codigo, nome, tipo').eq('ativo', true).order('tipo').order('nome'),
+      supabase.from('produto_composicao').select('*, preparacoes(id, nome, codigo, tipo)'),
+    ])
+    setEmbs(embsData || [])
+    setPreps(prepsData || [])
+    const map = {}
+    for (const c of (compData || [])) {
+      if (!map[c.sku_produto]) map[c.sku_produto] = []
+      map[c.sku_produto].push(c)
+    }
+    setComposicoes(map)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function salvarComposicao(sku, itens) {
+    setSalvando(true)
+    try {
+      await supabase.from('produto_composicao').delete().eq('sku_produto', sku)
+      if (itens.filter(i => i.preparacao_id).length) {
+        await supabase.from('produto_composicao').insert(
+          itens.filter(i => i.preparacao_id).map(i => ({
+            sku_produto: sku,
+            preparacao_id: i.preparacao_id,
+            quantidade_por_unidade: parseFloat(i.quantidade_por_unidade) || 0,
+            unidade: i.unidade || 'g',
+            observacao: i.observacao || null,
+          }))
+        )
+      }
+      setEditandoSku(null)
+      load()
+    } catch(e) { alert('Erro: ' + e.message) }
+    setSalvando(false)
+  }
+
+  const embsFiltradas = embs.filter(e =>
+    !filtro || e.nome.toLowerCase().includes(filtro.toLowerCase()) || e.codigo.toLowerCase().includes(filtro.toLowerCase())
+  )
+
+  if (editandoSku) {
+    const emb = embs.find(e => e.codigo === editandoSku)
+    const itensAtuais = (composicoes[editandoSku] || []).map(c => ({
+      preparacao_id: c.preparacao_id,
+      quantidade_por_unidade: c.quantidade_por_unidade,
+      unidade: c.unidade,
+      observacao: c.observacao || '',
+    }))
+    return (
+      <ModalComposicaoProduto
+        emb={emb}
+        preps={preps}
+        itensIniciais={itensAtuais}
+        onClose={() => setEditandoSku(null)}
+        onSalvar={(itens) => salvarComposicao(editandoSku, itens)}
+        salvando={salvando}
+      />
+    )
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 20px', borderBottom:'1px solid var(--gray-200)' }}>
+        <div>
+          <div style={{ fontWeight:800, fontSize:15 }}>🧩 Composição dos Produtos</div>
+          <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>Quanto de cada preparação é usado por unidade de produto final</div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <input className="form-input" placeholder="Filtrar produto..." value={filtro} onChange={e => setFiltro(e.target.value)} style={{ width:200, fontSize:13 }} />
+          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+        </div>
+      </div>
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'var(--gray-50)', borderBottom:'2px solid var(--gray-200)' }}>
+              <th style={{ padding:'10px 14px', textAlign:'left' }}>Produto</th>
+              <th style={{ padding:'10px 10px', textAlign:'left' }}>Categoria</th>
+              <th style={{ padding:'10px 10px', textAlign:'left' }}>Preparações cadastradas</th>
+              <th style={{ padding:'10px 10px', textAlign:'center' }}>Status</th>
+              <th style={{ padding:'10px 10px' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {embsFiltradas.map((e, i) => {
+              const comps = composicoes[e.codigo] || []
+              const temFicha = comps.length > 0
+              return (
+                <tr key={e.id} style={{ borderTop:'1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafafa' }}>
+                  <td style={{ padding:'10px 14px' }}>
+                    <div style={{ fontWeight:700 }}>{e.nome}</div>
+                    <div style={{ fontSize:11, color:'var(--gray-400)', fontFamily:'monospace' }}>{e.codigo}</div>
+                  </td>
+                  <td style={{ padding:'10px 10px', fontSize:12, color:'var(--gray-500)' }}>{e.categoria}</td>
+                  <td style={{ padding:'10px 10px', fontSize:12 }}>
+                    {temFicha
+                      ? comps.map(c => (
+                          <span key={c.id} className="pill" style={{ fontSize:10, marginRight:4, background:'var(--purple-pale)', color:'var(--purple)' }}>
+                            {c.preparacoes?.nome} ({c.quantidade_por_unidade}{c.unidade})
+                          </span>
+                        ))
+                      : <span style={{ color:'var(--gray-300)', fontStyle:'italic' }}>Sem ficha cadastrada</span>
+                    }
+                  </td>
+                  <td style={{ padding:'10px 10px', textAlign:'center' }}>
+                    {temFicha
+                      ? <span style={{ color:'var(--ok)', fontSize:16 }}>✓</span>
+                      : <span style={{ color:'var(--warning)', fontSize:16 }}>○</span>
+                    }
+                  </td>
+                  <td style={{ padding:'10px 10px' }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditandoSku(e.codigo)}>
+                      <Pencil size={12}/> {temFicha ? 'Editar' : 'Cadastrar'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function ModalComposicaoProduto({ emb, preps, itensIniciais, onClose, onSalvar, salvando }) {
+  const [itens, setItens] = useState(
+    itensIniciais.length > 0 ? itensIniciais : [{ preparacao_id:'', quantidade_por_unidade:'', unidade:'g', observacao:'' }]
+  )
+  const addItem = () => setItens(p => [...p, { preparacao_id:'', quantidade_por_unidade:'', unidade:'g', observacao:'' }])
+  const remItem = (idx) => setItens(p => p.filter((_,n) => n !== idx))
+  const setItem = (idx, k, v) => setItens(p => p.map((i,n) => n===idx ? {...i,[k]:v} : i))
+
+  const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 580, maxHeight:'90vh', overflowY:'auto' }}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">🧩 Composição: {emb?.nome}</div>
+            <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>Quanto de cada preparação por unidade produzida</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {itens.map((it, idx) => (
+            <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px auto', gap:6, marginBottom:8, alignItems:'start' }}>
+              <div>
+                <select className="form-input" value={it.preparacao_id} onChange={e => setItem(idx,'preparacao_id',e.target.value)} style={{ fontSize:13 }}>
+                  <option value="">Selecione a preparação...</option>
+                  {['massa','creme','recheio','cobertura','cha','outro'].map(tipo => {
+                    const grupo = preps.filter(p => p.tipo === tipo)
+                    if (!grupo.length) return null
+                    return (
+                      <optgroup key={tipo} label={`${TIPO_ICON[tipo] || ''} ${tipo.charAt(0).toUpperCase()+tipo.slice(1)}`}>
+                        {grupo.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                      </optgroup>
+                    )
+                  })}
+                </select>
+                {it.observacao !== undefined && (
+                  <input className="form-input" placeholder="Obs. (ex: inclui 0,5g de perda na forma)"
+                    value={it.observacao||''} onChange={e => setItem(idx,'observacao',e.target.value)}
+                    style={{ fontSize:11, marginTop:4 }} />
+                )}
+              </div>
+              <input type="number" className="form-input" placeholder="Qtd" min={0} step={0.1}
+                value={it.quantidade_por_unidade||''} onChange={e => setItem(idx,'quantidade_por_unidade',e.target.value)} style={{ fontSize:13 }} />
+              <select className="form-input" value={it.unidade||'g'} onChange={e => setItem(idx,'unidade',e.target.value)} style={{ fontSize:13 }}>
+                <option value="g">g</option>
+                <option value="ml">ml</option>
+                <option value="un">un</option>
+              </select>
+              <button className="btn btn-ghost btn-sm" onClick={() => remItem(idx)} style={{ color:'var(--danger)' }}>✕</button>
+            </div>
+          ))}
+          <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12}/> Adicionar preparação</button>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" disabled={salvando} onClick={() => onSalvar(itens)}>
+            {salvando ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const [tab, setTab] = useState('embalagens')
   const [embs, setEmbs] = useState([])
@@ -555,6 +1025,8 @@ export default function Admin() {
         <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Embalagens</button>
         <button className={`tab${tab === 'cat_embalagem' ? ' active' : ''}`} onClick={() => setTab('cat_embalagem')}>📦 Emb. por Categoria</button>
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
+        <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
+        <button className={`tab${tab === 'fichas_produtos' ? ' active' : ''}`} onClick={() => setTab('fichas_produtos')}>🧩 Composição Produtos</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
 
@@ -563,6 +1035,10 @@ export default function Admin() {
       {tab === 'cat_embalagem' && <AdminCatEmbalagem />}
 
       {tab === 'delivery_previsao' && <AdminDeliveryPrevisao />}
+
+      {tab === 'fichas_preparacoes' && <AdminPreparacoes />}
+
+      {tab === 'fichas_produtos' && <AdminComposicaoProdutos />}
 
       {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
