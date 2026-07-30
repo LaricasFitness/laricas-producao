@@ -345,10 +345,22 @@ export default function Log() {
         <button className={`tab${aba === 'pvr' ? ' active' : ''}`} onClick={() => setAba('pvr')}>
           📊 Previsto × Realizado
         </button>
+        <button className={`tab${aba === 'interno' ? ' active' : ''}`} onClick={() => setAba('interno')}>
+          🍫 Recheios e Coberturas
+        </button>
       </div>
 
       {aba === 'pvr' && (
         <PvrDia ano={ano} mes={mes} embs={embs} navMes={(delta) => {
+          let nm = mes + delta, na = ano
+          if (nm < 0) { nm = 11; na-- }
+          if (nm > 11) { nm = 0; na++ }
+          setMes(nm); setAno(na)
+        }} />
+      )}
+
+      {aba === 'interno' && (
+        <HistoricoInterno ano={ano} mes={mes} navMes={(delta) => {
           let nm = mes + delta, na = ano
           if (nm < 0) { nm = 11; na-- }
           if (nm > 11) { nm = 0; na++ }
@@ -584,7 +596,186 @@ export default function Log() {
   )
 }
 
-// ── Previsto × Realizado por dia ─────────────────────────────────────────────
+// ── Histórico de Recheios e Coberturas ───────────────────────────────────────
+function HistoricoInterno({ ano, mes, navMes }) {
+  const [dados, setDados] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [filtroFase, setFiltroFase] = useState('todos')
+
+  const FASE_LABEL = {
+    massa:        { label: '🍞 Massa',         cor: '#7d3c98' },
+    recheio:      { label: '🥄 Recheio PM/Barra', cor: '#c0392b' },
+    recheio_pote: { label: '🍮 Recheio Pote',  cor: '#d35400' },
+    cobertura:    { label: '🍫 Cobertura',     cor: '#1a5276' },
+    desperdicio:  { label: '⚠️ Desperdício',   cor: '#7f8c8d' },
+  }
+  const UNIDADE_LABEL = { receitas: 'receitas', pacotes: 'pcts' }
+
+  useEffect(() => { load() }, [ano, mes])
+
+  async function load() {
+    setLoading(true)
+    const ini = `${ano}-${String(mes+1).padStart(2,'0')}-01`
+    const fim = new Date(ano, mes+1, 0).toISOString().slice(0,10)
+    const { data } = await supabase
+      .from('producao_interna')
+      .select('*')
+      .gte('data_producao', ini)
+      .lte('data_producao', fim)
+      .order('data_producao', { ascending: false })
+      .order('criado_em', { ascending: false })
+    setDados(data || [])
+    setLoading(false)
+  }
+
+  function exportarCSV() {
+    const rows = [['Data','Fase','Item','Quantidade','Unidade','Responsável','Observação']]
+    for (const r of dados) {
+      rows.push([
+        new Date(r.data_producao+'T12:00:00').toLocaleDateString('pt-BR'),
+        FASE_LABEL[r.fase]?.label || r.fase,
+        r.item, r.quantidade||'', r.unidade||'', r.registrado_por||'', r.observacao||''
+      ])
+    }
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href=url
+    a.download=`Recheios_Coberturas_${MESES[mes]}_${ano}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
+
+  // Agrupa por item para totais do mês
+  const totaisPorItem = {}
+  for (const r of dados) {
+    if (!r.quantidade || r.fase === 'desperdicio') continue
+    const fase = filtroFase === 'todos' || filtroFase === r.fase
+    if (!fase) continue
+    const key = `${r.fase}||${r.item}||${r.unidade}`
+    if (!totaisPorItem[key]) totaisPorItem[key] = { fase: r.fase, item: r.item, unidade: r.unidade, total: 0 }
+    totaisPorItem[key].total += r.quantidade
+  }
+
+  const dadosFiltrados = filtroFase === 'todos' ? dados : dados.filter(r => r.fase === filtroFase)
+  // Agrupa por data
+  const porData = {}
+  for (const r of dadosFiltrados) {
+    if (!porData[r.data_producao]) porData[r.data_producao] = []
+    porData[r.data_producao].push(r)
+  }
+
+  return (
+    <>
+      {/* Header */}
+      <div className="card card-pad" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => navMes(-1)}>‹</button>
+          <span style={{ fontWeight:800, fontSize:15 }}>{MESES[mes]} {ano}</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => navMes(1)}>›</button>
+        </div>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          {[['todos','Todos'], ...Object.entries(FASE_LABEL).map(([k,v]) => [k, v.label])].map(([v,l]) => (
+            <button key={v} className={`btn btn-xs ${filtroFase===v?'btn-primary':'btn-ghost'}`}
+              onClick={() => setFiltroFase(v)}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={exportarCSV} disabled={!dados.length}>
+            <Download size={13}/> CSV
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={14}/></button>
+        </div>
+      </div>
+
+      {/* KPIs do mês */}
+      {Object.keys(totaisPorItem).length > 0 && (
+        <div className="card card-pad">
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:10, color:'var(--gray-600)' }}>
+            Totais do mês — {MESES[mes]} {ano}
+          </div>
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
+            {Object.values(totaisPorItem)
+              .sort((a,b) => a.fase.localeCompare(b.fase) || a.item.localeCompare(b.item))
+              .map((t, i) => {
+                const fl = FASE_LABEL[t.fase]
+                return (
+                  <div key={i} style={{ padding:'8px 14px', borderRadius:8, background:'var(--gray-50)', border:'1px solid var(--gray-200)', minWidth:160 }}>
+                    <div style={{ fontSize:10, fontWeight:700, color: fl?.cor || 'var(--gray-500)', textTransform:'uppercase', letterSpacing:'.04em' }}>
+                      {fl?.label || t.fase}
+                    </div>
+                    <div style={{ fontWeight:700, fontSize:13, marginTop:2 }}>{t.item}</div>
+                    <div style={{ fontSize:18, fontWeight:800, color: fl?.cor || 'var(--purple)' }}>
+                      {t.total % 1 === 0 ? t.total : t.total.toFixed(1)}
+                      <span style={{ fontSize:12, fontWeight:400, color:'var(--gray-500)', marginLeft:4 }}>
+                        {UNIDADE_LABEL[t.unidade] || t.unidade}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+          </div>
+        </div>
+      )}
+
+      {/* Tabela por dia */}
+      <div className="card">
+        {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> :
+          Object.keys(porData).length === 0 ? (
+            <div className="empty card-pad">
+              <div className="empty-icon">🍫</div>
+              <div className="empty-title">Nenhum registro em {MESES[mes]}</div>
+              <div className="empty-sub">Os recheios e coberturas registrados no formulário de produção aparecem aqui</div>
+            </div>
+          ) : (
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead>
+                <tr style={{ background:'var(--gray-50)', borderBottom:'2px solid var(--gray-200)' }}>
+                  <th style={{ padding:'10px 14px', textAlign:'left' }}>Data</th>
+                  <th style={{ padding:'10px 10px', textAlign:'left' }}>Tipo</th>
+                  <th style={{ padding:'10px 10px', textAlign:'left' }}>Item</th>
+                  <th style={{ padding:'10px 10px', textAlign:'right' }}>Quantidade</th>
+                  <th style={{ padding:'10px 10px', textAlign:'left' }}>Responsável</th>
+                  <th style={{ padding:'10px 10px', textAlign:'left' }}>Observação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(porData).map(([data, itens]) => {
+                  const dt = new Date(data+'T12:00:00')
+                  return itens.map((r, i) => {
+                    const fl = FASE_LABEL[r.fase]
+                    return (
+                      <tr key={r.id} style={{ borderTop:'1px solid var(--gray-100)', background: i===0 && data ? '#fafafa' : '#fff' }}>
+                        {i === 0 && (
+                          <td rowSpan={itens.length} style={{ padding:'10px 14px', fontWeight:700, verticalAlign:'top', borderRight:'1px solid var(--gray-100)' }}>
+                            {dt.toLocaleDateString('pt-BR')}
+                            <div style={{ fontSize:11, color:'var(--gray-400)', fontWeight:400 }}>
+                              {dt.toLocaleDateString('pt-BR',{weekday:'short'})}
+                            </div>
+                          </td>
+                        )}
+                        <td style={{ padding:'8px 10px' }}>
+                          <span style={{ fontSize:11, fontWeight:700, color: fl?.cor || 'var(--gray-500)', background: fl ? fl.cor+'18' : 'var(--gray-100)', padding:'2px 7px', borderRadius:4 }}>
+                            {fl?.label || r.fase}
+                          </span>
+                        </td>
+                        <td style={{ padding:'8px 10px', fontWeight:600 }}>{r.item}</td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>
+                          {r.quantidade != null ? `${r.fase === 'cobertura' ? r.quantidade : (r.quantidade % 1 === 0 ? r.quantidade : r.quantidade.toFixed(1))} ${UNIDADE_LABEL[r.unidade] || r.unidade || ''}` : '—'}
+                        </td>
+                        <td style={{ padding:'8px 10px', fontSize:12, color:'var(--gray-500)' }}>{r.registrado_por}</td>
+                        <td style={{ padding:'8px 10px', fontSize:12, color:'var(--gray-500)', fontStyle: r.observacao ? 'italic' : 'normal' }}>{r.observacao || '—'}</td>
+                      </tr>
+                    )
+                  })
+                })}
+              </tbody>
+            </table>
+          )
+        }
+      </div>
+    </>
+  )
+}
 function PvrDia({ ano, mes, embs, navMes }) {
   const [dados, setDados] = useState([]) // [{data, previsto, realizado, desvio, itens}]
   const [loading, setLoading] = useState(false)
