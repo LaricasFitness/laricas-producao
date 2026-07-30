@@ -599,14 +599,22 @@ function PvrDia({ ano, mes, embs, navMes }) {
     const ini = `${ano}-${String(mes+1).padStart(2,'0')}-01`
     const fim = new Date(ano, mes+1, 0).toISOString().slice(0,10)
 
-    // Planejamentos do período — usa data_producao igual à Análise
-    const { data: plans } = await supabase
-      .from('planejamentos').select('id, data_producao')
+    // Planejamentos do período — apenas o mais recente por dia
+    const { data: plansAll } = await supabase
+      .from('planejamentos').select('id, data_producao, criado_em')
       .gte('data_producao', ini).lte('data_producao', fim)
+      .order('criado_em', { ascending: false })
 
-    const planIds = (plans||[]).map(p => p.id)
+    // Filtra: só o mais recente por data_producao
+    const ultimoPorDia = {}
+    for (const p of (plansAll || [])) {
+      if (!ultimoPorDia[p.data_producao]) ultimoPorDia[p.data_producao] = p
+    }
+    const plans = Object.values(ultimoPorDia)
+
+    const planIds = plans.map(p => p.id)
     const planDataMap = {}
-    ;(plans||[]).forEach(p => { planDataMap[p.id] = p.data_producao })
+    plans.forEach(p => { planDataMap[p.id] = p.data_producao })
 
     // Itens planejados
     let planPorData = {}
