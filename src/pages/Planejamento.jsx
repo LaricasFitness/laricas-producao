@@ -426,7 +426,205 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
   )
 }
 
+// ── Aba Preparações Necessárias ──────────────────────────────────────────────
+function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, diasDelivery, preparacoesData, diaAtual }) {
+  const { preps, composicoes } = preparacoesData
+  const [estoques, setEstoques] = useState({}) // prepId → qtd disponível
+  const [ajustes, setAjustes] = useState({})   // prepId → receitas ajustadas manualmente
+
+  // Consolida produção total de todos os dias visíveis por SKU
+  const totalPorSku = {}
+  for (const dia of diasVisiveis) {
+    for (const itens of Object.values(itensDiaAtual)) {
+      for (const it of itens) {
+        if (!it.sku) continue
+        totalPorSku[it.sku] = (totalPorSku[it.sku] || 0) + (it.total || 0)
+      }
+    }
+    // Considera também outros dias visíveis (não só diaAtual)
+    if (dia !== diaAtual) {
+      const bMap = diasBling[dia] || {}
+      const dMap = diasDelivery[dia] || {}
+      const skus = new Set([...Object.keys(bMap), ...Object.keys(dMap)])
+      for (const sku of skus) {
+        const tot = (bMap[sku] || 0) + (dMap[sku] || 0)
+        if (tot > 0) totalPorSku[sku] = (totalPorSku[sku] || 0) + tot
+      }
+    }
+  }
+  // Extras
+  for (const x of itensExtras) {
+    if (x.qtd > 0 && diasVisiveis.includes(x.data)) {
+      totalPorSku[`extra:${x.id}`] = x.qtd
+    }
+  }
+
+  // Calcula necessidade por preparação
+  const necessidades = {}
+  for (const [sku, qtdProd] of Object.entries(totalPorSku)) {
+    const comps = composicoes.filter(c => c.sku_produto === sku)
+    for (const comp of comps) {
+      const prep = comp.preparacoes
+      if (!prep) continue
+      const id = comp.preparacao_id
+      if (!necessidades[id]) necessidades[id] = { prep, total_g: 0, total_un: 0 }
+      if (comp.unidade === 'un') necessidades[id].total_un += qtdProd * comp.quantidade_por_unidade
+      else necessidades[id].total_g += qtdProd * comp.quantidade_por_unidade
+    }
+  }
+
+  // Para cada preparação, calcula receitas
+  const linhas = Object.entries(necessidades).map(([id, { prep, total_g, total_un }]) => {
+    const rend = parseFloat(prep.rendimento_estimado) || 0
+    const perda = parseFloat(prep.perda_percentual) || 0
+    const marg = parseFloat(prep.margem_seguranca) || 0
+    const rendLiq = rend * (1 - perda / 100)
+    const totalNecessario = total_g > 0 ? total_g : total_un
+    const unidade = prep.unidade_rendimento
+    const estoque = parseFloat(estoques[id]) || 0
+    const necessidadeComMargem = totalNecessario * (1 + marg / 100)
+    const necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
+    const receitasRaw = rendLiq > 0 ? necessidadeLiq / rendLiq : null
+    // Arredonda para múltiplos de 0,5
+    const receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
+    const receitasDefinidas = ajustes[id] !== undefined ? parseFloat(ajustes[id]) : receitasArr
+
+    return { id, prep, totalNecessario, unidade, estoque, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, receitasDefinidas, rendLiq }
+  }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
+
+  const skusSemFicha = Object.keys(totalPorSku).filter(sku => {
+    if (sku.startsWith('extra:')) return false
+    return !composicoes.some(c => c.sku_produto === sku)
+  })
+
+  function fmtG(g) {
+    if (g >= 1000) return `${(g/1000).toFixed(2)} kg`
+    return `${g.toFixed(0)} g`
+  }
+
+  const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Aviso produtos sem ficha */}
+      {skusSemFicha.length > 0 && (
+        <div className="card card-pad" style={{ border: '1px solid var(--warning)', background: '#fffbf0' }}>
+          <div style={{ fontWeight: 700, color: 'var(--warning)', marginBottom: 4 }}>
+            ⚠️ {skusSemFicha.length} produto(s) sem ficha técnica — não incluídos no cálculo
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+            {skusSemFicha.join(', ')} · Cadastre a composição em Admin → Composição Produtos
+          </div>
+        </div>
+      )}
+
+      {/* Tabela de preparações */}
+      <div className="card">
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>🧪 Preparações Necessárias</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+              Informe o estoque disponível e ajuste as receitas se necessário
+            </div>
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: 'var(--gray-50)', borderBottom: '2px solid var(--gray-200)' }}>
+                <th style={{ padding: '10px 14px', textAlign: 'left' }}>Preparação</th>
+                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Necessidade total</th>
+                <th style={{ padding: '10px 10px', textAlign: 'right' }}>+ Margem</th>
+                <th style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--purple)' }}>Estoque pronto</th>
+                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Necessidade líquida</th>
+                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Rend./receita</th>
+                <th style={{ padding: '10px 10px', textAlign: 'center' }}>Receitas calc.</th>
+                <th style={{ padding: '10px 10px', textAlign: 'center', color: 'var(--purple)', minWidth: 110 }}>Produção definida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.map((l, i) => (
+                <tr key={l.id} style={{ borderTop: '1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafafa' }}>
+                  <td style={{ padding: '10px 14px' }}>
+                    <div style={{ fontWeight: 700 }}>
+                      {TIPO_ICON[l.prep.tipo]} {l.prep.nome}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+                      {l.prep.perda_percentual}% perda · {l.prep.margem_seguranca}% margem
+                    </div>
+                  </td>
+                  <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 600 }}>
+                    {l.prep.unidade_rendimento === 'un'
+                      ? `${l.totalNecessario.toFixed(0)} un`
+                      : fmtG(l.totalNecessario)}
+                  </td>
+                  <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--gray-500)', fontSize: 12 }}>
+                    {l.prep.unidade_rendimento === 'un'
+                      ? `${l.necessidadeComMargem.toFixed(0)} un`
+                      : fmtG(l.necessidadeComMargem)}
+                  </td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                      <input type="number" min={0} step={0.1}
+                        value={estoques[l.id] || ''}
+                        onChange={e => setEstoques(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        placeholder="0"
+                        style={{ width: 72, padding: '4px 6px', fontSize: 12, border: '1.5px solid var(--purple)', borderRadius: 5, outline: 'none', textAlign: 'right' }} />
+                      <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{l.prep.unidade_rendimento}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 700, color: l.necessidadeLiq > 0 ? 'var(--danger)' : 'var(--ok)' }}>
+                    {l.prep.unidade_rendimento === 'un'
+                      ? `${l.necessidadeLiq.toFixed(0)} un`
+                      : fmtG(l.necessidadeLiq)}
+                  </td>
+                  <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--gray-500)', fontSize: 12 }}>
+                    {l.rendLiq > 0
+                      ? l.prep.unidade_rendimento === 'un'
+                        ? `${l.rendLiq.toFixed(1)} un`
+                        : fmtG(l.rendLiq)
+                      : '—'}
+                  </td>
+                  <td style={{ padding: '10px 10px', textAlign: 'center' }}>
+                    {l.receitasRaw !== null ? (
+                      <div>
+                        <span style={{ fontSize: 13, color: 'var(--gray-600)' }}>{l.receitasRaw.toFixed(2)}</span>
+                        <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>→ {l.receitasArr} (arred.)</div>
+                      </div>
+                    ) : '—'}
+                  </td>
+                  <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+                      <input type="number" min={0} step={0.5}
+                        value={ajustes[l.id] !== undefined ? ajustes[l.id] : (l.receitasArr ?? '')}
+                        onChange={e => setAjustes(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        style={{ width: 64, padding: '5px 6px', fontSize: 14, fontWeight: 800, border: '2px solid var(--purple)', borderRadius: 6, outline: 'none', textAlign: 'center', color: 'var(--purple)' }} />
+                      <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>rec.</span>
+                    </div>
+                    {ajustes[l.id] !== undefined && parseFloat(ajustes[l.id]) !== l.receitasArr && (
+                      <div style={{ fontSize: 10, color: 'var(--gold)', marginTop: 2 }}>✏️ ajustado</div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {linhas.length === 0 && (
+                <tr>
+                  <td colSpan={8} style={{ padding: 32, textAlign: 'center', color: 'var(--gray-400)' }}>
+                    Nenhuma preparação calculada — verifique se os produtos têm composição cadastrada
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Planejamento({ onIrLogistica }) {
+  const [abaPlano, setAbaPlano] = useState('itens') // 'itens' | 'preparacoes'
+  const [preparacoesData, setPreparacoesData] = useState({ preps: [], composicoes: [] })
   const [embalagens, setEmbalagens] = useState([])
   const [loading, setLoading] = useState(true)
   const [importando, setImportando] = useState(false)
@@ -449,6 +647,13 @@ export default function Planejamento({ onIrLogistica }) {
       .eq('visivel_producao', true)
       .order('categoria').order('nome')
       .then(({ data }) => { setEmbalagens(data || []); setLoading(false) })
+    // Carrega fichas técnicas
+    Promise.all([
+      supabase.from('preparacoes').select('*').eq('ativo', true).order('tipo').order('nome'),
+      supabase.from('produto_composicao').select('*, preparacoes(id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual,margem_seguranca)'),
+    ]).then(([{ data: preps }, { data: comps }]) => {
+      setPreparacoesData({ preps: preps || [], composicoes: comps || [] })
+    })
   }, [])
 
   function handleFile(file) {
@@ -845,7 +1050,17 @@ export default function Planejamento({ onIrLogistica }) {
       )}
 
       {/* Aviso sem data */}
-      {temDados && datasAtivas.length === 0 && (
+      {/* Tabs de navegação — só aparecem quando há dados e datas selecionadas */}
+      {temDados && datasAtivas.length > 0 && (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button className={`tab${abaPlano === 'itens' ? ' active' : ''}`} onClick={() => setAbaPlano('itens')}>
+            📋 Itens de Produção
+          </button>
+          <button className={`tab${abaPlano === 'preparacoes' ? ' active' : ''}`} onClick={() => setAbaPlano('preparacoes')}>
+            🧪 Preparações Necessárias
+          </button>
+        </div>
+      )}
         <div className="card card-pad">
           <div className="alert-banner info">
             👆 Selecione pelo menos uma data acima para ver a tabela de planejamento.
@@ -1038,6 +1253,19 @@ export default function Planejamento({ onIrLogistica }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Aba Preparações Necessárias */}
+      {temDados && datasAtivas.length > 0 && abaPlano === 'preparacoes' && (
+        <AbaPreparacoes
+          itensDiaAtual={itensDiaAtual}
+          itensExtras={itensExtras}
+          diasVisiveis={diasVisiveis}
+          diasBling={diasBling}
+          diasDelivery={diasDelivery}
+          preparacoesData={preparacoesData}
+          diaAtual={diaAtual}
+        />
       )}
     </>
   )
