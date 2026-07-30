@@ -569,7 +569,7 @@ function AdminPreparacoes() {
   const rendLiquido = (prep) => {
     const bruto = parseFloat(prep.rendimento_estimado) || 0
     const perda = parseFloat(prep.perda_percentual) || 0
-    return bruto * (1 - perda / 100)
+    return (bruto - bruto * perda / 100).toFixed(1)
   }
 
   if (editando !== null) return (
@@ -654,11 +654,10 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
   const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g' }] }))
   const remIng = (idx) => setForm(p => ({ ...p, ingredientes: p.ingredientes.filter((_, n) => n !== idx) }))
 
-  const rendLiquido = () => {
-    const b = parseFloat(form.rendimento_estimado) || 0
-    const p = parseFloat(form.perda_percentual) || 0
-    return (b * (1 - p/100)).toFixed(1)
-  }
+  // Rendimento bruto = soma dos ingredientes
+  const rendBruto = (form.ingredientes||[]).reduce((s, i) => s + (parseFloat(i.quantidade)||0), 0)
+  const perda = parseFloat(form.perda_percentual) || 0
+  const rendLiquido = rendBruto * (1 - perda / 100)
 
   return (
     <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
@@ -668,7 +667,6 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          {/* Dados principais */}
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">Nome *</label>
@@ -695,40 +693,47 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
               </select>
             </div>
           </div>
-          <div className="form-grid-2" style={{ alignItems:'end' }}>
-            <div className="form-group">
-              <label className="form-label">Rendimento estimado (bruto)</label>
-              <input type="number" className="form-input" value={form.rendimento_estimado} onChange={e => set('rendimento_estimado', e.target.value)} />
+
+          {/* Rendimento calculado automaticamente */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, padding:'12px 14px', background:'var(--purple-pale)', borderRadius:8, marginBottom:16 }}>
+            <div>
+              <div style={{ fontSize:11, color:'var(--gray-500)', fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em' }}>Rendimento bruto</div>
+              <div style={{ fontSize:18, fontWeight:800, color:'var(--gray-700)' }}>{rendBruto.toFixed(1)} <span style={{fontSize:13}}>{form.unidade_rendimento}</span></div>
+              <div style={{ fontSize:11, color:'var(--gray-400)' }}>soma dos ingredientes</div>
             </div>
-            <div style={{ paddingBottom: 14 }}>
-              <div style={{ fontSize:12, color:'var(--gray-500)' }}>Rendimento líquido:</div>
-              <div style={{ fontSize:20, fontWeight:800, color:'var(--purple)' }}>{rendLiquido()} {form.unidade_rendimento}</div>
+            <div>
+              <div style={{ fontSize:11, color:'var(--gray-500)', fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em' }}>Perda %</div>
+              <input type="number" value={form.perda_percentual} onChange={e => set('perda_percentual', e.target.value)}
+                min={0} max={100} step={0.5}
+                style={{ width:80, fontSize:18, fontWeight:800, color:'var(--danger)', border:'2px solid var(--danger)', borderRadius:6, padding:'4px 8px', outline:'none', background:'transparent' }} />
+            </div>
+            <div>
+              <div style={{ fontSize:11, color:'var(--gray-500)', fontWeight:700, textTransform:'uppercase', letterSpacing:'.04em' }}>Rendimento líquido</div>
+              <div style={{ fontSize:18, fontWeight:800, color:'var(--purple)' }}>{rendLiquido.toFixed(1)} <span style={{fontSize:13}}>{form.unidade_rendimento}</span></div>
+              <div style={{ fontSize:11, color:'var(--gray-400)' }}>bruto − perda</div>
             </div>
           </div>
+
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">Perda % <span style={{fontSize:11,color:'var(--gray-400)'}}>(desconto do rendimento)</span></label>
-              <input type="number" className="form-input" value={form.perda_percentual} onChange={e => set('perda_percentual', e.target.value)} min={0} max={100} step={0.5} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Margem de segurança % <span style={{fontSize:11,color:'var(--gray-400)'}}>(extra sugerido)</span></label>
+              <label className="form-label">Margem de segurança % <span style={{fontSize:11,color:'var(--gray-400)'}}>(extra sugerido no planejamento)</span></label>
               <input type="number" className="form-input" value={form.margem_seguranca} onChange={e => set('margem_seguranca', e.target.value)} min={0} max={50} step={0.5} />
             </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Observação</label>
-            <input className="form-input" value={form.observacao||''} onChange={e => set('observacao', e.target.value)} />
+            <div className="form-group">
+              <label className="form-label">Observação</label>
+              <input className="form-input" value={form.observacao||''} onChange={e => set('observacao', e.target.value)} />
+            </div>
           </div>
 
           {/* Ingredientes */}
-          <div style={{ marginTop:16 }}>
+          <div style={{ marginTop:8 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-              <div style={{ fontWeight:700, fontSize:13 }}>Ingredientes da receita</div>
+              <div style={{ fontWeight:700, fontSize:13 }}>Ingredientes da receita <span style={{fontSize:11,color:'var(--gray-400)',fontWeight:400}}>(1 receita completa)</span></div>
               <button className="btn btn-ghost btn-sm" onClick={addIng}><Plus size={12}/> Adicionar</button>
             </div>
             {(form.ingredientes||[]).length === 0 && (
               <div style={{ fontSize:12, color:'var(--gray-400)', fontStyle:'italic', padding:'8px 0' }}>
-                Nenhum ingrediente cadastrado ainda
+                Nenhum ingrediente cadastrado ainda — o rendimento bruto será 0
               </div>
             )}
             {(form.ingredientes||[]).map((ing, idx) => (
@@ -743,16 +748,11 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                 <button className="btn btn-ghost btn-sm" onClick={() => remIng(idx)} style={{ color:'var(--danger)' }}>✕</button>
               </div>
             ))}
-            {(form.ingredientes||[]).length > 0 && (
-              <div style={{ fontSize:12, color:'var(--gray-500)', marginTop:6, textAlign:'right' }}>
-                Total: {(form.ingredientes||[]).reduce((s,i) => s + (parseFloat(i.quantidade)||0), 0).toFixed(1)} {form.unidade_rendimento === 'un' ? 'g/ml' : form.unidade_rendimento}
-              </div>
-            )}
           </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" disabled={salvando || !form.nome || !form.codigo} onClick={() => onSalvar(form)}>
+          <button className="btn btn-primary" disabled={salvando || !form.nome || !form.codigo} onClick={() => onSalvar({ ...form, rendimento_estimado: rendBruto })}>
             {salvando ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar</>}
           </button>
         </div>
