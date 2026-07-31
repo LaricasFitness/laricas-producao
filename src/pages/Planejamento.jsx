@@ -426,199 +426,351 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
   )
 }
 
-// ── Aba Preparações Necessárias ──────────────────────────────────────────────
-function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, diasDelivery, preparacoesData, diaAtual }) {
-  const { preps, composicoes } = preparacoesData
-  const [estoques, setEstoques] = useState({}) // prepId → qtd disponível
-  const [ajustes, setAjustes] = useState({})   // prepId → receitas ajustadas manualmente
+function gerarPDFPreparacoesDia(dia, linhas, observacao) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const labelDia = new Date(dia + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const PAGE_H = 297
+  const MARGIN = 14
+  const TIPO_ICON = { massa:'[Massa]', recheio:'[Recheio]', creme:'[Creme]', cobertura:'[Cobertura]', cha:'[Chá]', outro:'[Outro]' }
 
-  // Consolida produção total de todos os dias visíveis por SKU
-  const totalPorSku = {}
+  // Header
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness', MARGIN, 9)
+  doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Gerado: ${agora}`, 130, 9)
 
-  // Dia atual — vem do itensDiaAtual (já inclui Bling + Delivery + extras do dia)
-  for (const itens of Object.values(itensDiaAtual)) {
-    for (const it of itens) {
-      if (!it.sku) continue
-      totalPorSku[it.sku] = (totalPorSku[it.sku] || 0) + (it.total || 0)
-    }
+  doc.setTextColor(82, 46, 100); doc.setFontSize(16); doc.setFont(undefined, 'bold')
+  doc.text(`Preparações — ${labelDia.charAt(0).toUpperCase() + labelDia.slice(1)}`, MARGIN, 26)
+
+  let startY = 33
+  if (observacao?.trim()) {
+    doc.setFontSize(8); doc.setFont(undefined, 'italic'); doc.setTextColor(120,80,150)
+    doc.text(`Obs: ${observacao}`, MARGIN, startY)
+    startY += 6
   }
 
-  // Outros dias visíveis — vêm direto de diasBling e diasDelivery
+  const body = linhas.map(l => {
+    const recDef = l.receitasArr ?? '—'
+    return [
+      `${TIPO_ICON[l.prep.tipo] || ''} ${l.prep.nome}`,
+      l.isMassa || l.prep.unidade_rendimento === 'un'
+        ? `${l.totalNecessario.toFixed(0)} un`
+        : l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
+      l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} ${l.isMassa?'un':'g'}`,
+      { content: String(recDef), styles: { fontStyle: 'bold', halign: 'center', fontSize: 13 } },
+      { content: l.labelResultado, styles: { halign: 'center', fontSize: 9, textColor: [120,80,150] } },
+    ]
+  })
+
+  autoTable(doc, {
+    startY,
+    head: [['Preparação', 'Necessidade', 'Líquida', 'Qtd', 'Unidade']],
+    body,
+    styles: { fontSize: 9, cellPadding: 4 },
+    headStyles: { fillColor: [103,63,124], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248,245,252] },
+    columnStyles: {
+      0: { cellWidth: 'auto' },
+      1: { cellWidth: 32, halign: 'right' },
+      2: { cellWidth: 32, halign: 'right' },
+      3: { cellWidth: 18, halign: 'center' },
+      4: { cellWidth: 18, halign: 'center' },
+    },
+    margin: { left: MARGIN, right: MARGIN },
+  })
+
+  const finalY = doc.lastAutoTable.finalY + 4
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+  doc.text('Laricas Fitness — Planejamento de Preparações', MARGIN, PAGE_H - 5)
+  doc.save(`Preparacoes_${dia}.pdf`)
+}
+
+function gerarPDFPreparacoesCompleto(diasVisiveis, calcLinhasFn, observacao) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const PAGE_H = 297
+  const MARGIN = 14
+  const TIPO_ICON = { massa:'[Massa]', recheio:'[Recheio]', creme:'[Creme]', cobertura:'[Cobertura]', cha:'[Chá]', outro:'[Outro]' }
+
+  // Header
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness', MARGIN, 9)
+  doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Gerado: ${agora}`, 130, 9)
+
+  doc.setTextColor(82, 46, 100); doc.setFontSize(16); doc.setFont(undefined, 'bold')
+  doc.text('Preparações Completas — Previsão Semanal', MARGIN, 26)
+
+  let startY = 33
+
   for (const dia of diasVisiveis) {
-    if (dia === diaAtual) continue
-    const bMap = diasBling[dia] || {}
-    const dMap = diasDelivery[dia] || {}
-    const skus = new Set([...Object.keys(bMap), ...Object.keys(dMap)])
-    for (const sku of skus) {
-      const tot = (bMap[sku] || 0) + (dMap[sku] || 0)
-      if (tot > 0) totalPorSku[sku] = (totalPorSku[sku] || 0) + tot
-    }
-    // Extras manuais desse dia
-    for (const x of itensExtras) {
-      if (x.qtd > 0 && x.data === dia && x.sku) {
-        totalPorSku[x.sku] = (totalPorSku[x.sku] || 0) + x.qtd
-      }
+    const linhas = calcLinhasFn(dia)
+    if (!linhas.length) continue
+
+    const labelDia = new Date(dia + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+
+    // Banner do dia
+    doc.setFillColor(103, 63, 124)
+    doc.rect(MARGIN, startY, 182, 8, 'F')
+    doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text(labelDia.charAt(0).toUpperCase() + labelDia.slice(1), MARGIN + 3, startY + 5.5)
+    startY += 10
+
+    const body = linhas.map(l => {
+      const recDef = l.receitasArr ?? '—'
+      return [
+        `${TIPO_ICON[l.prep.tipo] || ''} ${l.prep.nome}`,
+        l.isMassa || l.prep.unidade_rendimento === 'un'
+          ? `${l.totalNecessario.toFixed(0)} un`
+          : l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
+        l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} ${l.isMassa?'un':'g'}`,
+        { content: String(recDef), styles: { fontStyle: 'bold', halign: 'center', fontSize: 12 } },
+        { content: l.labelResultado, styles: { halign: 'center', fontSize: 9, textColor: [120,80,150] } },
+      ]
+    })
+
+    autoTable(doc, {
+      startY,
+      head: [['Preparação', 'Necessidade', 'Líquida', 'Qtd', 'Unidade']],
+      body,
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: { fillColor: [230,225,240], textColor: [60,30,80], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248,245,252] },
+      columnStyles: {
+        0: { cellWidth: 'auto' },
+        1: { cellWidth: 30, halign: 'right' },
+        2: { cellWidth: 30, halign: 'right' },
+        3: { cellWidth: 16, halign: 'center' },
+        4: { cellWidth: 16, halign: 'center' },
+      },
+      margin: { left: MARGIN, right: MARGIN },
+    })
+
+    startY = doc.lastAutoTable.finalY + 8
+    if (startY > 265 && diasVisiveis.indexOf(dia) < diasVisiveis.length - 1) {
+      doc.addPage(); startY = 14
     }
   }
 
-  // Calcula necessidade por preparação
-  const necessidades = {}
-  for (const [sku, qtdProd] of Object.entries(totalPorSku)) {
-    const comps = composicoes.filter(c => c.sku_produto === sku)
-    for (const comp of comps) {
-      const prep = comp.preparacoes
-      if (!prep) continue
-      const id = comp.preparacao_id
-      if (!necessidades[id]) necessidades[id] = { prep, total_g: 0, total_un: 0 }
-      if (comp.unidade === 'un') necessidades[id].total_un += qtdProd * comp.quantidade_por_unidade
-      else necessidades[id].total_g += qtdProd * comp.quantidade_por_unidade
-    }
-  }
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+  doc.text('Laricas Fitness — Planejamento de Preparações Completo', MARGIN, PAGE_H - 5)
+  doc.save('Preparacoes_Completo.pdf')
+}
 
-  // Para cada preparação, calcula receitas
-  const linhas = Object.entries(necessidades).map(([id, { prep, total_g, total_un }]) => {
-    const rend = parseFloat(prep.rendimento_estimado) || 0
-    const perda = parseFloat(prep.perda_percentual) || 0
-    const marg = parseFloat(prep.margem_seguranca) || 0
-    const rendLiq = rend * (1 - perda / 100)
-    const totalNecessario = total_g > 0 ? total_g : total_un
-    const unidade = prep.unidade_rendimento
-    const estoque = parseFloat(estoques[id]) || 0
-    const necessidadeComMargem = totalNecessario * (1 + marg / 100)
-    const necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
-    const receitasRaw = rendLiq > 0 ? necessidadeLiq / rendLiq : null
-    // Arredonda para múltiplos de 0,5
-    const receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
-    const receitasDefinidas = ajustes[id] !== undefined ? parseFloat(ajustes[id]) : receitasArr
+// ── Aba Preparações Necessárias ───────────────────────────────────────────────
+function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, diasDelivery, preparacoesData, diaAtual }) {
+  const { composicoes } = preparacoesData
+  const [estoques, setEstoques] = useState({})  // `${dia}__${prepId}` → qtd
+  const [ajustes, setAjustes]   = useState({})  // `${dia}__${prepId}` → receitas
 
-    return { id, prep, totalNecessario, unidade, estoque, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, receitasDefinidas, rendLiq }
-  }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
-
-  const skusSemFicha = Object.keys(totalPorSku).filter(sku =>
-    !composicoes.some(c => c.sku_produto === sku)
-  )
+  const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
 
   function fmtG(g) {
     if (g >= 1000) return `${(g/1000).toFixed(2)} kg`
     return `${g.toFixed(0)} g`
   }
 
-  const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
+  // Calcula totalPorSku para um dia específico
+  function totalSkuDia(dia) {
+    const map = {}
+    if (dia === diaAtual) {
+      for (const itens of Object.values(itensDiaAtual)) {
+        for (const it of itens) {
+          if (!it.sku) continue
+          map[it.sku] = (map[it.sku] || 0) + (it.total || 0)
+        }
+      }
+    } else {
+      const bMap = diasBling[dia] || {}
+      const dMap = diasDelivery[dia] || {}
+      const skus = new Set([...Object.keys(bMap), ...Object.keys(dMap)])
+      for (const sku of skus) {
+        const tot = (bMap[sku] || 0) + (dMap[sku] || 0)
+        if (tot > 0) map[sku] = (map[sku] || 0) + tot
+      }
+      for (const x of itensExtras) {
+        if (x.qtd > 0 && x.data === dia && x.sku) {
+          map[x.sku] = (map[x.sku] || 0) + x.qtd
+        }
+      }
+    }
+    return map
+  }
+
+  // Calcula preparações necessárias para um dia
+  function calcLinhas(dia) {
+    const totalPorSku = totalSkuDia(dia)
+    const necessidades = {}
+    for (const [sku, qtdProd] of Object.entries(totalPorSku)) {
+      const comps = composicoes.filter(c => c.sku_produto === sku)
+      for (const comp of comps) {
+        const prep = comp.preparacoes
+        if (!prep) continue
+        const id = comp.preparacao_id
+        if (!necessidades[id]) necessidades[id] = { prep, total_g: 0, total_un: 0 }
+        if (comp.unidade === 'un') necessidades[id].total_un += qtdProd * parseFloat(comp.quantidade_por_unidade)
+        else necessidades[id].total_g += qtdProd * parseFloat(comp.quantidade_por_unidade)
+      }
+    }
+
+    return Object.entries(necessidades).map(([id, { prep, total_g, total_un }]) => {
+      const rend  = parseFloat(prep.rendimento_estimado) || 0
+      const perda = parseFloat(prep.perda_percentual) || 0
+      const marg  = parseFloat(prep.margem_seguranca) || 0
+      const rendLiq = rend * (1 - perda / 100)
+      const chave = `${dia}__${id}`
+      const estoque = parseFloat(estoques[chave]) || 0
+      const isCobertura = prep.tipo === 'cobertura'
+      const isMassa = prep.tipo === 'massa' && prep.unidade_rendimento === 'un'
+
+      // Necessidade total: massa usa unidades, resto usa gramas
+      const totalNecessario = isMassa ? total_un : total_g > 0 ? total_g : total_un
+      const necessidadeComMargem = totalNecessario * (1 + marg / 100)
+
+      let necessidadeLiq, receitasRaw, receitasArr, labelResultado
+
+      if (isCobertura) {
+        // Cobertura: calcular pacotes (cada pacote 2.010g, rend. líq. 1.909,5g)
+        const REND_PACOTE = 1909.5
+        necessidadeLiq = Math.max(0, necessidadeComMargem - estoque * REND_PACOTE)
+        receitasRaw = necessidadeLiq / REND_PACOTE
+        receitasArr = Math.ceil(receitasRaw * 2) / 2
+        labelResultado = 'pacotes'
+      } else {
+        // Recheios, cremes, massas: calcular receitas
+        necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
+        receitasRaw = rendLiq > 0 ? necessidadeLiq / rendLiq : null
+        receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
+        labelResultado = 'rec.'
+      }
+
+      return { id, chave, prep, totalNecessario, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, rendLiq, isCobertura, isMassa, labelResultado }
+    }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
+  }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Aviso produtos sem ficha */}
-      {skusSemFicha.length > 0 && (
-        <div className="card card-pad" style={{ border: '1px solid var(--warning)', background: '#fffbf0' }}>
-          <div style={{ fontWeight: 700, color: 'var(--warning)', marginBottom: 4 }}>
-            ⚠️ {skusSemFicha.length} produto(s) sem ficha técnica — não incluídos no cálculo
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-            {skusSemFicha.join(', ')} · Cadastre a composição em Admin → Composição Produtos
-          </div>
-        </div>
-      )}
-
-      {/* Tabela de preparações */}
-      <div className="card">
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 15 }}>🧪 Preparações Necessárias</div>
-            <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
-              Informe o estoque disponível e ajuste as receitas se necessário
-            </div>
-          </div>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: 'var(--gray-50)', borderBottom: '2px solid var(--gray-200)' }}>
-                <th style={{ padding: '10px 14px', textAlign: 'left' }}>Preparação</th>
-                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Necessidade total</th>
-                <th style={{ padding: '10px 10px', textAlign: 'right' }}>+ Margem</th>
-                <th style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--purple)' }}>Estoque pronto</th>
-                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Necessidade líquida</th>
-                <th style={{ padding: '10px 10px', textAlign: 'right' }}>Rend./receita</th>
-                <th style={{ padding: '10px 10px', textAlign: 'center' }}>Receitas calc.</th>
-                <th style={{ padding: '10px 10px', textAlign: 'center', color: 'var(--purple)', minWidth: 110 }}>Produção definida</th>
-              </tr>
-            </thead>
-            <tbody>
-              {linhas.map((l, i) => (
-                <tr key={l.id} style={{ borderTop: '1px solid var(--gray-100)', background: i%2===0?'#fff':'#fafafa' }}>
-                  <td style={{ padding: '10px 14px' }}>
-                    <div style={{ fontWeight: 700 }}>
-                      {TIPO_ICON[l.prep.tipo]} {l.prep.nome}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
-                      {l.prep.perda_percentual}% perda · {l.prep.margem_seguranca}% margem
-                    </div>
-                  </td>
-                  <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 600 }}>
-                    {l.prep.unidade_rendimento === 'un'
-                      ? `${l.totalNecessario.toFixed(0)} un`
-                      : fmtG(l.totalNecessario)}
-                  </td>
-                  <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--gray-500)', fontSize: 12 }}>
-                    {l.prep.unidade_rendimento === 'un'
-                      ? `${l.necessidadeComMargem.toFixed(0)} un`
-                      : fmtG(l.necessidadeComMargem)}
-                  </td>
-                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                      <input type="number" min={0} step={0.1}
-                        value={estoques[l.id] || ''}
-                        onChange={e => setEstoques(prev => ({ ...prev, [l.id]: e.target.value }))}
-                        placeholder="0"
-                        style={{ width: 72, padding: '4px 6px', fontSize: 12, border: '1.5px solid var(--purple)', borderRadius: 5, outline: 'none', textAlign: 'right' }} />
-                      <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{l.prep.unidade_rendimento}</span>
-                    </div>
-                  </td>
-                  <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 700, color: l.necessidadeLiq > 0 ? 'var(--danger)' : 'var(--ok)' }}>
-                    {l.prep.unidade_rendimento === 'un'
-                      ? `${l.necessidadeLiq.toFixed(0)} un`
-                      : fmtG(l.necessidadeLiq)}
-                  </td>
-                  <td style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--gray-500)', fontSize: 12 }}>
-                    {l.rendLiq > 0
-                      ? l.prep.unidade_rendimento === 'un'
-                        ? `${l.rendLiq.toFixed(1)} un`
-                        : fmtG(l.rendLiq)
-                      : '—'}
-                  </td>
-                  <td style={{ padding: '10px 10px', textAlign: 'center' }}>
-                    {l.receitasRaw !== null ? (
-                      <div>
-                        <span style={{ fontSize: 13, color: 'var(--gray-600)' }}>{l.receitasRaw.toFixed(2)}</span>
-                        <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>→ {l.receitasArr} (arred.)</div>
-                      </div>
-                    ) : '—'}
-                  </td>
-                  <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
-                      <input type="number" min={0} step={0.5}
-                        value={ajustes[l.id] !== undefined ? ajustes[l.id] : (l.receitasArr ?? '')}
-                        onChange={e => setAjustes(prev => ({ ...prev, [l.id]: e.target.value }))}
-                        style={{ width: 64, padding: '5px 6px', fontSize: 14, fontWeight: 800, border: '2px solid var(--purple)', borderRadius: 6, outline: 'none', textAlign: 'center', color: 'var(--purple)' }} />
-                      <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>rec.</span>
-                    </div>
-                    {ajustes[l.id] !== undefined && parseFloat(ajustes[l.id]) !== l.receitasArr && (
-                      <div style={{ fontSize: 10, color: 'var(--gold)', marginTop: 2 }}>✏️ ajustado</div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {linhas.length === 0 && (
-                <tr>
-                  <td colSpan={8} style={{ padding: 32, textAlign: 'center', color: 'var(--gray-400)' }}>
-                    Nenhuma preparação calculada — verifique se os produtos têm composição cadastrada
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      {/* Botões PDF no topo */}
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+        <button className="btn btn-gold" onClick={() => {
+          if (diasVisiveis.length > 0) gerarPDFPreparacoesDia(diasVisiveis[0], calcLinhas(diasVisiveis[0]), '')
+        }}>
+          📄 PDF do dia
+        </button>
+        <button className="btn btn-primary" onClick={() =>
+          gerarPDFPreparacoesCompleto(diasVisiveis, calcLinhas, '')
+        }>
+          📋 PDF completo
+        </button>
       </div>
+      {diasVisiveis.map(dia => {
+        const linhas = calcLinhas(dia)
+        const skusSemFicha = Object.keys(totalSkuDia(dia)).filter(
+          sku => !composicoes.some(c => c.sku_produto === sku)
+        )
+        const d = new Date(dia + 'T12:00:00')
+        const labelDia = d.toLocaleDateString('pt-BR', { weekday:'long', day:'numeric', month:'long' })
+
+        return (
+          <div key={dia} className="card">
+            {/* Header do dia */}
+            <div style={{ padding:'12px 20px', borderBottom:'1px solid var(--gray-200)', background:'var(--purple-pale)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:800, fontSize:14, color:'var(--purple)', textTransform:'capitalize' }}>
+                🧪 {labelDia}
+              </div>
+              {skusSemFicha.length > 0 && (
+                <span style={{ fontSize:11, color:'var(--warning)', fontWeight:700 }}>
+                  ⚠️ {skusSemFicha.length} produto(s) sem ficha
+                </span>
+              )}
+            </div>
+
+            {linhas.length === 0 ? (
+              <div style={{ padding:16, color:'var(--gray-400)', fontSize:13, textAlign:'center' }}>
+                Nenhuma preparação calculada para este dia
+              </div>
+            ) : (
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:'var(--gray-50)', borderBottom:'1px solid var(--gray-200)' }}>
+                      <th style={{ padding:'8px 14px', textAlign:'left' }}>Preparação</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>Necessidade</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>+Margem</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right', color:'var(--purple)' }}>Estoque pronto</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>Líquida</th>
+                      <th style={{ padding:'8px 10px', textAlign:'center' }}>Calculado</th>
+                      <th style={{ padding:'8px 10px', textAlign:'center', color:'var(--purple)', minWidth:110 }}>Definido</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linhas.map((l, i) => (
+                      <tr key={l.id} style={{ borderTop:'1px solid var(--gray-100)', background:i%2===0?'#fff':'#fafafa' }}>
+                        <td style={{ padding:'8px 14px' }}>
+                          <div style={{ fontWeight:700 }}>{TIPO_ICON[l.prep.tipo]} {l.prep.nome}</div>
+                          <div style={{ fontSize:10, color:'var(--gray-400)' }}>
+                            {l.isCobertura ? 'pacote 2.010g · 5% perda → 1.909,5g/pct' : `${l.prep.perda_percentual}% perda · ${l.prep.margem_seguranca}% margem`}
+                          </div>
+                        </td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:600 }}>
+                          {l.isMassa || l.prep.unidade_rendimento === 'un'
+                            ? `${l.totalNecessario.toFixed(0)} un`
+                            : fmtG(l.totalNecessario)}
+                        </td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', color:'var(--gray-500)', fontSize:12 }}>
+                          {l.isMassa || l.prep.unidade_rendimento === 'un'
+                            ? `${l.necessidadeComMargem.toFixed(0)} un`
+                            : fmtG(l.necessidadeComMargem)}
+                        </td>
+                        <td style={{ padding:'6px 10px', textAlign:'right' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:4, justifyContent:'flex-end' }}>
+                            <input type="number" min={0} step={0.1}
+                              value={estoques[l.chave] || ''}
+                              onChange={e => setEstoques(prev => ({ ...prev, [l.chave]: e.target.value }))}
+                              placeholder="0"
+                              style={{ width:64, padding:'3px 5px', fontSize:12, border:'1.5px solid var(--purple)', borderRadius:5, outline:'none', textAlign:'right' }} />
+                            <span style={{ fontSize:10, color:'var(--gray-400)' }}>
+                              {l.isCobertura ? 'pct' : l.prep.unidade_rendimento}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:700, color:l.necessidadeLiq > 0 ? 'var(--danger)':'var(--ok)' }}>
+                          {l.isMassa || (l.prep.unidade_rendimento === 'un' && !l.isCobertura)
+                            ? `${l.necessidadeLiq.toFixed(0)} un`
+                            : fmtG(l.necessidadeLiq)}
+                        </td>
+                        <td style={{ padding:'8px 10px', textAlign:'center' }}>
+                          {l.receitasRaw !== null ? (
+                            <div>
+                              <span style={{ fontSize:12, color:'var(--gray-500)' }}>{l.receitasRaw.toFixed(2)}</span>
+                              <div style={{ fontSize:10, color:'var(--gray-400)' }}>→ {l.receitasArr} {l.labelResultado}</div>
+                            </div>
+                          ) : '—'}
+                        </td>
+                        <td style={{ padding:'6px 10px', textAlign:'center' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:4, justifyContent:'center' }}>
+                            <input type="number" min={0} step={l.isCobertura ? 1 : 0.5}
+                              value={ajustes[l.chave] !== undefined ? ajustes[l.chave] : (l.receitasArr ?? '')}
+                              onChange={e => setAjustes(prev => ({ ...prev, [l.chave]: e.target.value }))}
+                              style={{ width:60, padding:'4px 5px', fontSize:14, fontWeight:800, border:'2px solid var(--purple)', borderRadius:6, outline:'none', textAlign:'center', color:'var(--purple)' }} />
+                            <span style={{ fontSize:10, color:'var(--gray-400)' }}>{l.labelResultado}</span>
+                          </div>
+                          {ajustes[l.chave] !== undefined && parseFloat(ajustes[l.chave]) !== l.receitasArr && (
+                            <div style={{ fontSize:10, color:'var(--gold)', marginTop:2 }}>✏️ ajustado</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
