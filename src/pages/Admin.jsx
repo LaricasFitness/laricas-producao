@@ -620,13 +620,13 @@ function AdminPreparacoes() {
                   {parseFloat(p.rendimento_estimado || 0).toFixed(1)} {p.unidade_rendimento}
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--danger)' }}>
-                  {p.perda_percentual}%
+                  {parseFloat(p.perda_percentual || 0).toFixed(1)}%
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>
-                  {rendLiquido(p).toFixed(1)} {p.unidade_rendimento}
+                  {rendLiquido(p)} {p.unidade_rendimento}
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--ok)' }}>
-                  +{p.margem_seguranca}%
+                  +{parseFloat(p.margem_seguranca || 0).toFixed(1)}%
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'center' }}>
                   <span className="pill neutral" style={{ fontSize:11 }}>
@@ -634,7 +634,7 @@ function AdminPreparacoes() {
                   </span>
                 </td>
                 <td style={{ padding:'10px 10px' }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setEditando({ ...p, ingredientes: p.preparacao_composicao || [] })}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setEditando({ ...p, rendimento_estimado: parseFloat(p.rendimento_estimado)||0, perda_percentual: parseFloat(p.perda_percentual)||0, margem_seguranca: parseFloat(p.margem_seguranca)||0, ingredientes: p.preparacao_composicao || [] })}>
                     <Pencil size={12}/>
                   </button>
                 </td>
@@ -657,6 +657,7 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
   // Rendimento bruto = soma dos ingredientes
   const rendBruto = (form.ingredientes||[]).reduce((s, i) => s + (parseFloat(i.quantidade)||0), 0)
   const perda = parseFloat(form.perda_percentual) || 0
+  const margem = parseFloat(form.margem_seguranca) || 0
   const rendLiquido = rendBruto * (1 - perda / 100)
 
   return (
