@@ -455,10 +455,8 @@ function gerarPDFPreparacoesDia(dia, linhas, observacao) {
     const recDef = l.receitasArr ?? '—'
     return [
       `${TIPO_ICON[l.prep.tipo] || ''} ${l.prep.nome}`,
-      l.isMassa || l.prep.unidade_rendimento === 'un'
-        ? `${l.totalNecessario.toFixed(0)} un`
-        : l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
-      l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} ${l.isMassa?'un':'g'}`,
+      l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
+      l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} g`,
       { content: String(recDef), styles: { fontStyle: 'bold', halign: 'center', fontSize: 13 } },
       { content: l.labelResultado, styles: { halign: 'center', fontSize: 9, textColor: [120,80,150] } },
     ]
@@ -523,10 +521,8 @@ function gerarPDFPreparacoesCompleto(diasVisiveis, calcLinhasFn, observacao) {
       const recDef = l.receitasArr ?? '—'
       return [
         `${TIPO_ICON[l.prep.tipo] || ''} ${l.prep.nome}`,
-        l.isMassa || l.prep.unidade_rendimento === 'un'
-          ? `${l.totalNecessario.toFixed(0)} un`
-          : l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
-        l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} ${l.isMassa?'un':'g'}`,
+        l.totalNecessario >= 1000 ? `${(l.totalNecessario/1000).toFixed(2)} kg` : `${l.totalNecessario.toFixed(0)} g`,
+        l.necessidadeLiq >= 1000 ? `${(l.necessidadeLiq/1000).toFixed(2)} kg` : `${l.necessidadeLiq.toFixed(0)} g`,
         { content: String(recDef), styles: { fontStyle: 'bold', halign: 'center', fontSize: 12 } },
         { content: l.labelResultado, styles: { halign: 'center', fontSize: 9, textColor: [120,80,150] } },
       ]
@@ -624,23 +620,22 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
       const chave = `${dia}__${id}`
       const estoque = parseFloat(estoques[chave]) || 0
       const isCobertura = prep.tipo === 'cobertura'
-      const isMassa = prep.tipo === 'massa' && prep.unidade_rendimento === 'un'
-
-      // Necessidade total: massa usa unidades, resto usa gramas
-      const totalNecessario = isMassa ? total_un : total_g > 0 ? total_g : total_un
+      const isMassa = prep.tipo === 'massa'
+      // Massa: composição em 'g' (40g/PM, 40g/bolinho), rendimento em 'g' → total_g ÷ rendLiq
+      // Recheio/creme: composição em 'g', rendimento em 'g' → total_g ÷ rendLiq
+      // Cobertura: composição em 'g', resultado em pacotes → total_g ÷ 1909,5
+      const totalNecessario = total_g > 0 ? total_g : total_un
       const necessidadeComMargem = totalNecessario * (1 + marg / 100)
 
       let necessidadeLiq, receitasRaw, receitasArr, labelResultado
 
       if (isCobertura) {
-        // Cobertura: calcular pacotes (cada pacote 2.010g, rend. líq. 1.909,5g)
         const REND_PACOTE = 1909.5
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque * REND_PACOTE)
         receitasRaw = necessidadeLiq / REND_PACOTE
         receitasArr = Math.ceil(receitasRaw * 2) / 2
-        labelResultado = 'pacotes'
+        labelResultado = 'pct'
       } else {
-        // Recheios, cremes, massas: calcular receitas
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
         receitasRaw = rendLiq > 0 ? necessidadeLiq / rendLiq : null
         receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
@@ -716,14 +711,10 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
                           </div>
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:600 }}>
-                          {l.isMassa || l.prep.unidade_rendimento === 'un'
-                            ? `${l.totalNecessario.toFixed(0)} un`
-                            : fmtG(l.totalNecessario)}
+                          {fmtG(l.totalNecessario)}
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'right', color:'var(--gray-500)', fontSize:12 }}>
-                          {l.isMassa || l.prep.unidade_rendimento === 'un'
-                            ? `${l.necessidadeComMargem.toFixed(0)} un`
-                            : fmtG(l.necessidadeComMargem)}
+                          {fmtG(l.necessidadeComMargem)}
                         </td>
                         <td style={{ padding:'6px 10px', textAlign:'right' }}>
                           <div style={{ display:'flex', alignItems:'center', gap:4, justifyContent:'flex-end' }}>
@@ -738,9 +729,7 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
                           </div>
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:700, color:l.necessidadeLiq > 0 ? 'var(--danger)':'var(--ok)' }}>
-                          {l.isMassa || (l.prep.unidade_rendimento === 'un' && !l.isCobertura)
-                            ? `${l.necessidadeLiq.toFixed(0)} un`
-                            : fmtG(l.necessidadeLiq)}
+                          {fmtG(l.necessidadeLiq)}
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'center' }}>
                           {l.receitasRaw !== null ? (
@@ -1222,7 +1211,7 @@ export default function Planejamento({ onIrLogistica }) {
       )}
 
       {/* Tabela */}
-      {temDados && datasAtivas.length > 0 && (
+      {temDados && datasAtivas.length > 0 && abaPlano === 'itens' && (
         <div className="card">
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
