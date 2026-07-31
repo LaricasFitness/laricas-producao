@@ -434,28 +434,30 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
 
   // Consolida produção total de todos os dias visíveis por SKU
   const totalPorSku = {}
-  for (const dia of diasVisiveis) {
-    for (const itens of Object.values(itensDiaAtual)) {
-      for (const it of itens) {
-        if (!it.sku) continue
-        totalPorSku[it.sku] = (totalPorSku[it.sku] || 0) + (it.total || 0)
-      }
-    }
-    // Considera também outros dias visíveis (não só diaAtual)
-    if (dia !== diaAtual) {
-      const bMap = diasBling[dia] || {}
-      const dMap = diasDelivery[dia] || {}
-      const skus = new Set([...Object.keys(bMap), ...Object.keys(dMap)])
-      for (const sku of skus) {
-        const tot = (bMap[sku] || 0) + (dMap[sku] || 0)
-        if (tot > 0) totalPorSku[sku] = (totalPorSku[sku] || 0) + tot
-      }
+
+  // Dia atual — vem do itensDiaAtual (já inclui Bling + Delivery + extras do dia)
+  for (const itens of Object.values(itensDiaAtual)) {
+    for (const it of itens) {
+      if (!it.sku) continue
+      totalPorSku[it.sku] = (totalPorSku[it.sku] || 0) + (it.total || 0)
     }
   }
-  // Extras
-  for (const x of itensExtras) {
-    if (x.qtd > 0 && diasVisiveis.includes(x.data)) {
-      totalPorSku[`extra:${x.id}`] = x.qtd
+
+  // Outros dias visíveis — vêm direto de diasBling e diasDelivery
+  for (const dia of diasVisiveis) {
+    if (dia === diaAtual) continue
+    const bMap = diasBling[dia] || {}
+    const dMap = diasDelivery[dia] || {}
+    const skus = new Set([...Object.keys(bMap), ...Object.keys(dMap)])
+    for (const sku of skus) {
+      const tot = (bMap[sku] || 0) + (dMap[sku] || 0)
+      if (tot > 0) totalPorSku[sku] = (totalPorSku[sku] || 0) + tot
+    }
+    // Extras manuais desse dia
+    for (const x of itensExtras) {
+      if (x.qtd > 0 && x.data === dia && x.sku) {
+        totalPorSku[x.sku] = (totalPorSku[x.sku] || 0) + x.qtd
+      }
     }
   }
 
@@ -492,10 +494,9 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
     return { id, prep, totalNecessario, unidade, estoque, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, receitasDefinidas, rendLiq }
   }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
 
-  const skusSemFicha = Object.keys(totalPorSku).filter(sku => {
-    if (sku.startsWith('extra:')) return false
-    return !composicoes.some(c => c.sku_produto === sku)
-  })
+  const skusSemFicha = Object.keys(totalPorSku).filter(sku =>
+    !composicoes.some(c => c.sku_produto === sku)
+  )
 
   function fmtG(g) {
     if (g >= 1000) return `${(g/1000).toFixed(2)} kg`
