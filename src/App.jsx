@@ -6,11 +6,13 @@ import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
 import Financeiro from './pages/Financeiro'
 import Admin from './pages/Admin'
+import MatPrimas from './pages/MatPrimas'
 
 const ALL_PAGES = [
   { id: 'embalagens',  label: 'Embalagens',  icon: '📦' },
   { id: 'producao',    label: 'Produção',    icon: '📋' },
   { id: 'logistica',   label: 'Logística',   icon: '🚚' },
+  { id: 'insumos',     label: 'Insumos',     icon: '🧂' },
   { id: 'financeiro',  label: 'Financeiro',  icon: '💰' },
   { id: 'admin',       label: 'Admin',       icon: '⚙️' },
 ]
@@ -24,6 +26,7 @@ const TITLES = {
   embalagens:  { title:'Embalagens',         sub:'Situação, pedidos à gráfica e compras' },
   producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
   logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
+  insumos:     { title:'Insumos / MP',       sub:'Estoque, compras e preço médio de matérias-primas' },
   financeiro:  { title:'Financeiro',         sub:'Contas a receber, a pagar, fluxo de caixa e DRE' },
   admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
 }
@@ -86,6 +89,7 @@ export default function App() {
           {pageAtual==='embalagens' && <Embalagens />}
           {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
+          {pageAtual==='insumos'    && <MatPrimas />}
           {pageAtual==='financeiro' && <Financeiro />}
           {pageAtual==='admin'      && <Admin />}
         </div>
