@@ -6,6 +6,7 @@ const TODAS_ABAS = [
   { id: 'embalagens',  label: '📦 Embalagens (Situação + Pedidos + Compras)' },
   { id: 'producao',    label: '📋 Produção (Registro + Planejamento + Análise + Log + Histórico)' },
   { id: 'logistica',   label: '🚚 Logística' },
+  { id: 'insumos',     label: '🧂 Insumos / Matérias-Primas' },
   { id: 'financeiro',  label: '💰 Financeiro' },
   { id: 'admin',       label: '⚙️ Admin' },
 ]
