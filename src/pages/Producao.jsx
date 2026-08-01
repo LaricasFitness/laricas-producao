@@ -263,9 +263,15 @@ export default function Producao() {
         }
 
         // ── Baixa automática de matérias-primas ─────────────────────────────
-        // Para cada produto produzido, calcula os ingredientes consumidos
-        // via produto_composicao → preparacao_composicao → materias_primas
+        // Só executa se a flag mp_baixa_automatica estiver ativa
         try {
+          const { data: cfg } = await supabase
+            .from('configuracoes')
+            .select('valor')
+            .eq('chave', 'mp_baixa_automatica')
+            .single()
+
+          if (cfg?.valor === 'true') {
           // Busca composição dos produtos produzidos
           const skus = fase1.map(r => embalagens.find(e => e.id === r.embalagem_id)?.codigo).filter(Boolean)
           if (skus.length) {
@@ -362,7 +368,8 @@ export default function Producao() {
                 }
               }
             }
-          }
+          } // fim if skus.length
+          } // fim if cfg?.valor === 'true'
         } catch(mpErr) {
           console.warn('Aviso: erro ao debitar MP (não crítico):', mpErr)
         }
