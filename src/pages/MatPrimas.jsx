@@ -688,9 +688,261 @@ export default function MatPrimas() {
       <div className="tabs" style={{marginBottom:0}}>
         <button className={`tab${sub==='situacao'?' active':''}`} onClick={()=>setSub('situacao')}>📊 Situação</button>
         <button className={`tab${sub==='historico'?' active':''}`} onClick={()=>setSub('historico')}>📦 Compras</button>
+        <button className={`tab${sub==='evolucao'?' active':''}`} onClick={()=>setSub('evolucao')}>📈 Evolução de Preços</button>
       </div>
       {sub==='situacao'  && <DashMP />}
       {sub==='historico' && <HistoricoCompras />}
+      {sub==='evolucao'  && <EvolucaoPrecos />}
     </>
+  )
+}
+
+// ── Evolução de Preços ────────────────────────────────────────────────────────
+function EvolucaoPrecos() {
+  const [mps, setMps] = useState([])
+  const [compras, setCompras] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [mpSel, setMpSel] = useState('todas')
+  const [catFiltro, setCatFiltro] = useState('Todas')
+  const [alertasOnly, setAlertasOnly] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const [{ data: mpsData }, { data: comprasData }] = await Promise.all([
+      supabase.from('materias_primas').select('*').eq('ativo',true).order('categoria').order('nome'),
+      supabase.from('mp_compras').select('*, materias_primas(nome,unidade,categoria)')
+        .order('data_compra', {ascending:true}),
+    ])
+    setMps(mpsData||[])
+    setCompras(comprasData||[])
+    setLoading(false)
+  }
+  useEffect(()=>{ load() },[])
+
+  // PM dos últimos 60 dias por MP
+  function pm60(mpId) {
+    const corte = new Date(); corte.setDate(corte.getDate()-60)
+    const recentes = compras.filter(c => c.materia_prima_id===mpId && new Date(c.data_compra) >= corte)
+    if (!recentes.length) return null
+    const totalQtd = recentes.reduce((s,c)=>s+parseFloat(c.quantidade||0),0)
+    const totalCusto = recentes.reduce((s,c)=>s+parseFloat(c.custo_total||0),0)
+    return totalQtd > 0 ? totalCusto/totalQtd : null
+  }
+
+  // Última compra de cada MP
+  function ultimaCompra(mpId) {
+    const hist = compras.filter(c=>c.materia_prima_id===mpId)
+    if (!hist.length) return null
+    return hist[hist.length-1]
+  }
+
+  // Classifica preço em faixa
+  function faixa(custo, pm) {
+    if (!pm || !custo) return null
+    const ratio = custo/pm
+    if (ratio <= 0.95) return 'economica'
+    if (ratio <= 1.05) return 'ideal'
+    return 'caro'
+  }
+
+  const FAIXA = {
+    ideal:     { label:'✅ Ideal',     cor:'var(--ok)',      bg:'#f0faf0', desc:'Dentro do PM ±5%' },
+    economica: { label:'💚 Econômico', cor:'#0a7c4e',        bg:'#e6f9f0', desc:'Abaixo do PM > 5%' },
+    caro:      { label:'🚨 Caro',      cor:'var(--danger)',  bg:'#fff0f0', desc:'Acima do PM > 5%' },
+  }
+
+  // Agrupa histórico por MP
+  const historicosPorMp = {}
+  for (const c of compras) {
+    const id = c.materia_prima_id
+    if (!historicosPorMp[id]) historicosPorMp[id] = []
+    historicosPorMp[id].push(c)
+  }
+
+  // Filtra MPs
+  const cats = ['Todas', ...new Set(mps.map(m=>m.categoria))]
+  let mpsFiltradas = mps.filter(m => {
+    const matchCat = catFiltro==='Todas' || m.categoria===catFiltro
+    const matchSel = mpSel==='todas' || m.id===mpSel
+    if (!matchCat || !matchSel) return false
+    if (alertasOnly) {
+      const ult = ultimaCompra(m.id)
+      const pm = pm60(m.id)
+      const f = faixa(ult ? parseFloat(ult.custo_unitario) : null, pm)
+      return f === 'caro'
+    }
+    return true
+  }).filter(m => (historicosPorMp[m.id]||[]).length > 0)
+
+  // KPIs
+  const totalMps = mps.filter(m=>(historicosPorMp[m.id]||[]).length>0).length
+  const caros = mps.filter(m => {
+    const ult = ultimaCompra(m.id)
+    const pm = pm60(m.id)
+    return faixa(ult ? parseFloat(ult.custo_unitario) : null, pm) === 'caro'
+  }).length
+  const economicos = mps.filter(m => {
+    const ult = ultimaCompra(m.id)
+    const pm = pm60(m.id)
+    return faixa(ult ? parseFloat(ult.custo_unitario) : null, pm) === 'economica'
+  }).length
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* KPIs */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+        {[
+          {label:'Com histórico de preço',valor:totalMps,sub:'insumos com compras registradas',cor:'var(--purple)'},
+          {label:'🚨 Preço acima do PM',valor:caros,sub:'última compra > 5% acima da média 60d',cor:caros>0?'var(--danger)':'var(--ok)'},
+          {label:'💚 Preço econômico',valor:economicos,sub:'última compra > 5% abaixo da média 60d',cor:'#0a7c4e'},
+        ].map(k=>(
+          <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+            <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.04em'}}>{k.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+            <div style={{fontSize:11,color:'var(--gray-400)'}}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Legenda das faixas */}
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        {Object.entries(FAIXA).map(([k,f])=>(
+          <div key={k} style={{padding:'6px 12px',background:f.bg,border:`1.5px solid ${f.cor}`,borderRadius:20,fontSize:12,fontWeight:700,color:f.cor}}>
+            {f.label} <span style={{fontWeight:400,color:'var(--gray-500)'}}>— {f.desc}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <div className="card" style={{padding:'12px 20px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <select className="form-input" value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{width:160,fontSize:13}}>
+          {cats.map(c=><option key={c}>{c}</option>)}
+        </select>
+        <select className="form-input" value={mpSel} onChange={e=>setMpSel(e.target.value)} style={{width:240,fontSize:13}}>
+          <option value="todas">Todos os insumos</option>
+          {mps.filter(m=>catFiltro==='Todas'||m.categoria===catFiltro).map(m=>(
+            <option key={m.id} value={m.id}>{m.nome}</option>
+          ))}
+        </select>
+        <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer',fontWeight:600,color:'var(--danger)'}}>
+          <input type="checkbox" checked={alertasOnly} onChange={e=>setAlertasOnly(e.target.checked)} style={{accentColor:'var(--danger)'}}/>
+          Apenas alertas 🚨
+        </label>
+        <div style={{flex:1}}/>
+        <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+      </div>
+
+      {/* Cards por MP */}
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        mpsFiltradas.length === 0 ? (
+          <div className="card card-pad" style={{textAlign:'center',color:'var(--gray-300)'}}>
+            {alertasOnly ? 'Nenhum insumo com preço acima do PM nos últimos 60 dias' : 'Nenhum insumo com histórico de compras ainda'}
+          </div>
+        ) : (
+          mpsFiltradas.map(mp => {
+            const hist = historicosPorMp[mp.id] || []
+            const pm = pm60(mp.id)
+            const ult = ultimaCompra(mp.id)
+            const ultCusto = ult ? parseFloat(ult.custo_unitario) : null
+            const f = faixa(ultCusto, pm)
+            const fInfo = f ? FAIXA[f] : null
+            const varPct = pm && ultCusto ? ((ultCusto-pm)/pm*100) : null
+
+            // Mini gráfico de barras com histórico
+            const maxCusto = Math.max(...hist.map(c=>parseFloat(c.custo_unitario)||0))
+
+            return (
+              <div key={mp.id} className="card" style={{border: fInfo ? `2px solid ${fInfo.cor}` : undefined}}>
+                {/* Header */}
+                <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-100)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:14}}>{mp.nome}</div>
+                    <div style={{fontSize:11,color:'var(--gray-400)'}}>{mp.categoria} · {mp.unidade}</div>
+                  </div>
+                  <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                    {pm && (
+                      <div style={{textAlign:'right'}}>
+                        <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>PM 60 dias</div>
+                        <div style={{fontSize:16,fontWeight:800,color:'var(--gray-700)'}}>{fmtR(pm)}<span style={{fontSize:11}}>/{ mp.unidade}</span></div>
+                      </div>
+                    )}
+                    {ultCusto && (
+                      <div style={{textAlign:'right'}}>
+                        <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Última compra</div>
+                        <div style={{fontSize:16,fontWeight:800,color:fInfo?.cor||'var(--gray-700)'}}>{fmtR(ultCusto)}<span style={{fontSize:11}}>/{mp.unidade}</span></div>
+                      </div>
+                    )}
+                    {fInfo && (
+                      <div style={{padding:'6px 12px',background:fInfo.bg,border:`2px solid ${fInfo.cor}`,borderRadius:20,fontSize:12,fontWeight:800,color:fInfo.cor,whiteSpace:'nowrap'}}>
+                        {fInfo.label}
+                        {varPct !== null && <span style={{marginLeft:6,fontSize:11}}>{varPct>0?'+':''}{varPct.toFixed(1)}%</span>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Histórico de compras */}
+                <div style={{padding:'12px 20px'}}>
+                  <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',marginBottom:10}}>
+                    Histórico de compras ({hist.length} registros)
+                  </div>
+                  <div style={{display:'flex',gap:6,alignItems:'flex-end',overflowX:'auto',paddingBottom:4}}>
+                    {hist.map((c,i) => {
+                      const custo = parseFloat(c.custo_unitario)||0
+                      const altPct = maxCusto > 0 ? (custo/maxCusto)*100 : 0
+                      const f = faixa(custo, pm)
+                      const corBarra = f ? FAIXA[f].cor : 'var(--purple)'
+                      const isUlt = i === hist.length-1
+                      return (
+                        <div key={c.id} style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:52,flex:'0 0 52px'}}>
+                          <div style={{fontSize:9,color:'var(--gray-500)',marginBottom:2,fontWeight:isUlt?700:400}}>
+                            {fmtR(custo)}
+                          </div>
+                          <div style={{
+                            width:36, height: Math.max(8, altPct*0.8),
+                            background: corBarra,
+                            borderRadius:'4px 4px 0 0',
+                            opacity: isUlt ? 1 : 0.55,
+                            border: isUlt ? `2px solid ${corBarra}` : 'none',
+                          }}/>
+                          <div style={{fontSize:9,color:'var(--gray-400)',marginTop:3,textAlign:'center',lineHeight:1.2}}>
+                            {new Date(c.data_compra+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}
+                          </div>
+                          {c.fornecedor && (
+                            <div style={{fontSize:8,color:'var(--gray-300)',textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:52}}>
+                              {c.fornecedor}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Faixas de referência */}
+                  {pm && (
+                    <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
+                      <div style={{fontSize:11,padding:'3px 10px',background:'#e6f9f0',borderRadius:12,color:'#0a7c4e',fontWeight:700}}>
+                        💚 Econômico: abaixo de {fmtR(pm*0.95)}/{mp.unidade}
+                      </div>
+                      <div style={{fontSize:11,padding:'3px 10px',background:'#f0faf0',borderRadius:12,color:'var(--ok)',fontWeight:700}}>
+                        ✅ Ideal: {fmtR(pm*0.95)} – {fmtR(pm*1.05)}/{mp.unidade}
+                      </div>
+                      <div style={{fontSize:11,padding:'3px 10px',background:'#fff0f0',borderRadius:12,color:'var(--danger)',fontWeight:700}}>
+                        🚨 Caro: acima de {fmtR(pm*1.05)}/{mp.unidade}
+                      </div>
+                    </div>
+                  )}
+                  {!pm && (
+                    <div style={{fontSize:11,color:'var(--gray-300)',fontStyle:'italic',marginTop:6}}>
+                      Sem compras nos últimos 60 dias para calcular PM de referência
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })
+        )
+      )}
+    </div>
   )
 }
