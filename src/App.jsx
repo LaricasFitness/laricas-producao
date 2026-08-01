@@ -47,7 +47,7 @@ export default function App() {
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('embalagens') }} />
 
   const abas = usuario.abas_permitidas || []
-  const pages = ALL_PAGES.filter(p => temPermissao(abas, p.id))
+  const pages = ALL_PAGES.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
   const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
   const { title, sub } = TITLES[pageAtual] || {}
 
