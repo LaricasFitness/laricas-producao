@@ -261,6 +261,112 @@ export default function Producao() {
             await supabase.from('producao_diaria').insert(embDescontos)
           }
         }
+
+        // ── Baixa automática de matérias-primas ─────────────────────────────
+        // Para cada produto produzido, calcula os ingredientes consumidos
+        // via produto_composicao → preparacao_composicao → materias_primas
+        try {
+          // Busca composição dos produtos produzidos
+          const skus = fase1.map(r => embalagens.find(e => e.id === r.embalagem_id)?.codigo).filter(Boolean)
+          if (skus.length) {
+            const { data: prodComps } = await supabase
+              .from('produto_composicao')
+              .select('sku_produto, quantidade_por_unidade, unidade, preparacao_id')
+              .in('sku_produto', skus)
+
+            if (prodComps?.length) {
+              const prepIds = [...new Set(prodComps.map(c => c.preparacao_id))]
+              const { data: prepComps } = await supabase
+                .from('preparacao_composicao')
+                .select('preparacao_id, ingrediente, quantidade, unidade, materia_prima_id')
+                .in('preparacao_id', prepIds)
+                .not('materia_prima_id', 'is', null)
+
+              if (prepComps?.length) {
+                // Consolida consumo por matéria-prima
+                const consumoMP = {} // mp_id → g consumidos
+                for (const prod of fase1) {
+                  const emb = embalagens.find(e => e.id === prod.embalagem_id)
+                  if (!emb) continue
+                  const qtdProd = prod.quantidade
+
+                  // Preparações do produto
+                  const compsProdu = prodComps.filter(c => c.sku_produto === emb.codigo)
+                  for (const comp of compsProdu) {
+                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
+                    const rendLiq = 1 // será calculado abaixo
+
+                    // Ingredientes da preparação
+                    const ings = prepComps.filter(pc => pc.preparacao_id === comp.preparacao_id)
+                    for (const ing of ings) {
+                      const mpId = ing.materia_prima_id
+                      // Proporção: qtd_ingrediente_por_receita / rendimento_liquido * qtd_comp_por_unidade * qtd_prod
+                      // Simplificado: g consumido = (ing.quantidade / rendPrep) * qtdPrep * qtdProd
+                      // Para calcular precisamos do rendimento líquido da preparação
+                      // Guardamos para buscar em batch depois
+                      if (!consumoMP[mpId]) consumoMP[mpId] = { total: 0, prepId: comp.preparacao_id }
+                      consumoMP[mpId].total += (parseFloat(ing.quantidade) || 0) * qtdPrep * qtdProd
+                      consumoMP[mpId].prepId = comp.preparacao_id
+                    }
+                  }
+                }
+
+                // Busca rendimentos das preparações para normalizar
+                const { data: preps } = await supabase
+                  .from('preparacoes')
+                  .select('id, rendimento_estimado, perda_percentual')
+                  .in('id', prepIds)
+
+                const rendMap = {}
+                for (const p of (preps||[])) {
+                  const bruto = parseFloat(p.rendimento_estimado) || 1
+                  const perda = parseFloat(p.perda_percentual) || 0
+                  rendMap[p.id] = bruto * (1 - perda/100)
+                }
+
+                // Recalcula consumo normalizado pelo rendimento
+                const consumoFinal = {}
+                for (const prod of fase1) {
+                  const emb = embalagens.find(e => e.id === prod.embalagem_id)
+                  if (!emb) continue
+                  const qtdProd = prod.quantidade
+                  const compsProdu = prodComps.filter(c => c.sku_produto === emb.codigo)
+
+                  for (const comp of compsProdu) {
+                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
+                    const ings = prepComps.filter(pc => pc.preparacao_id === comp.preparacao_id)
+                    const rendLiq = rendMap[comp.preparacao_id] || 1
+
+                    for (const ing of ings) {
+                      const mpId = ing.materia_prima_id
+                      // g consumido = (qtd_ing_por_receita / rend_liq) * qtd_prep_por_unidade * qtd_prod
+                      const consumoG = (parseFloat(ing.quantidade) / rendLiq) * qtdPrep * qtdProd
+                      consumoFinal[mpId] = (consumoFinal[mpId] || 0) + consumoG
+                    }
+                  }
+                }
+
+                // Debita cada MP
+                for (const [mpId, consumoG] of Object.entries(consumoFinal)) {
+                  if (consumoG <= 0) continue
+                  const { data: mp } = await supabase
+                    .from('materias_primas')
+                    .select('estoque_atual')
+                    .eq('id', mpId)
+                    .single()
+                  const atual = parseFloat(mp?.estoque_atual) || 0
+                  await supabase
+                    .from('materias_primas')
+                    .update({ estoque_atual: Math.max(0, atual - consumoG), atualizado_em: new Date().toISOString() })
+                    .eq('id', mpId)
+                }
+              }
+            }
+          }
+        } catch(mpErr) {
+          console.warn('Aviso: erro ao debitar MP (não crítico):', mpErr)
+        }
+        // ────────────────────────────────────────────────────────────────────
       }
 
       // Fases internas (2, 3, 4, 5)
