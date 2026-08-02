@@ -966,6 +966,107 @@ function ModalComposicaoProduto({ emb, preps, itensIniciais, onClose, onSalvar, 
   )
 }
 
+// ── Configurações do Sistema ──────────────────────────────────────────────────
+function AdminSistema() {
+  const [configs, setConfigs] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('configuracoes').select('*')
+    const map = {}
+    for (const c of (data||[])) map[c.chave] = c
+    setConfigs(map)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function toggle(chave) {
+    setSaving(chave)
+    const atual = configs[chave]?.valor === 'true'
+    await supabase.from('configuracoes')
+      .update({ valor: atual ? 'false' : 'true', atualizado_em: new Date().toISOString() })
+      .eq('chave', chave)
+    await load()
+    setSaving(null)
+  }
+
+  const flags = [
+    {
+      chave: 'mp_baixa_automatica',
+      label: 'Baixa automática de matérias-primas',
+      desc: 'Quando ativado, cada produção registrada debita automaticamente o estoque de MPs com base nas fichas técnicas.',
+      aviso: 'Ative somente após realizar o inventário inicial e validar os rendimentos das preparações.',
+      icone: '🧂',
+    },
+  ]
+
+  return (
+    <div className="card">
+      <div style={{ padding:'14px 20px', borderBottom:'1px solid var(--gray-200)' }}>
+        <div style={{ fontWeight:800, fontSize:15 }}>🔧 Configurações do Sistema</div>
+        <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>
+          Controles operacionais — altere com cuidado
+        </div>
+      </div>
+
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <div style={{ padding:20, display:'flex', flexDirection:'column', gap:16 }}>
+          {flags.map(f => {
+            const ativo = configs[f.chave]?.valor === 'true'
+            return (
+              <div key={f.chave} style={{
+                border: `2px solid ${ativo ? 'var(--ok)' : 'var(--gray-200)'}`,
+                borderRadius: 10, padding: 16,
+                background: ativo ? '#f0faf0' : '#fafafa',
+              }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:16 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:800, fontSize:14 }}>{f.icone} {f.label}</div>
+                    <div style={{ fontSize:13, color:'var(--gray-500)', marginTop:4 }}>{f.desc}</div>
+                    {!ativo && f.aviso && (
+                      <div style={{ fontSize:12, color:'var(--warning)', marginTop:8, padding:'6px 10px', background:'#fffbf0', borderRadius:6, border:'1px solid var(--warning)' }}>
+                        ⚠️ {f.aviso}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, flexShrink:0 }}>
+                    <button
+                      onClick={() => toggle(f.chave)}
+                      disabled={saving === f.chave}
+                      style={{
+                        width: 56, height: 28, borderRadius: 14,
+                        background: ativo ? 'var(--ok)' : 'var(--gray-300)',
+                        border: 'none', cursor: 'pointer', position: 'relative',
+                        transition: 'background .2s',
+                      }}
+                    >
+                      {saving === f.chave
+                        ? <RefreshCw size={12} style={{ color:'#fff', position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)' }} className="spin"/>
+                        : <span style={{
+                            position:'absolute', top:3,
+                            left: ativo ? 30 : 4,
+                            width:22, height:22, borderRadius:'50%',
+                            background:'#fff', transition:'left .2s',
+                            boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+                          }}/>
+                      }
+                    </button>
+                    <span style={{ fontSize:11, fontWeight:800, color: ativo ? 'var(--ok)' : 'var(--gray-400)' }}>
+                      {ativo ? 'ATIVO' : 'INATIVO'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Admin() {
   const [tab, setTab] = useState('embalagens')
   const [embs, setEmbs] = useState([])
@@ -1028,6 +1129,7 @@ export default function Admin() {
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
         <button className={`tab${tab === 'fichas_produtos' ? ' active' : ''}`} onClick={() => setTab('fichas_produtos')}>🧩 Composição Produtos</button>
+        <button className={`tab${tab === 'sistema' ? ' active' : ''}`} onClick={() => setTab('sistema')}>🔧 Sistema</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
 
@@ -1040,6 +1142,8 @@ export default function Admin() {
       {tab === 'fichas_preparacoes' && <AdminPreparacoes />}
 
       {tab === 'fichas_produtos' && <AdminComposicaoProdutos />}
+
+      {tab === 'sistema' && <AdminSistema />}
 
       {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
