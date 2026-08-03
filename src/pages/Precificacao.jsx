@@ -98,7 +98,7 @@ function usePrecificacao() {
           const rendLiq = bruto*(1-perda/100)
           const qtdPorUnidade = (qtdIng/rendLiq)*qtdCrua
           const custo = qtdPorUnidade * (parseFloat(mp?.custo_unitario)||0)
-          return { nome: ing.ingrediente, mp: mp?.nome, qtd: qtdPorUnidade, unidade: ing.unidade, custo }
+          return { nome: ing.ingrediente, mp: mp?.nome, mpId: ing.materia_prima_id, qtd: qtdPorUnidade, unidade: ing.unidade, custo }
         })
 
         return {
@@ -240,7 +240,7 @@ function FichaCusto({ data }) {
                                     <td style={{padding:'5px 14px'}}>{ing.nome}</td>
                                     <td style={{padding:'5px 10px',textAlign:'right',color:'var(--gray-500)'}}>{fmt(ing.qtd,3)}{ing.unidade}</td>
                                     <td style={{padding:'5px 10px',textAlign:'right',color:'var(--gray-500)'}}>
-                                      {ing.mp ? fmtR(mpMap?.[ing.materia_prima_id]?.custo_unitario||0)+`/${ing.unidade}` : '—'}
+                                      {ing.mp ? fmtR((data.mpMap?.[ing.mpId]?.custo_unitario)||0)+`/${ing.unidade}` : '—'}
                                     </td>
                                     <td style={{padding:'5px 10px',textAlign:'right',fontWeight:600,color:ing.custo>0?'var(--gray-700)':'var(--gray-300)'}}>
                                       {ing.custo>0 ? fmtR(ing.custo) : '—'}
