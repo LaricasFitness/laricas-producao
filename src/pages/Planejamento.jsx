@@ -1191,7 +1191,6 @@ export default function Planejamento({ onIrLogistica }) {
         />
       )}
 
-      {/* Aviso sem data */}
       {/* Tabs de navegação — só aparecem quando há dados e datas selecionadas */}
       {temDados && datasAtivas.length > 0 && (
         <div style={{ display: 'flex', gap: 4 }}>
@@ -1203,6 +1202,9 @@ export default function Planejamento({ onIrLogistica }) {
           </button>
         </div>
       )}
+
+      {/* Aviso sem data */}
+      {temDados && datasAtivas.length === 0 && (
         <div className="card card-pad">
           <div className="alert-banner info">
             👆 Selecione pelo menos uma data acima para ver a tabela de planejamento.
