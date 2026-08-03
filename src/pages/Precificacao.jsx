@@ -119,13 +119,7 @@ function usePrecificacao() {
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
       const cmvTotal = custoPreps + custoRotulo
 
-      // Preços por canal (se cadastrados)
-      const precosCanal = {}
-      for (const pc of (precos||[])) {
-        if (pc.sku_produto === emb.codigo) precosCanal[pc.canal] = parseFloat(pc.preco)||0
-      }
-
-      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: {} }
+      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: {}, semFicha: comps.length === 0 }
     })
 
       setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
