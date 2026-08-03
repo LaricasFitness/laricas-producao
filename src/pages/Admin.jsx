@@ -966,6 +966,160 @@ function ModalComposicaoProduto({ emb, preps, itensIniciais, onClose, onSalvar, 
   )
 }
 
+// ── Configuração de Custos por Canal ─────────────────────────────────────────
+function AdminCanais() {
+  const [canais, setCanais] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editando, setEditando] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('canal_custos').select('*').order('canal_id')
+    setCanais(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function salvar(canal) {
+    setSaving(true)
+    await supabase.from('canal_custos').update({
+      label: canal.label,
+      taxa_plataforma: parseFloat(canal.taxa_plataforma)||0,
+      imposto_receita: parseFloat(canal.imposto_receita)||0,
+      comissao: parseFloat(canal.comissao)||0,
+      desconto_campanhas: parseFloat(canal.desconto_campanhas)||0,
+      custo_embalagem: parseFloat(canal.custo_embalagem)||0,
+      custo_frete: parseFloat(canal.custo_frete)||0,
+      custo_outros: parseFloat(canal.custo_outros)||0,
+      observacao: canal.observacao||null,
+      atualizado_em: new Date().toISOString(),
+    }).eq('id', canal.id)
+    setEditando(null)
+    setSaving(false)
+    load()
+  }
+
+  function totalDeducoes(c) {
+    return (parseFloat(c.taxa_plataforma)||0) + (parseFloat(c.imposto_receita)||0) +
+           (parseFloat(c.comissao)||0) + (parseFloat(c.desconto_campanhas)||0)
+  }
+  function totalFixos(c) {
+    return (parseFloat(c.custo_embalagem)||0) + (parseFloat(c.custo_frete)||0) + (parseFloat(c.custo_outros)||0)
+  }
+
+  return (
+    <div className="card">
+      <div style={{ padding:'14px 20px', borderBottom:'1px solid var(--gray-200)' }}>
+        <div style={{ fontWeight:800, fontSize:15 }}>🛒 Custos por Canal de Venda</div>
+        <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>
+          Configure os custos de cada canal para calcular a margem real no Simulador de Precificação
+        </div>
+      </div>
+
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <div style={{ padding:16, display:'flex', flexDirection:'column', gap:12 }}>
+          {canais.map(c => {
+            const isEdit = editando?.id === c.id
+            const form = isEdit ? editando : c
+            const set = (k,v) => setEditando(p => ({...p,[k]:v}))
+
+            return (
+              <div key={c.id} style={{ border:`2px solid ${isEdit?'var(--purple)':'var(--gray-200)'}`, borderRadius:10, overflow:'hidden' }}>
+                {/* Header */}
+                <div style={{ padding:'12px 16px', background: isEdit?'var(--purple-pale)':'var(--gray-50)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:800, fontSize:14 }}>{c.label}</div>
+                    <div style={{ fontSize:11, color:'var(--gray-400)' }}>
+                      Total deduções: <strong>{totalDeducoes(c).toFixed(1)}%</strong> · Fixos por pedido: <strong>R$ {totalFixos(c).toFixed(2)}</strong>
+                    </div>
+                  </div>
+                  {!isEdit ? (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditando({...c})}>
+                      <Pencil size={13}/> Editar
+                    </button>
+                  ) : (
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditando(null)}>Cancelar</button>
+                      <button className="btn btn-primary btn-sm" onClick={() => salvar(editando)} disabled={saving}>
+                        {saving ? <RefreshCw size={13} className="spin"/> : <Save size={13}/>} Salvar
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Campos */}
+                <div style={{ padding:'14px 16px' }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:'var(--gray-400)', textTransform:'uppercase', marginBottom:8 }}>Deduções sobre receita bruta (%)</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:14 }}>
+                    {[
+                      { k:'taxa_plataforma', label:'Taxa plataforma' },
+                      { k:'imposto_receita', label:'Imposto s/ receita' },
+                      { k:'comissao', label:'Comissão' },
+                      { k:'desconto_campanhas', label:'Desconto campanhas' },
+                    ].map(f => (
+                      <div key={f.k}>
+                        <label style={{ fontSize:11, color:'var(--gray-500)', display:'block', marginBottom:3 }}>{f.label}</label>
+                        {isEdit ? (
+                          <div style={{ position:'relative' }}>
+                            <input type="number" min={0} max={100} step={0.1}
+                              value={form[f.k]} onChange={e=>set(f.k,e.target.value)}
+                              style={{ width:'100%', padding:'5px 24px 5px 8px', border:'1.5px solid var(--purple)', borderRadius:6, fontSize:13, outline:'none' }} />
+                            <span style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', fontSize:12, color:'var(--gray-400)' }}>%</span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize:15, fontWeight:700, color: parseFloat(form[f.k])>0?'var(--danger)':'var(--gray-300)' }}>
+                            {parseFloat(form[f.k]||0).toFixed(1)}%
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize:11, fontWeight:700, color:'var(--gray-400)', textTransform:'uppercase', marginBottom:8 }}>Custos fixos por pedido (R$)</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom: isEdit?14:0 }}>
+                    {[
+                      { k:'custo_embalagem', label:'Embalagem/sacola' },
+                      { k:'custo_frete', label:'Frete médio' },
+                      { k:'custo_outros', label:'Outros' },
+                    ].map(f => (
+                      <div key={f.k}>
+                        <label style={{ fontSize:11, color:'var(--gray-500)', display:'block', marginBottom:3 }}>{f.label}</label>
+                        {isEdit ? (
+                          <div style={{ position:'relative' }}>
+                            <span style={{ position:'absolute', left:6, top:'50%', transform:'translateY(-50%)', fontSize:12, color:'var(--gray-400)' }}>R$</span>
+                            <input type="number" min={0} step={0.01}
+                              value={form[f.k]} onChange={e=>set(f.k,e.target.value)}
+                              style={{ width:'100%', padding:'5px 8px 5px 24px', border:'1.5px solid var(--purple)', borderRadius:6, fontSize:13, outline:'none' }} />
+                          </div>
+                        ) : (
+                          <div style={{ fontSize:15, fontWeight:700, color: parseFloat(form[f.k])>0?'var(--gray-700)':'var(--gray-300)' }}>
+                            R$ {parseFloat(form[f.k]||0).toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {isEdit && (
+                    <div className="form-group" style={{ margin:0 }}>
+                      <label className="form-label">Observação</label>
+                      <input className="form-input" value={form.observacao||''} onChange={e=>set('observacao',e.target.value)} />
+                    </div>
+                  )}
+                  {!isEdit && c.observacao && (
+                    <div style={{ fontSize:11, color:'var(--gray-400)', fontStyle:'italic', marginTop:8 }}>📝 {c.observacao}</div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Configurações do Sistema ──────────────────────────────────────────────────
 function AdminSistema() {
   const [configs, setConfigs] = useState({})
@@ -1129,6 +1283,7 @@ export default function Admin() {
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
         <button className={`tab${tab === 'fichas_produtos' ? ' active' : ''}`} onClick={() => setTab('fichas_produtos')}>🧩 Composição Produtos</button>
+        <button className={`tab${tab === 'canais' ? ' active' : ''}`} onClick={() => setTab('canais')}>🛒 Canais</button>
         <button className={`tab${tab === 'sistema' ? ' active' : ''}`} onClick={() => setTab('sistema')}>🔧 Sistema</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
@@ -1143,6 +1298,7 @@ export default function Admin() {
 
       {tab === 'fichas_produtos' && <AdminComposicaoProdutos />}
 
+      {tab === 'canais'  && <AdminCanais />}
       {tab === 'sistema' && <AdminSistema />}
 
       {tab === 'embalagens' && <div className="card">
