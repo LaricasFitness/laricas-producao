@@ -21,21 +21,24 @@ function usePrecificacao() {
 
   async function load() {
     setLoading(true)
-    const [
-      { data: embs },
-      { data: prodComps },
-      { data: prepComps },
-      { data: preps },
-      { data: mps },
-      { data: canaisDB },
-    ] = await Promise.all([
-      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
-      supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
-      supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id').not('materia_prima_id','is',null),
-      supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
-      supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
-      supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id'),
-    ])
+    try {
+      const [
+        { data: embs },
+        { data: prodComps },
+        { data: prepComps },
+        { data: preps },
+        { data: mps },
+        canaisResult,
+      ] = await Promise.all([
+        supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
+        supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
+        supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id').not('materia_prima_id','is',null),
+        supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
+        supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
+        supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
+      ])
+
+      const canaisDB = canaisResult?.data || []
 
     // Canais do banco
     const canais = (canaisDB||[]).map(c => ({
@@ -125,7 +128,10 @@ function usePrecificacao() {
       return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: {} }
     })
 
-    setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
+      setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
+    } catch(err) {
+      console.error('Erro ao carregar precificação:', err)
+    }
     setLoading(false)
   }
 
