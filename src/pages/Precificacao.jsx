@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 
-const CANAIS = [
-  { id: 'ecommerce',  label: 'E-commerce',  taxa: 0,    frete: 15 },
-  { id: 'ifood',      label: 'iFood',       taxa: 0.27, frete: 0  },
-  { id: 'b2b',        label: 'B2B Revenda', taxa: 0,    frete: 0  },
-  { id: 'club',       label: 'Laricas Club',taxa: 0,    frete: 0  },
-  { id: 'pdv',        label: 'PDV Parceiro',taxa: 0,    frete: 0  },
+const CANAIS_DEFAULT = [
+  { id: 'ecommerce', label: 'E-commerce',   totalPct:0,    totalFixo:18 },
+  { id: 'ifood',     label: 'iFood',        totalPct:0.27, totalFixo:0  },
+  { id: 'b2b',       label: 'B2B Revenda',  totalPct:0,    totalFixo:0  },
+  { id: 'club',      label: 'Laricas Club', totalPct:0,    totalFixo:0  },
+  { id: 'pdv',       label: 'PDV Parceiro', totalPct:0,    totalFixo:0  },
 ]
 
 function fmt(n,d=2) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
@@ -27,15 +27,31 @@ function usePrecificacao() {
       { data: prepComps },
       { data: preps },
       { data: mps },
-      { data: precos },
+      { data: canaisDB },
     ] = await Promise.all([
       supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
       supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
       supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id').not('materia_prima_id','is',null),
       supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
       supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
-      supabase.from('preco_produto_canal').select('*').catch(()=>({data:[]})),
+      supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id'),
     ])
+
+    // Canais do banco
+    const canais = (canaisDB||[]).map(c => ({
+      id: c.canal_id,
+      label: c.label,
+      taxa: (parseFloat(c.taxa_plataforma)||0)/100,
+      imposto: (parseFloat(c.imposto_receita)||0)/100,
+      comissao: (parseFloat(c.comissao)||0)/100,
+      desconto: (parseFloat(c.desconto_campanhas)||0)/100,
+      embalagem: parseFloat(c.custo_embalagem)||0,
+      frete: parseFloat(c.custo_frete)||0,
+      outros: parseFloat(c.custo_outros)||0,
+      // Total deduções % e fixos
+      totalPct: ((parseFloat(c.taxa_plataforma)||0)+(parseFloat(c.imposto_receita)||0)+(parseFloat(c.comissao)||0)+(parseFloat(c.desconto_campanhas)||0))/100,
+      totalFixo: (parseFloat(c.custo_embalagem)||0)+(parseFloat(c.custo_frete)||0)+(parseFloat(c.custo_outros)||0),
+    }))
 
     // Maps para lookup rápido
     const prepMap = {}
@@ -106,10 +122,10 @@ function usePrecificacao() {
         if (pc.sku_produto === emb.codigo) precosCanal[pc.canal] = parseFloat(pc.preco)||0
       }
 
-      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal, semFicha: comps.length === 0 }
+      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: {} }
     })
 
-    setData({ produtos, custoPrepPorG, prepMap, mpMap })
+    setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
     setLoading(false)
   }
 
@@ -264,15 +280,16 @@ function Simulador({ data }) {
   const [markup, setMarkup] = useState(3)
   const [precoManual, setPrecoManual] = useState('')
   const [precosCanal, setPrecosCanal] = useState({})
+  const canais = data.canais || CANAIS_DEFAULT
 
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
-
-  useEffect(() => {
-    if (prod) setPrecosCanal({...prod.precosCanal})
-  }, [skuSel])
-
   const cmv = prod?.cmvTotal || 0
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
+
+  function calcMC(canal, preco) {
+    const recLiq = preco * (1 - canal.totalPct) - canal.totalFixo
+    return { recLiq, mc: recLiq - cmv, mgPct: recLiq > 0 ? (recLiq-cmv)/recLiq : 0 }
+  }
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:16}}>
@@ -359,33 +376,26 @@ function Simulador({ data }) {
           <div className="card card-pad">
             <div style={{fontWeight:800,fontSize:14,marginBottom:16}}>📊 Margem por Canal</div>
             <div style={{display:'flex',flexDirection:'column',gap:10}}>
-              {CANAIS.map(canal => {
-                const preco = precosCanal[canal.id] || precoBase
-                const receitaLiq = preco * (1 - canal.taxa) - canal.frete
-                const mc = receitaLiq - cmv
-                const mgPct = receitaLiq > 0 ? mc/receitaLiq : 0
+              {canais.map(canal => {
+                const preco = parseFloat(precosCanal[canal.id]) || precoBase
+                const { recLiq, mc, mgPct } = calcMC(canal, preco)
                 const cor = mgPct >= 0.4 ? 'var(--ok)' : mgPct >= 0.2 ? 'var(--warning)' : 'var(--danger)'
+                const dedPct = (canal.totalPct*100).toFixed(1)
+                const fixo = canal.totalFixo
                 return (
                   <div key={canal.id} style={{border:'1px solid var(--gray-200)',borderRadius:8,padding:'10px 14px'}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
                       <div style={{fontWeight:700,fontSize:13}}>{canal.label}</div>
-                      <div style={{display:'flex',alignItems:'center',gap:8}}>
-                        <input type="number" value={precosCanal[canal.id]||''} placeholder={fmtR(precoBase)}
-                          onChange={e=>setPrecosCanal(p=>({...p,[canal.id]:e.target.value}))}
-                          style={{width:90,padding:'3px 6px',fontSize:12,border:'1px solid var(--gray-200)',borderRadius:5,textAlign:'right'}} />
-                      </div>
+                      <input type="number" value={precosCanal[canal.id]||''} placeholder={`R$ ${fmt(precoBase,2)}`}
+                        onChange={e=>setPrecosCanal(p=>({...p,[canal.id]:e.target.value}))}
+                        style={{width:90,padding:'3px 6px',fontSize:12,border:'1px solid var(--gray-200)',borderRadius:5,textAlign:'right'}} />
                     </div>
                     <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
                       <div style={{color:'var(--gray-400)'}}>
-                        {canal.taxa>0 && `Taxa ${pct(canal.taxa)} · `}
-                        {canal.frete>0 && `Frete ${fmtR(canal.frete)} · `}
-                        Receita líq. {fmtR(receitaLiq)}
+                        {dedPct}% deduções · R${fixo.toFixed(2)} fixos · Rec. líq. {fmtR(recLiq)}
                       </div>
-                      <div style={{fontWeight:800,color:cor}}>
-                        MC {fmtR(mc)} ({pct(mgPct)})
-                      </div>
+                      <div style={{fontWeight:800,color:cor}}>MC {fmtR(mc)} ({pct(mgPct)})</div>
                     </div>
-                    {/* Barra de margem */}
                     <div style={{marginTop:6,height:4,background:'var(--gray-100)',borderRadius:2}}>
                       <div style={{height:'100%',width:`${Math.max(0,Math.min(100,mgPct*100))}%`,background:cor,borderRadius:2,transition:'width .3s'}}/>
                     </div>
@@ -404,12 +414,12 @@ function Simulador({ data }) {
 function RankingMargem({ data }) {
   const [precoRef, setPrecoRef] = useState({})
   const [canalSel, setCanalSel] = useState('ecommerce')
-  const canal = CANAIS.find(c=>c.id===canalSel)
+  const canais = data.canais || CANAIS_DEFAULT
+  const canal = canais.find(c=>c.id===canalSel) || canais[0]
 
-  // Produtos com CMV calculado
   const comCusto = data.produtos.filter(p=>p.cmvTotal>0).map(p => {
-    const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal[canalSel] || p.cmvTotal*3
-    const recLiq = preco*(1-canal.taxa)-canal.frete
+    const preco = parseFloat(precoRef[p.emb.codigo]) || p.cmvTotal*3
+    const recLiq = preco*(1-canal.totalPct)-canal.totalFixo
     const mc = recLiq - p.cmvTotal
     const mgPct = recLiq>0 ? mc/recLiq : 0
     return { ...p, preco, recLiq, mc, mgPct }
@@ -424,7 +434,7 @@ function RankingMargem({ data }) {
         <div>
           <label className="form-label">Canal de referência</label>
           <select className="form-input" value={canalSel} onChange={e=>setCanalSel(e.target.value)} style={{width:180}}>
-            {CANAIS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+            {canais.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
         </div>
         <div style={{fontSize:12,color:'var(--gray-400)',alignSelf:'flex-end',paddingBottom:2}}>
