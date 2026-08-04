@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { RefreshCw, ChevronDown, ChevronUp, Save } from 'lucide-react'
 
 const CANAIS_DEFAULT = [
   { id: 'ecommerce', label: 'E-commerce',   totalPct:0,    totalFixo:18 },
@@ -29,6 +29,7 @@ function usePrecificacao() {
         { data: preps },
         { data: mps },
         canaisResult,
+        { data: precosSalvos },
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
@@ -36,9 +37,17 @@ function usePrecificacao() {
         supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
         supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
+        supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
       ])
 
       const canaisDB = canaisResult?.data || []
+
+      // Mapa de preços salvos: { sku: { canal_id: preco } }
+      const precosMap = {}
+      for (const p of (precosSalvos||[])) {
+        if (!precosMap[p.sku_produto]) precosMap[p.sku_produto] = {}
+        precosMap[p.sku_produto][p.canal_id] = parseFloat(p.preco)||0
+      }
 
     // Canais do banco
     const canais = (canaisDB||[]).map(c => ({
@@ -119,7 +128,7 @@ function usePrecificacao() {
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
       const cmvTotal = custoPreps + custoRotulo
 
-      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: {}, semFicha: comps.length === 0 }
+      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
       setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
@@ -275,16 +284,44 @@ function FichaCusto({ data }) {
 }
 
 // ── Simulador ─────────────────────────────────────────────────────────────────
-function Simulador({ data }) {
+function Simulador({ data, reload }) {
   const [skuSel, setSkuSel] = useState('')
   const [markup, setMarkup] = useState(3)
   const [precoManual, setPrecoManual] = useState('')
   const [precosCanal, setPrecosCanal] = useState({})
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const canais = data.canais || CANAIS_DEFAULT
 
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
   const cmv = prod?.cmvTotal || 0
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
+
+  // Carrega preços salvos ao selecionar produto
+  useEffect(() => {
+    if (prod) {
+      setPrecosCanal({...prod.precosCanal})
+      setSaved(false)
+    }
+  }, [skuSel])
+
+  async function salvarPrecos() {
+    if (!skuSel) return
+    setSaving(true)
+    for (const [canalId, preco] of Object.entries(precosCanal)) {
+      if (!preco) continue
+      await supabase.from('preco_produto_canal').upsert({
+        sku_produto: skuSel,
+        canal_id: canalId,
+        preco: parseFloat(preco),
+        atualizado_em: new Date().toISOString(),
+      }, { onConflict: 'sku_produto,canal_id' })
+    }
+    setSaving(false)
+    setSaved(true)
+    reload()
+    setTimeout(() => setSaved(false), 3000)
+  }
 
   function calcMC(canal, preco) {
     const recLiq = preco * (1 - canal.totalPct) - canal.totalFixo
@@ -308,9 +345,16 @@ function Simulador({ data }) {
             </select>
           </div>
           {prod && (
-            <div style={{textAlign:'center',padding:'0 0 2px'}}>
-              <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>CMV</div>
-              <div style={{fontSize:20,fontWeight:800,color:'var(--purple)'}}>{fmtR(cmv)}</div>
+            <div style={{display:'flex',gap:12,alignItems:'flex-end'}}>
+              <div style={{textAlign:'center',padding:'0 0 2px'}}>
+                <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>CMV</div>
+                <div style={{fontSize:20,fontWeight:800,color:'var(--purple)'}}>{fmtR(cmv)}</div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={salvarPrecos} disabled={saving}
+                style={{marginBottom:2, background: saved?'var(--ok)':undefined}}>
+                {saving ? <RefreshCw size={13} className="spin"/> : saved ? '✓ Salvo!' : <Save size={13}/>}
+                {!saving && !saved && ' Salvar preços'}
+              </button>
             </div>
           )}
         </div>
@@ -411,14 +455,41 @@ function Simulador({ data }) {
 }
 
 // ── Ranking de Margem ─────────────────────────────────────────────────────────
-function RankingMargem({ data }) {
+function RankingMargem({ data, reload }) {
   const [precoRef, setPrecoRef] = useState({})
   const [canalSel, setCanalSel] = useState('ecommerce')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const canais = data.canais || CANAIS_DEFAULT
   const canal = canais.find(c=>c.id===canalSel) || canais[0]
 
+  // Inicializa precoRef com preços salvos
+  useEffect(() => {
+    const init = {}
+    for (const p of data.produtos) {
+      if (p.precosCanal?.[canalSel]) init[p.emb.codigo] = p.precosCanal[canalSel]
+    }
+    setPrecoRef(init)
+  }, [canalSel, data])
+
+  async function salvarTodos() {
+    setSaving(true)
+    for (const [sku, preco] of Object.entries(precoRef)) {
+      if (!preco) continue
+      await supabase.from('preco_produto_canal').upsert({
+        sku_produto: sku, canal_id: canalSel,
+        preco: parseFloat(preco),
+        atualizado_em: new Date().toISOString(),
+      }, { onConflict: 'sku_produto,canal_id' })
+    }
+    setSaving(false)
+    setSaved(true)
+    reload()
+    setTimeout(() => setSaved(false), 3000)
+  }
+
   const comCusto = data.produtos.filter(p=>p.cmvTotal>0).map(p => {
-    const preco = parseFloat(precoRef[p.emb.codigo]) || p.cmvTotal*3
+    const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal?.[canalSel] || p.cmvTotal*3
     const recLiq = preco*(1-canal.totalPct)-canal.totalFixo
     const mc = recLiq - p.cmvTotal
     const mgPct = recLiq>0 ? mc/recLiq : 0
@@ -436,6 +507,10 @@ function RankingMargem({ data }) {
           <select className="form-input" value={canalSel} onChange={e=>setCanalSel(e.target.value)} style={{width:180}}>
             {canais.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
+          <button className="btn btn-primary btn-sm" onClick={salvarTodos} disabled={saving}
+            style={{background: saved?'var(--ok)':undefined}}>
+            {saving ? <RefreshCw size={13} className="spin"/> : saved ? '✓ Salvo!' : <><Save size={13}/> Salvar preços</>}
+          </button>
         </div>
         <div style={{fontSize:12,color:'var(--gray-400)',alignSelf:'flex-end',paddingBottom:2}}>
           Edite os preços na coluna "Preço" para personalizar o cálculo
@@ -520,8 +595,8 @@ export default function Precificacao() {
       ) : !data ? null : (
         <>
           {aba==='ficha'     && <FichaCusto data={data} />}
-          {aba==='simulador' && <Simulador data={data} />}
-          {aba==='ranking'   && <RankingMargem data={data} />}
+          {aba==='simulador' && <Simulador data={data} reload={reload} />}
+          {aba==='ranking'   && <RankingMargem data={data} reload={reload} />}
         </>
       )}
     </>
