@@ -1,12 +1,73 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
-import { Plus, RefreshCw, Save, Pencil, Upload } from 'lucide-react'
+import { Plus, RefreshCw, Save, Pencil, Upload, FileText } from 'lucide-react'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
 
 function fmt(n, dec=2) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:dec,maximumFractionDigits:dec}) }
 function fmtR(n) { return `R$ ${fmt(n,2)}` }
+
+function gerarPDFSituacao(lista, filtrada, totalValor) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo' })
+
+  // Header
+  doc.setFillColor(82,46,100)
+  doc.rect(0,0,210,18,'F')
+  doc.setTextColor(234,183,130); doc.setFontSize(13); doc.setFont(undefined,'bold')
+  doc.text('Laricas Fitness — Situação de Insumos / Matérias-Primas', 14, 11)
+  doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Gerado: ${agora}`, 130, 16)
+
+  doc.setTextColor(82,46,100); doc.setFontSize(10); doc.setFont(undefined,'bold')
+  doc.text(`Total em estoque: ${fmtR(totalValor)} · ${filtrada.length} insumos`, 14, 26)
+
+  const body = filtrada.map(m => {
+    const est = parseFloat(m.estoque_atual)||0
+    const custo = parseFloat(m.custo_unitario)||0
+    const valor = est*custo
+    const min = parseFloat(m.estoque_minimo)||0
+    const status = min===0?'—':est<=0?'🚨 Zerado':est<=min?'⚠️ Baixo':'✅ OK'
+    return [
+      m.nome,
+      m.categoria,
+      `${fmt(est,1)} ${m.unidade}`,
+      custo>0?`${fmtR(custo)}/${m.unidade}`:'—',
+      valor>0?fmtR(valor):'—',
+      status,
+    ]
+  })
+
+  autoTable(doc, {
+    startY: 32,
+    head: [['Insumo','Categoria','Estoque atual','Preço médio','Valor em estoque','Status']],
+    body,
+    styles: { fontSize:8, cellPadding:3 },
+    headStyles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold' },
+    alternateRowStyles: { fillColor:[248,245,252] },
+    columnStyles: {
+      0: { cellWidth:'auto' },
+      1: { cellWidth:28 },
+      2: { cellWidth:28, halign:'right' },
+      3: { cellWidth:32, halign:'right' },
+      4: { cellWidth:32, halign:'right' },
+      5: { cellWidth:22, halign:'center' },
+    },
+    margin: { left:14, right:14 },
+  })
+
+  const pageCount = doc.getNumberOfPages()
+  for (let i=1;i<=pageCount;i++) {
+    doc.setPage(i)
+    doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
+    doc.text('Laricas Fitness — Insumos', 14, 289)
+    doc.text(`Pág ${i}/${pageCount}`, 185, 289)
+  }
+  doc.save(`Insumos_Situacao_${new Date().toISOString().slice(0,10)}.pdf`)
+}
 
 // ── Parsers XML (NF-e e NFS-e) ────────────────────────────────────────────────
 function parseNFSe(xmlText) {
@@ -522,6 +583,9 @@ function DashMP() {
           </select>
           <div style={{flex:1}}/>
           <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+          <button className="btn btn-ghost btn-sm" onClick={()=>gerarPDFSituacao(lista, filtrada, totalValor)}>
+            <FileText size={13}/> PDF
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={()=>setModal({tipo:'xml'})}>
             <Upload size={13}/> Importar XML
           </button>
@@ -598,22 +662,166 @@ function DashMP() {
   )
 }
 
+// ── Modal compra avulsa (sem XML) ─────────────────────────────────────────────
+function ModalCompraAvulsa({ mps, onClose, onSaved }) {
+  const [itens, setItens] = useState([{ mp_id:'', quantidade:'', custo_total:'' }])
+  const [form, setForm] = useState({
+    data_compra: new Date().toISOString().slice(0,10),
+    fornecedor: '',
+    numero_nf: '',
+    observacao: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setForm(p=>({...p,[k]:v}))
+  const setItem = (idx,k,v) => setItens(p=>p.map((it,i)=>i===idx?{...it,[k]:v}:it))
+  const addItem = () => setItens(p=>[...p,{mp_id:'',quantidade:'',custo_total:''}])
+  const remItem = (idx) => setItens(p=>p.filter((_,i)=>i!==idx))
+
+  const totalGeral = itens.reduce((s,it)=>s+(parseFloat(it.custo_total)||0),0)
+
+  async function salvar() {
+    const validos = itens.filter(it=>it.mp_id&&it.quantidade&&it.custo_total)
+    if (!validos.length) return
+    setSaving(true)
+    for (const it of validos) {
+      const qtd = parseFloat(it.quantidade)
+      const custo = parseFloat(it.custo_total)
+      const { data: mp } = await supabase.from('materias_primas').select('estoque_atual,custo_unitario').eq('id',it.mp_id).single()
+      const estoqueAnt = parseFloat(mp?.estoque_atual)||0
+      const custoAnt = parseFloat(mp?.custo_unitario)||0
+      const novoEstoque = estoqueAnt + qtd
+      const novoCusto = novoEstoque > 0 ? (estoqueAnt*custoAnt + custo) / novoEstoque : custo/qtd
+      await supabase.from('mp_compras').insert({
+        materia_prima_id: it.mp_id,
+        quantidade: qtd,
+        custo_total: custo,
+        data_compra: form.data_compra,
+        fornecedor: form.fornecedor||null,
+        numero_nf: form.numero_nf||null,
+        observacao: form.observacao||null,
+      })
+      await supabase.from('materias_primas').update({
+        estoque_atual: novoEstoque,
+        custo_unitario: novoCusto,
+        atualizado_em: new Date().toISOString(),
+      }).eq('id',it.mp_id)
+    }
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:600,maxHeight:'92vh',overflowY:'auto'}}>
+        <div className="modal-header">
+          <div className="modal-title">💰 Registrar Compra</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          {/* Dados gerais */}
+          <div className="form-grid-2" style={{marginBottom:12}}>
+            <div className="form-group">
+              <label className="form-label">Data da compra</label>
+              <input type="date" className="form-input" value={form.data_compra} onChange={e=>set('data_compra',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Fornecedor</label>
+              <input className="form-input" value={form.fornecedor} onChange={e=>set('fornecedor',e.target.value)} placeholder="Nome do fornecedor" />
+            </div>
+          </div>
+          <div className="form-grid-2" style={{marginBottom:16}}>
+            <div className="form-group">
+              <label className="form-label">NF / Pedido</label>
+              <input className="form-input" value={form.numero_nf} onChange={e=>set('numero_nf',e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Observação</label>
+              <input className="form-input" value={form.observacao} onChange={e=>set('observacao',e.target.value)} />
+            </div>
+          </div>
+
+          {/* Itens */}
+          <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Itens da compra</div>
+          {itens.map((it,idx)=>{
+            const mp = mps.find(m=>m.id===it.mp_id)
+            const custoUnit = it.quantidade&&it.custo_total ? parseFloat(it.custo_total)/parseFloat(it.quantidade) : null
+            return (
+              <div key={idx} style={{border:'1px solid var(--gray-200)',borderRadius:8,padding:'12px 14px',marginBottom:8}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 100px 110px auto',gap:8,alignItems:'start'}}>
+                  <div>
+                    <select className="form-input" value={it.mp_id} onChange={e=>setItem(idx,'mp_id',e.target.value)} style={{fontSize:13}}>
+                      <option value="">Selecione o insumo...</option>
+                      {CATEGORIAS.map(cat=>{
+                        const grupo = mps.filter(m=>m.categoria===cat)
+                        if (!grupo.length) return null
+                        return <optgroup key={cat} label={cat}>{grupo.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}</optgroup>
+                      })}
+                    </select>
+                  </div>
+                  <div>
+                    <input type="number" className="form-input" placeholder={`Qtd${mp?` (${mp.unidade})`:''}`}
+                      value={it.quantidade} onChange={e=>setItem(idx,'quantidade',e.target.value)}
+                      min={0} step={0.001} style={{fontSize:13}} />
+                  </div>
+                  <div>
+                    <input type="number" className="form-input" placeholder="Custo total R$"
+                      value={it.custo_total} onChange={e=>setItem(idx,'custo_total',e.target.value)}
+                      min={0} step={0.01} style={{fontSize:13}} />
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>remItem(idx)}
+                    style={{color:'var(--danger)',marginTop:2}} disabled={itens.length===1}>✕</button>
+                </div>
+                {custoUnit!==null && (
+                  <div style={{fontSize:11,color:'var(--purple)',fontWeight:700,marginTop:4}}>
+                    → {fmtR(custoUnit)}/{mp?.unidade||'un'} por unidade
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12}/> Adicionar item</button>
+
+          {totalGeral > 0 && (
+            <div style={{marginTop:12,padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,display:'flex',justifyContent:'space-between',fontWeight:700}}>
+              <span>Total da compra</span>
+              <span style={{color:'var(--purple)',fontSize:15}}>{fmtR(totalGeral)}</span>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar}
+            disabled={saving||!itens.some(it=>it.mp_id&&it.quantidade&&it.custo_total)}>
+            {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Registrar compra</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Histórico de compras ──────────────────────────────────────────────────────
 function HistoricoCompras() {
   const [compras, setCompras] = useState([])
+  const [mps, setMps] = useState([])
   const [loading, setLoading] = useState(true)
   const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
   const [xmlModal, setXmlModal] = useState(false)
+  const [compraModal, setCompraModal] = useState(false)
 
   async function load() {
     setLoading(true)
     const ini = mes+'-01'
     const fim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
-    const { data } = await supabase.from('mp_compras')
-      .select('*, materias_primas(nome,unidade,categoria)')
-      .gte('data_compra',ini).lte('data_compra',fim)
-      .order('data_compra',{ascending:false})
-    setCompras(data||[])
+    const [{ data: comprasData }, { data: mpsData }] = await Promise.all([
+      supabase.from('mp_compras')
+        .select('*, materias_primas(nome,unidade,categoria)')
+        .gte('data_compra',ini).lte('data_compra',fim)
+        .order('data_compra',{ascending:false}),
+      supabase.from('materias_primas').select('id,nome,unidade,categoria,fornecedor').eq('ativo',true).order('categoria').order('nome'),
+    ])
+    setCompras(comprasData||[])
+    setMps(mpsData||[])
     setLoading(false)
   }
   useEffect(()=>{ load() },[mes])
@@ -623,11 +831,13 @@ function HistoricoCompras() {
   return (
     <div className="card">
       {xmlModal && <ModalImportarXML onClose={()=>setXmlModal(false)} onSaved={()=>{setXmlModal(false);load()}} />}
+      {compraModal && <ModalCompraAvulsa mps={mps} onClose={()=>setCompraModal(false)} onSaved={()=>{setCompraModal(false);load()}} />}
       <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
         <div style={{fontWeight:800,fontSize:15}}>📦 Histórico de Compras</div>
         <div style={{flex:1}}/>
         <input type="month" className="form-input" value={mes} onChange={e=>setMes(e.target.value)} style={{width:160,fontSize:13}} />
         <button className="btn btn-ghost btn-sm" onClick={()=>setXmlModal(true)}><Upload size={13}/> Importar XML</button>
+        <button className="btn btn-primary btn-sm" onClick={()=>setCompraModal(true)}><Plus size={13}/> Registrar compra</button>
         <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
       </div>
       {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
