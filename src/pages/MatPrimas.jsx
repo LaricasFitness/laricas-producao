@@ -826,6 +826,21 @@ function HistoricoCompras() {
   }
   useEffect(()=>{ load() },[mes])
 
+  async function excluirCompra(c) {
+    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO estoque será revertido automaticamente.`)) return
+    // Reverte estoque
+    const { data: mp } = await supabase.from('materias_primas').select('estoque_atual,custo_unitario').eq('id',c.materia_prima_id).single()
+    const estoqueAtual = parseFloat(mp?.estoque_atual)||0
+    const novoEstoque = Math.max(0, estoqueAtual - parseFloat(c.quantidade))
+    await supabase.from('materias_primas').update({
+      estoque_atual: novoEstoque,
+      atualizado_em: new Date().toISOString(),
+    }).eq('id', c.materia_prima_id)
+    // Remove compra
+    await supabase.from('mp_compras').delete().eq('id', c.id)
+    load()
+  }
+
   const totalMes = compras.reduce((s,c)=>s+(parseFloat(c.custo_total)||0),0)
 
   return (
@@ -855,6 +870,7 @@ function HistoricoCompras() {
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Custo unit.</th>
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Total</th>
                   <th style={{padding:'9px 10px',textAlign:'left'}}>NF</th>
+                  <th style={{padding:'9px 10px',width:40}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -872,6 +888,12 @@ function HistoricoCompras() {
                     <td style={{padding:'9px 10px',textAlign:'right',color:'var(--gray-600)',fontSize:12}}>{fmtR(c.custo_unitario)}/{c.materias_primas?.unidade}</td>
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>{fmtR(c.custo_total)}</td>
                     <td style={{padding:'9px 10px',fontSize:12,color:'var(--gray-400)'}}>{c.numero_nf||'—'}</td>
+                    <td style={{padding:'9px 10px',textAlign:'center'}}>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
+                        style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
+                        ✕
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -879,7 +901,7 @@ function HistoricoCompras() {
                 <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--gray-50)'}}>
                   <td colSpan={5} style={{padding:'9px 14px',fontWeight:800}}>Total do mês</td>
                   <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>{fmtR(totalMes)}</td>
-                  <td/>
+                  <td colSpan={2}/>
                 </tr>
               </tfoot>
             </table>
