@@ -41,18 +41,12 @@ function usePrecificacao() {
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
-        // Volume: usa só os registros de rótulos (fase1 da produção = produtos finais)
-        // Filtra pelos IDs de embalagens do tipo rotulo via subquery
+        // Volume: só registros de produção real (exclui auto-embalagem)
         supabase.from('producao_diaria')
-          .select('quantidade, embalagens!inner(equivalencia_overhead, tipo)')
-          .eq('embalagens.tipo', 'rotulo')
+          .select('quantidade, embalagem_id, embalagens(equivalencia_overhead)')
           .gte('data_producao', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
-          .then(r => {
-            // Supabase pode não filtrar corretamente em join — filtra no cliente também
-            if (r.data) r.data = r.data.filter(d => d.embalagens?.tipo === 'rotulo')
-            return r
-          })
-          .catch(()=>({data:[]})),
+          .not('registrado_por', 'ilike', '%(auto-embalagem)%')
+          .then(r=>r).catch(()=>({data:[]})),
       ])
 
       // Overhead por unidade
