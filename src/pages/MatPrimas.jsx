@@ -817,7 +817,8 @@ function HistoricoCompras() {
       supabase.from('mp_compras')
         .select('*, materias_primas(nome,unidade,categoria)')
         .gte('data_compra',ini).lte('data_compra',fim)
-        .order('data_compra',{ascending:false}),
+        .order('data_compra',{ascending:false})
+        .order('criado_em',{ascending:false}),
       supabase.from('materias_primas').select('id,nome,unidade,categoria,fornecedor').eq('ativo',true).order('categoria').order('nome'),
     ])
     setCompras(comprasData||[])
