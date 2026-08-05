@@ -41,7 +41,7 @@ function usePrecificacao() {
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
-        // Volume: mesmo filtro da Análise — só embalagens do tipo rotulo
+        // Volume: só registros reais de produção (não auto-embalagem)
         supabase.from('embalagens')
           .select('id, equivalencia_overhead')
           .eq('tipo', 'rotulo')
@@ -55,7 +55,7 @@ function usePrecificacao() {
               .select('quantidade, embalagem_id')
               .in('embalagem_id', ids)
               .gte('data_producao', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
-            // Mapeia equivalencia de volta
+              .not('registrado_por', 'ilike', '%(auto-embalagem)%')
             const enriched = (prod||[]).map(r => ({
               quantidade: r.quantidade,
               embalagens: { equivalencia_overhead: equivMap[r.embalagem_id] || 1 }
