@@ -1,63 +1,63 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { Plus, RefreshCw, Save, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, Pencil } from 'lucide-react'
 
 function fmt(n, d=2) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
-function fmtR(n) { return `R$ ${fmt(n,2)}` }
 
-// ── Modal: registrar rendimento real ─────────────────────────────────────────
-function ModalRendimento({ prep, onClose, onSaved }) {
+// Recalcula média dos últimos 10 e atualiza a preparação
+async function recalcularMedia(preparacao_id) {
+  const { data: hist } = await supabase
+    .from('preparacao_rendimento')
+    .select('rendimento_por_receita')
+    .eq('preparacao_id', preparacao_id)
+    .order('criado_em', { ascending: false })
+    .limit(10)
+  if (!hist?.length) {
+    await supabase.from('preparacoes').update({ rendimento_real_medio: null }).eq('id', preparacao_id)
+    return
+  }
+  const media = hist.reduce((s,r) => s + parseFloat(r.rendimento_por_receita||0), 0) / hist.length
+  await supabase.from('preparacoes').update({ rendimento_real_medio: media, atualizado_em: new Date().toISOString() }).eq('id', preparacao_id)
+}
+
+// ── Modal: registrar ou editar rendimento ────────────────────────────────────
+function ModalRendimento({ prep, registro, onClose, onSaved }) {
+  const isEdit = !!registro
   const [form, setForm] = useState({
-    num_receitas: '1',
-    rendimento_total: '',
-    data_producao: new Date().toISOString().slice(0,10),
-    responsavel: 'Virgínia',
-    observacao: '',
+    num_receitas:    registro ? String(registro.num_receitas) : '1',
+    rendimento_total: registro ? String(registro.rendimento_total) : '',
+    data_producao:   registro ? registro.data_producao : new Date().toISOString().slice(0,10),
+    responsavel:     registro?.responsavel || 'Virgínia',
+    observacao:      registro?.observacao || '',
   })
   const [saving, setSaving] = useState(false)
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
 
   const rendPorReceita = form.num_receitas && form.rendimento_total
-    ? parseFloat(form.rendimento_total) / parseFloat(form.num_receitas)
-    : null
-
+    ? parseFloat(form.rendimento_total) / parseFloat(form.num_receitas) : null
   const rendEstimado = parseFloat(prep.rendimento_estimado) || 0
   const variacao = rendPorReceita && rendEstimado
-    ? ((rendPorReceita - rendEstimado) / rendEstimado) * 100
-    : null
+    ? ((rendPorReceita - rendEstimado) / rendEstimado) * 100 : null
 
   async function salvar() {
     if (!form.num_receitas || !form.rendimento_total) return
     setSaving(true)
-
     const numRec = parseFloat(form.num_receitas)
     const rendTotal = parseFloat(form.rendimento_total)
-
-    // Insere histórico
-    await supabase.from('preparacao_rendimento').insert({
+    const payload = {
       preparacao_id: prep.id,
       num_receitas: numRec,
       rendimento_total: rendTotal,
       data_producao: form.data_producao,
       responsavel: form.responsavel,
       observacao: form.observacao || null,
-    })
-
-    // Recalcula média dos últimos 10 registros
-    const { data: hist } = await supabase
-      .from('preparacao_rendimento')
-      .select('rendimento_por_receita')
-      .eq('preparacao_id', prep.id)
-      .order('criado_em', { ascending: false })
-      .limit(10)
-
-    if (hist?.length) {
-      const media = hist.reduce((s,r) => s + parseFloat(r.rendimento_por_receita||0), 0) / hist.length
-      await supabase.from('preparacoes')
-        .update({ rendimento_real_medio: media, atualizado_em: new Date().toISOString() })
-        .eq('id', prep.id)
     }
-
+    if (isEdit) {
+      await supabase.from('preparacao_rendimento').update(payload).eq('id', registro.id)
+    } else {
+      await supabase.from('preparacao_rendimento').insert(payload)
+    }
+    await recalcularMedia(prep.id)
     setSaving(false)
     onSaved()
   }
@@ -67,13 +67,12 @@ function ModalRendimento({ prep, onClose, onSaved }) {
       <div className="modal" style={{maxWidth:460}}>
         <div className="modal-header">
           <div>
-            <div className="modal-title">📊 Registrar Rendimento Real</div>
+            <div className="modal-title">{isEdit ? '✏️ Editar' : '📊 Registrar'} Rendimento Real</div>
             <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{prep.nome}</div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          {/* Referência */}
           <div style={{padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,marginBottom:16,fontSize:13}}>
             <div style={{fontWeight:700,color:'var(--purple)',marginBottom:4}}>Referência da ficha técnica</div>
             <div style={{display:'flex',gap:20}}>
@@ -83,7 +82,7 @@ function ModalRendimento({ prep, onClose, onSaved }) {
               </div>
               {prep.rendimento_real_medio && (
                 <div>
-                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Média real atual</div>
+                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Média real atual (últimos 10)</div>
                   <div style={{fontWeight:800,color:'var(--ok)'}}>{fmt(prep.rendimento_real_medio,1)} {prep.unidade_rendimento}</div>
                 </div>
               )}
@@ -104,7 +103,6 @@ function ModalRendimento({ prep, onClose, onSaved }) {
             </div>
           </div>
 
-          {/* Preview do rendimento por receita */}
           {rendPorReceita !== null && (
             <div style={{
               padding:'10px 14px', borderRadius:8, marginBottom:12,
@@ -113,7 +111,7 @@ function ModalRendimento({ prep, onClose, onSaved }) {
             }}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <div>
-                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Rendimento calculado por receita</div>
+                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Rendimento por receita</div>
                   <div style={{fontSize:18,fontWeight:800,color:'var(--purple)'}}>
                     {fmt(rendPorReceita,1)} {prep.unidade_rendimento}
                   </div>
@@ -154,7 +152,7 @@ function ModalRendimento({ prep, onClose, onSaved }) {
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn btn-primary" onClick={salvar}
             disabled={saving||!form.num_receitas||!form.rendimento_total}>
-            {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Registrar</>}
+            {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> {isEdit?'Salvar alterações':'Registrar'}</>}
           </button>
         </div>
       </div>
@@ -162,22 +160,21 @@ function ModalRendimento({ prep, onClose, onSaved }) {
   )
 }
 
-// ── Lista de preparações com histórico ────────────────────────────────────────
+// ── Componente principal ──────────────────────────────────────────────────────
 export default function Rendimentos() {
   const [preps, setPreps] = useState([])
-  const [historico, setHistorico] = useState({}) // prepId → [registros]
+  const [historico, setHistorico] = useState({})
   const [loading, setLoading] = useState(true)
-  const [modal, setModal] = useState(null)
+  const [modal, setModal] = useState(null) // { prep, registro? }
   const [expandido, setExpandido] = useState(null)
   const [filtro, setFiltro] = useState('')
+  const [excluindo, setExcluindo] = useState(null)
 
   async function load() {
     setLoading(true)
     const [{ data: prepsData }, { data: histData }] = await Promise.all([
       supabase.from('preparacoes').select('*').eq('ativo',true).order('tipo').order('nome'),
-      supabase.from('preparacao_rendimento')
-        .select('*')
-        .order('data_producao', { ascending: false }),
+      supabase.from('preparacao_rendimento').select('*').order('data_producao', { ascending: false }).order('criado_em', { ascending: false }),
     ])
     setPreps(prepsData||[])
     const map = {}
@@ -191,23 +188,27 @@ export default function Rendimentos() {
 
   useEffect(() => { load() }, [])
 
+  async function excluir(r, prep) {
+    if (!window.confirm(`Excluir registro de ${new Date(r.data_producao+'T12:00:00').toLocaleDateString('pt-BR')} — ${fmt(r.rendimento_total,1)} ${prep.unidade_rendimento}?`)) return
+    setExcluindo(r.id)
+    await supabase.from('preparacao_rendimento').delete().eq('id', r.id)
+    await recalcularMedia(prep.id)
+    setExcluindo(null)
+    load()
+  }
+
   function afterSave() { setModal(null); load() }
 
   const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
-  const TIPO_COR = { massa:'#f0eaff', recheio:'#e8f5e9', creme:'#fff8e1', cobertura:'#fce4ec', cha:'#e3f2fd', outro:'#f5f5f5' }
+  const filtradas = preps.filter(p => !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase()))
 
-  const filtradas = preps.filter(p =>
-    !filtro || p.nome.toLowerCase().includes(filtro.toLowerCase())
-  )
-
-  // KPIs
   const comHistorico = preps.filter(p => (historico[p.id]||[]).length > 0).length
   const comMedia = preps.filter(p => p.rendimento_real_medio).length
   const totalRegistros = Object.values(historico).reduce((s,h) => s+h.length, 0)
 
   return (
     <>
-      {modal && <ModalRendimento prep={modal} onClose={()=>setModal(null)} onSaved={afterSave} />}
+      {modal && <ModalRendimento prep={modal.prep} registro={modal.registro||null} onClose={()=>setModal(null)} onSaved={afterSave} />}
 
       {/* KPIs */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:12}}>
@@ -224,7 +225,6 @@ export default function Rendimentos() {
         ))}
       </div>
 
-      {/* Lista */}
       <div className="card">
         <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
           <div style={{fontWeight:800,fontSize:15}}>📊 Rendimentos por Preparação</div>
@@ -245,7 +245,6 @@ export default function Rendimentos() {
 
               return (
                 <div key={p.id} style={{borderTop: i>0?'1px solid var(--gray-100)':undefined}}>
-                  {/* Linha principal */}
                   <div style={{
                     padding:'11px 20px', display:'grid',
                     gridTemplateColumns:'32px 1fr 140px 140px 120px 100px auto',
@@ -256,22 +255,18 @@ export default function Rendimentos() {
                     <div style={{fontSize:18}}>{TIPO_ICON[p.tipo]||'📦'}</div>
                     <div>
                       <div style={{fontWeight:700,fontSize:13}}>{p.nome}</div>
-                      <div style={{fontSize:11,color:'var(--gray-400)'}}>{p.tipo}</div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>{p.tipo} · {hist.length} registros</div>
                     </div>
-                    {/* Estimado */}
                     <div>
                       <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Estimado</div>
                       <div style={{fontWeight:700}}>{fmt(rendEst,1)} {p.unidade_rendimento}</div>
                     </div>
-                    {/* Média real */}
                     <div>
                       <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Média real</div>
                       {rendMedio > 0
                         ? <div style={{fontWeight:800,color:'var(--ok)'}}>{fmt(rendMedio,1)} {p.unidade_rendimento}</div>
-                        : <div style={{color:'var(--gray-300)',fontSize:12}}>sem dados</div>
-                      }
+                        : <div style={{color:'var(--gray-300)',fontSize:12}}>sem dados</div>}
                     </div>
-                    {/* Variação */}
                     <div>
                       <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Variação</div>
                       {variacao !== null
@@ -279,29 +274,23 @@ export default function Rendimentos() {
                             color:Math.abs(variacao)<=5?'var(--ok)':Math.abs(variacao)<=15?'var(--warning)':'var(--danger)'}}>
                             {variacao>0?'+':''}{fmt(variacao,1)}%
                           </div>
-                        : <div style={{color:'var(--gray-300)',fontSize:12}}>—</div>
-                      }
+                        : <div style={{color:'var(--gray-300)',fontSize:12}}>—</div>}
                     </div>
-                    {/* Registros */}
                     <div style={{textAlign:'center'}}>
                       <span style={{
                         fontSize:11,padding:'3px 10px',borderRadius:12,fontWeight:700,
                         background: hist.length>0?'var(--purple-pale)':'var(--gray-100)',
                         color: hist.length>0?'var(--purple)':'var(--gray-400)',
-                      }}>
-                        {hist.length} reg.
-                      </span>
+                      }}>{hist.length} reg.</span>
                     </div>
-                    {/* Ações */}
                     <div style={{display:'flex',gap:4,alignItems:'center'}}>
                       <button className="btn btn-primary btn-sm"
-                        onClick={e=>{e.stopPropagation();setModal(p)}}>
+                        onClick={e=>{e.stopPropagation();setModal({prep:p})}}>
                         <Plus size={12}/> Registrar
                       </button>
-                      {hist.length>0 && (
-                        exp ? <ChevronUp size={14} style={{color:'var(--gray-400)'}}/> 
-                            : <ChevronDown size={14} style={{color:'var(--gray-400)'}}/>
-                      )}
+                      {hist.length>0 && (exp
+                        ? <ChevronUp size={14} style={{color:'var(--gray-400)'}}/>
+                        : <ChevronDown size={14} style={{color:'var(--gray-400)'}}/>)}
                     </div>
                   </div>
 
@@ -318,12 +307,14 @@ export default function Rendimentos() {
                             <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>vs. estimado</th>
                             <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Responsável</th>
                             <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Obs.</th>
+                            <th style={{padding:'6px 10px',width:60}}></th>
                           </tr>
                         </thead>
                         <tbody>
                           {hist.map((r,ri) => {
                             const rPorRec = parseFloat(r.rendimento_por_receita)||0
-                            const var2 = rendEst>0 ? ((rPorRec-rendEst)/rendEst*100) : null
+                            const rendEst2 = parseFloat(p.rendimento_estimado)||0
+                            const var2 = rendEst2>0 ? ((rPorRec-rendEst2)/rendEst2*100) : null
                             return (
                               <tr key={r.id} style={{borderTop:'1px solid var(--gray-100)',background:ri%2===0?'#fff':'#f8f5ff'}}>
                                 <td style={{padding:'6px 12px',color:'var(--gray-500)'}}>
@@ -338,6 +329,21 @@ export default function Rendimentos() {
                                 </td>
                                 <td style={{padding:'6px 12px',color:'var(--gray-500)'}}>{r.responsavel||'—'}</td>
                                 <td style={{padding:'6px 12px',color:'var(--gray-400)',fontStyle:'italic'}}>{r.observacao||'—'}</td>
+                                <td style={{padding:'6px 10px',textAlign:'center'}}>
+                                  <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                                    <button className="btn btn-ghost btn-sm"
+                                      onClick={e=>{e.stopPropagation();setModal({prep:p,registro:r})}}
+                                      title="Editar">
+                                      <Pencil size={11}/>
+                                    </button>
+                                    <button className="btn btn-ghost btn-sm"
+                                      onClick={e=>{e.stopPropagation();excluir(r,p)}}
+                                      disabled={excluindo===r.id}
+                                      style={{color:'var(--danger)'}} title="Excluir">
+                                      {excluindo===r.id ? <RefreshCw size={11} className="spin"/> : '✕'}
+                                    </button>
+                                  </div>
+                                </td>
                               </tr>
                             )
                           })}
