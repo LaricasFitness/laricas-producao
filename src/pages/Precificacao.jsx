@@ -343,6 +343,7 @@ function Simulador({ data, reload, incluirOverhead }) {
   const [skuSel, setSkuSel] = useState('')
   const [markup, setMarkup] = useState(3)
   const [precoManual, setPrecoManual] = useState('')
+  const [desconto, setDesconto] = useState(0)
   const [precosCanal, setPrecosCanal] = useState({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -351,6 +352,17 @@ function Simulador({ data, reload, incluirOverhead }) {
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
   const cmv = cmvEfetivo(prod?.cmvTotal || 0, incluirOverhead, data.overheadPorUnidade)
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
+  const precoComDesconto = precoBase * (1 - desconto/100)
+  // Desconto máximo por canal: preço onde MC = 0
+  function descontoMaxCanal(canal) {
+    // recLiq = precoDesc * (1 - totalPct) - totalFixo = cmv
+    // precoDesc = (cmv + totalFixo) / (1 - totalPct)
+    // descMax = (precoBase - precoDesc) / precoBase
+    if (canal.totalPct >= 1) return 0
+    const precoMin = (cmv + canal.totalFixo) / (1 - canal.totalPct)
+    const dMax = precoBase > 0 ? Math.max(0, (precoBase - precoMin) / precoBase * 100) : 0
+    return dMax
+  }
 
   // Carrega preços salvos ao selecionar produto
   useEffect(() => {
@@ -440,12 +452,32 @@ function Simulador({ data, reload, incluirOverhead }) {
                 onChange={e=>{ setPrecoManual(e.target.value); if(e.target.value && cmv>0) setMarkup(parseFloat(e.target.value)/cmv) }} />
             </div>
 
+            {/* Desconto */}
+            <div style={{marginBottom:16,padding:'12px 14px',background:'#fff8f0',borderRadius:8,border:'1px solid var(--warning)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                <label className="form-label" style={{margin:0,color:'var(--warning)'}}>🏷️ Desconto</label>
+                <span style={{fontWeight:800,fontSize:15,color:'var(--warning)'}}>{fmt(desconto,1)}%</span>
+              </div>
+              <input type="range" min={0} max={50} step={0.5} value={desconto}
+                onChange={e=>setDesconto(parseFloat(e.target.value))}
+                style={{width:'100%',accentColor:'var(--warning)'}}/>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--gray-400)'}}>
+                <span>0%</span><span>10%</span><span>20%</span><span>30%</span><span>40%</span><span>50%</span>
+              </div>
+              {desconto > 0 && (
+                <div style={{marginTop:8,display:'flex',justifyContent:'space-between',fontSize:13}}>
+                  <span style={{color:'var(--gray-500)'}}>Preço cheio: {fmtR(precoBase)}</span>
+                  <span style={{fontWeight:800,color:'var(--warning)'}}>→ {fmtR(precoComDesconto)}</span>
+                </div>
+              )}
+            </div>
+
             {/* Resultado */}
             <div style={{background:'var(--purple)',borderRadius:10,padding:16,color:'#fff',textAlign:'center'}}>
-              <div style={{fontSize:12,opacity:.8}}>Preço sugerido</div>
-              <div style={{fontSize:32,fontWeight:800}}>{fmtR(precoBase)}</div>
+              <div style={{fontSize:12,opacity:.8}}>{desconto>0?'Preço com desconto':'Preço sugerido'}</div>
+              <div style={{fontSize:32,fontWeight:800}}>{fmtR(precoComDesconto)}</div>
               <div style={{fontSize:13,opacity:.8,marginTop:4}}>
-                Markup {fmt(markup,1)}x · Margem {pct(cmv>0?(precoBase-cmv)/precoBase:0)}
+                Markup {fmt(markup,1)}x{desconto>0?` · ${fmt(desconto,1)}% desc.`:''} · Margem s/ desc. {pct(cmv>0?(precoBase-cmv)/precoBase:0)}
               </div>
             </div>
 
@@ -476,15 +508,24 @@ function Simulador({ data, reload, incluirOverhead }) {
             <div style={{fontWeight:800,fontSize:14,marginBottom:16}}>📊 Margem por Canal</div>
             <div style={{display:'flex',flexDirection:'column',gap:10}}>
               {canais.map(canal => {
-                const preco = parseFloat(precosCanal[canal.id]) || precoBase
-                const { recLiq, mc, mgPct } = calcMC(canal, preco)
+                const precoCanal = parseFloat(precosCanal[canal.id]) || precoBase
+                const precoEfetivo = precoCanal * (1 - desconto/100)
+                const { recLiq, mc, mgPct } = calcMC(canal, precoEfetivo)
+                const dMax = descontoMaxCanal(canal)
+                const acimaDMax = desconto > 0 && desconto > dMax
                 const cor = mgPct >= 0.4 ? 'var(--ok)' : mgPct >= 0.2 ? 'var(--warning)' : 'var(--danger)'
                 const dedPct = (canal.totalPct*100).toFixed(1)
                 const fixo = canal.totalFixo
                 return (
-                  <div key={canal.id} style={{border:'1px solid var(--gray-200)',borderRadius:8,padding:'10px 14px'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                      <div style={{fontWeight:700,fontSize:13}}>{canal.label}</div>
+                  <div key={canal.id} style={{border:`1.5px solid ${acimaDMax?'var(--danger)':'var(--gray-200)'}`,borderRadius:8,padding:'10px 14px',background:acimaDMax?'#fff5f5':undefined}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                      <div>
+                        <div style={{fontWeight:700,fontSize:13}}>{canal.label}</div>
+                        <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                          Desc. máx: <strong style={{color:dMax>0?'var(--ok)':'var(--danger)'}}>{fmt(dMax,1)}%</strong>
+                          {acimaDMax && <span style={{color:'var(--danger)',fontWeight:700,marginLeft:4}}>⚠️ MC negativa</span>}
+                        </div>
+                      </div>
                       <input type="number" value={precosCanal[canal.id]||''} placeholder={`R$ ${fmt(precoBase,2)}`}
                         onChange={e=>setPrecosCanal(p=>({...p,[canal.id]:e.target.value}))}
                         style={{width:90,padding:'3px 6px',fontSize:12,border:'1px solid var(--gray-200)',borderRadius:5,textAlign:'right'}} />
