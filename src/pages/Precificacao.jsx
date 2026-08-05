@@ -407,8 +407,8 @@ function Simulador({ data, reload, incluirOverhead }) {
             <label className="form-label">Produto</label>
             <select className="form-input" value={skuSel} onChange={e=>setSkuSel(e.target.value)}>
               <option value="">Selecione um produto...</option>
-              {['Pão de Mel 100g','Bolinho 100g','Barra 180g','Potinho 60g','Potão 280g','Mini Pão de Mel 30g','Outros'].map(cat => {
-                const grupo = data.produtos.filter(p=>p.emb.categoria===cat && p.cmvTotal>0)
+              {[...new Set(data.produtos.map(p=>p.emb.categoria))].sort().map(cat => {
+                const grupo = data.produtos.filter(p=>p.emb.categoria===cat)
                 if (!grupo.length) return null
                 return <optgroup key={cat} label={cat}>{grupo.map(p=><option key={p.emb.codigo} value={p.emb.codigo}>{p.emb.nome}</option>)}</optgroup>
               })}
