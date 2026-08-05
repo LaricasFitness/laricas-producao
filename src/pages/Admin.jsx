@@ -534,6 +534,7 @@ function AdminPreparacoes() {
               ingrediente: i.ingrediente,
               quantidade: parseFloat(i.quantidade) || 0,
               unidade: i.unidade || 'g',
+              materia_prima_id: i.materia_prima_id || null,
               ordem: idx + 1,
             }))
           )
@@ -555,6 +556,7 @@ function AdminPreparacoes() {
               ingrediente: i.ingrediente,
               quantidade: parseFloat(i.quantidade) || 0,
               unidade: i.unidade || 'g',
+              materia_prima_id: i.materia_prima_id || null,
               ordem: idx + 1,
             }))
           )
@@ -649,16 +651,24 @@ function AdminPreparacoes() {
 
 function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL }) {
   const [form, setForm] = useState({ ...prep })
+  const [mps, setMps] = useState([])
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const setIng = (idx, k, v) => setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => n === idx ? { ...i, [k]: v } : i) }))
-  const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g' }] }))
+  const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g', materia_prima_id: null }] }))
   const remIng = (idx) => setForm(p => ({ ...p, ingredientes: p.ingredientes.filter((_, n) => n !== idx) }))
+
+  useEffect(() => {
+    supabase.from('materias_primas').select('id,nome,unidade,categoria').eq('ativo',true).order('categoria').order('nome')
+      .then(({ data }) => setMps(data||[]))
+  }, [])
 
   // Rendimento bruto = soma dos ingredientes
   const rendBruto = (form.ingredientes||[]).reduce((s, i) => s + (parseFloat(i.quantidade)||0), 0)
   const perda = parseFloat(form.perda_percentual) || 0
   const margem = parseFloat(form.margem_seguranca) || 0
   const rendLiquido = rendBruto * (1 - perda / 100)
+
+  const CATS_MP = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 
   return (
     <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
@@ -737,18 +747,45 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                 Nenhum ingrediente cadastrado ainda — o rendimento bruto será 0
               </div>
             )}
-            {(form.ingredientes||[]).map((ing, idx) => (
-              <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 90px 70px auto', gap:6, marginBottom:6, alignItems:'center' }}>
-                <input className="form-input" placeholder="Ingrediente" value={ing.ingrediente||''} onChange={e => setIng(idx,'ingrediente',e.target.value)} style={{ fontSize:13 }} />
-                <input type="number" className="form-input" placeholder="Qtd" value={ing.quantidade||''} onChange={e => setIng(idx,'quantidade',e.target.value)} style={{ fontSize:13 }} />
-                <select className="form-input" value={ing.unidade||'g'} onChange={e => setIng(idx,'unidade',e.target.value)} style={{ fontSize:13 }}>
-                  <option value="g">g</option>
-                  <option value="ml">ml</option>
-                  <option value="un">un</option>
-                </select>
-                <button className="btn btn-ghost btn-sm" onClick={() => remIng(idx)} style={{ color:'var(--danger)' }}>✕</button>
-              </div>
-            ))}
+            {(form.ingredientes||[]).map((ing, idx) => {
+              const mpVinculada = mps.find(m => m.id === ing.materia_prima_id)
+              return (
+                <div key={idx} style={{ marginBottom:8, border:'1px solid var(--gray-100)', borderRadius:6, padding:'8px 10px', background: ing.materia_prima_id ? '#f0faf0' : '#fff' }}>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px auto', gap:6, marginBottom:6, alignItems:'center' }}>
+                    <input className="form-input" placeholder="Nome do ingrediente" value={ing.ingrediente||''} onChange={e => setIng(idx,'ingrediente',e.target.value)} style={{ fontSize:13 }} />
+                    <input type="number" className="form-input" placeholder="Qtd" value={ing.quantidade||''} onChange={e => setIng(idx,'quantidade',e.target.value)} style={{ fontSize:13 }} />
+                    <select className="form-input" value={ing.unidade||'g'} onChange={e => setIng(idx,'unidade',e.target.value)} style={{ fontSize:13 }}>
+                      <option value="g">g</option>
+                      <option value="ml">ml</option>
+                      <option value="un">un</option>
+                    </select>
+                    <button className="btn btn-ghost btn-sm" onClick={() => remIng(idx)} style={{ color:'var(--danger)' }}>✕</button>
+                  </div>
+                  {/* Vínculo com MP */}
+                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <span style={{ fontSize:11, color:'var(--gray-400)', whiteSpace:'nowrap' }}>🔗 MP:</span>
+                    <select
+                      value={ing.materia_prima_id||''}
+                      onChange={e => setIng(idx,'materia_prima_id', e.target.value || null)}
+                      style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--gray-200)', borderRadius:5, outline:'none',
+                        background: ing.materia_prima_id ? '#f0faf0' : 'transparent',
+                        color: ing.materia_prima_id ? 'var(--ok)' : 'var(--gray-400)' }}>
+                      <option value="">— Sem vínculo de matéria-prima —</option>
+                      {CATS_MP.map(cat => {
+                        const grupo = mps.filter(m => m.categoria === cat)
+                        if (!grupo.length) return null
+                        return (
+                          <optgroup key={cat} label={cat}>
+                            {grupo.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
+                          </optgroup>
+                        )
+                      })}
+                    </select>
+                    {ing.materia_prima_id && <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
         <div className="modal-footer">
