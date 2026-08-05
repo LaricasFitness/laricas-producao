@@ -41,12 +41,28 @@ function usePrecificacao() {
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
-        // Volume: só registros de produção real (exclui auto-embalagem)
-        supabase.from('producao_diaria')
-          .select('quantidade, embalagem_id, embalagens(equivalencia_overhead)')
-          .gte('data_producao', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
-          .not('registrado_por', 'ilike', '%(auto-embalagem)%')
-          .then(r=>r).catch(()=>({data:[]})),
+        // Volume: mesmo filtro da Análise — só embalagens do tipo rotulo
+        supabase.from('embalagens')
+          .select('id, equivalencia_overhead')
+          .eq('tipo', 'rotulo')
+          .eq('ativo', true)
+          .then(async ({ data: rotulos }) => {
+            if (!rotulos?.length) return { data: [] }
+            const ids = rotulos.map(r => r.id)
+            const equivMap = {}
+            for (const r of rotulos) equivMap[r.id] = parseFloat(r.equivalencia_overhead)||1
+            const { data: prod } = await supabase.from('producao_diaria')
+              .select('quantidade, embalagem_id')
+              .in('embalagem_id', ids)
+              .gte('data_producao', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
+            // Mapeia equivalencia de volta
+            const enriched = (prod||[]).map(r => ({
+              quantidade: r.quantidade,
+              embalagens: { equivalencia_overhead: equivMap[r.embalagem_id] || 1 }
+            }))
+            return { data: enriched }
+          })
+          .catch(()=>({data:[]})),
       ])
 
       // Overhead por unidade
