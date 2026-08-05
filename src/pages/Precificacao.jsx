@@ -33,7 +33,7 @@ function usePrecificacao() {
         overheadResult,
         volumeResult,
       ] = await Promise.all([
-        supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
+        supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
         supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
         supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
@@ -41,9 +41,9 @@ function usePrecificacao() {
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
-        // Volume: soma de produção dos últimos 30 dias (só rótulos)
+        // Volume: soma de produção dos últimos 30 dias ponderada por equivalência de overhead
         supabase.from('producao_diaria')
-          .select('quantidade')
+          .select('quantidade, embalagem_id, embalagens(equivalencia_overhead)')
           .eq('tipo','rotulo')
           .gte('data', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
           .then(r=>r).catch(()=>({data:[]})),
@@ -51,7 +51,10 @@ function usePrecificacao() {
 
       // Overhead por unidade
       const totalOverhead = (overheadResult?.data||[]).reduce((s,r)=>s+(parseFloat(r.valor_mensal)||0),0)
-      const volumeMensal = (volumeResult?.data||[]).reduce((s,r)=>s+(parseFloat(r.quantidade)||0),0)
+      const volumeMensal = (volumeResult?.data||[]).reduce((s,r)=> {
+        const equiv = parseFloat(r.embalagens?.equivalencia_overhead)||1
+        return s + (parseFloat(r.quantidade)||0) * equiv
+      }, 0)
       const overheadPorUnidade = volumeMensal > 0 ? totalOverhead / volumeMensal : 0
 
       const canaisDB = canaisResult?.data || []
@@ -185,8 +188,8 @@ function usePrecificacao() {
 }
 
 // ── Ficha de Custo ─────────────────────────────────────────────────────────────
-function cmvEfetivo(cmvTotal, incluirOverhead, overheadPorUnidade) {
-  return incluirOverhead ? cmvTotal + (overheadPorUnidade||0) : cmvTotal
+function cmvEfetivo(cmvTotal, incluirOverhead, overheadPorUnidade, equivalencia = 1) {
+  return incluirOverhead ? cmvTotal + (overheadPorUnidade||0) * equivalencia : cmvTotal
 }
 
 function FichaCusto({ data, incluirOverhead }) {
@@ -240,7 +243,7 @@ function FichaCusto({ data, incluirOverhead }) {
           <tbody>
             {filtrados.map((p,i) => {
               const exp = expandido === p.emb.codigo
-              const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade)
+              const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)
               const temCusto = p.cmvTotal > 0
               return (<>
                 <tr key={p.emb.codigo}
@@ -317,13 +320,13 @@ function FichaCusto({ data, incluirOverhead }) {
                         )}
                         {incluirOverhead && data.overheadPorUnidade > 0 && (
                           <div style={{padding:'8px 14px',border:'1px solid var(--gray-200)',borderRadius:8,display:'flex',justifyContent:'space-between',fontSize:13,background:'#f0faf0'}}>
-                            <span>🏭 Overhead de produção</span>
-                            <span style={{fontWeight:700,color:'var(--ok)'}}>{fmtR(data.overheadPorUnidade)}</span>
+                            <span>🏭 Overhead de produção{p.emb.equivalencia_overhead > 1 ? ` (×${p.emb.equivalencia_overhead} equiv.)` : ''}</span>
+                            <span style={{fontWeight:700,color:'var(--ok)'}}>{fmtR(data.overheadPorUnidade * (parseFloat(p.emb.equivalencia_overhead)||1))}</span>
                           </div>
                         )}
                         <div style={{padding:'10px 14px',background:'var(--purple)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
                           <span>CMV {incluirOverhead ? 'Total' : 'Direto'} por unidade</span>
-                          <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade))}</span>
+                          <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
                         </div>
                       </div>
                     </td>
@@ -350,7 +353,7 @@ function Simulador({ data, reload, incluirOverhead }) {
   const canais = data.canais || CANAIS_DEFAULT
 
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
-  const cmv = cmvEfetivo(prod?.cmvTotal || 0, incluirOverhead, data.overheadPorUnidade)
+  const cmv = cmvEfetivo(prod?.cmvTotal || 0, incluirOverhead, data.overheadPorUnidade, parseFloat(prod?.emb?.equivalencia_overhead)||1)
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
   const precoComDesconto = precoBase * (1 - desconto/100)
   // Desconto máximo por canal: preço onde MC = 0
@@ -585,7 +588,7 @@ function RankingMargem({ data, reload, incluirOverhead }) {
   }
 
   const comCusto = data.produtos.filter(p=>p.cmvTotal>0).map(p => {
-    const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade)
+    const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)
     const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal?.[canalSel] || cmvEf*3
     const recLiq = preco*(1-canal.totalPct)-canal.totalFixo
     const mc = recLiq - cmvEf
@@ -720,9 +723,9 @@ export default function Precificacao() {
               </div>
               <div style={{fontSize:11, color:'var(--gray-400)', marginTop:1}}>
                 {data.overheadPorUnidade > 0
-                  ? `Overhead: ${fmtR(data.overheadPorUnidade)}/unidade · R$${fmt(data.totalOverhead,0)}/mês ÷ ${Math.round(data.volumeMensal)} un produzidas (últimos 30d)`
+                  ? `Overhead: ${fmtR(data.overheadPorUnidade)}/unidade equiv. · R$${fmt(data.totalOverhead,0)}/mês ÷ ${Math.round(data.volumeMensal)} un equiv. (últimos 30d) · Latas = 8 equiv.`
                   : data.totalOverhead > 0
-                    ? `⚠️ Overhead cadastrado (R$${fmt(data.totalOverhead,0)}/mês) mas sem produção registrada nos últimos 30 dias para calcular overhead/unidade`
+                    ? `⚠️ Overhead cadastrado (R$${fmt(data.totalOverhead,0)}/mês) mas sem produção registrada nos últimos 30 dias`
                     : 'Cadastre itens de overhead em Admin → 🏭 Overhead para ativar'
                 }
               </div>
