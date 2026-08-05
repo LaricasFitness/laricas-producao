@@ -35,7 +35,7 @@ function usePrecificacao() {
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
-        supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id').not('materia_prima_id','is',null),
+        supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
         supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual'),
         supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
@@ -85,19 +85,39 @@ function usePrecificacao() {
     const mpMap = {}
     for (const m of (mps||[])) mpMap[m.id] = m
 
-    // Calcula custo por preparação (custo por g/ml/un de rendimento líquido)
+    // Calcula custo por g de uma preparação (com suporte a sub-preparações)
+    // Usa memoização para evitar loops
     const custoPrepPorG = {}
-    for (const prep of (preps||[])) {
-      const ings = (prepComps||[]).filter(pc => pc.preparacao_id === prep.id)
-      const custo = ings.reduce((s,ing) => {
+    function calcCustoPrepPorG(prepId, visitados = new Set()) {
+      if (custoPrepPorG[prepId] !== undefined) return custoPrepPorG[prepId]
+      if (visitados.has(prepId)) return 0 // evita loop circular
+      visitados = new Set([...visitados, prepId])
+
+      const prep = prepMap[prepId]
+      if (!prep) return 0
+      const ings = (prepComps||[]).filter(pc => pc.preparacao_id === prepId)
+
+      const custo = ings.reduce((s, ing) => {
+        // Sub-preparação (ex: Chá dentro da Massa)
+        if (ing.sub_preparacao_id) {
+          const custoPorG = calcCustoPrepPorG(ing.sub_preparacao_id, visitados)
+          return s + (parseFloat(ing.quantidade)||0) * custoPorG
+        }
+        // Matéria-prima normal
         const mp = mpMap[ing.materia_prima_id]
         if (!mp) return s
         return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp.custo_unitario)||0)
       }, 0)
+
       const bruto = parseFloat(prep.rendimento_estimado) || 1
       const perda = parseFloat(prep.perda_percentual) || 0
       const rendLiq = bruto * (1 - perda/100)
-      custoPrepPorG[prep.id] = rendLiq > 0 ? custo / rendLiq : 0
+      custoPrepPorG[prepId] = rendLiq > 0 ? custo / rendLiq : 0
+      return custoPrepPorG[prepId]
+    }
+
+    for (const prep of (preps||[])) {
+      calcCustoPrepPorG(prep.id)
     }
 
     // Calcula CMV por produto
@@ -114,14 +134,22 @@ function usePrecificacao() {
 
         // Ingredientes desta preparação
         const ings = (prepComps||[]).filter(pc => pc.preparacao_id === comp.preparacao_id).map(ing => {
-          const mp = mpMap[ing.materia_prima_id]
           const qtdIng = parseFloat(ing.quantidade)||0
           const bruto = parseFloat(prep.rendimento_estimado)||1
           const perda = parseFloat(prep.perda_percentual)||0
           const rendLiq = bruto*(1-perda/100)
           const qtdPorUnidade = (qtdIng/rendLiq)*qtdCrua
+
+          if (ing.sub_preparacao_id) {
+            // Sub-preparação
+            const subPrep = prepMap[ing.sub_preparacao_id]
+            const custoPorGSub = custoPrepPorG[ing.sub_preparacao_id] || 0
+            const custo = qtdPorUnidade * custoPorGSub
+            return { nome: ing.ingrediente, mp: null, mpId: null, subPrep: subPrep?.nome, qtd: qtdPorUnidade, unidade: ing.unidade, custo, isSubPrep: true }
+          }
+          const mp = mpMap[ing.materia_prima_id]
           const custo = qtdPorUnidade * (parseFloat(mp?.custo_unitario)||0)
-          return { nome: ing.ingrediente, mp: mp?.nome, mpId: ing.materia_prima_id, qtd: qtdPorUnidade, unidade: ing.unidade, custo }
+          return { nome: ing.ingrediente, mp: mp?.nome, mpId: ing.materia_prima_id, qtd: qtdPorUnidade, unidade: ing.unidade, custo, isSubPrep: false }
         })
 
         return {
@@ -268,7 +296,9 @@ function FichaCusto({ data, incluirOverhead }) {
                                     <td style={{padding:'5px 14px'}}>{ing.nome}</td>
                                     <td style={{padding:'5px 10px',textAlign:'right',color:'var(--gray-500)'}}>{fmt(ing.qtd,3)}{ing.unidade}</td>
                                     <td style={{padding:'5px 10px',textAlign:'right',color:'var(--gray-500)'}}>
-                                      {ing.mp ? fmtR((data.mpMap?.[ing.mpId]?.custo_unitario)||0)+`/${ing.unidade}` : '—'}
+                                      {ing.isSubPrep
+                                        ? <span style={{color:'var(--purple)',fontStyle:'italic',fontSize:11}}>🧪 {ing.subPrep}</span>
+                                        : ing.mp ? fmtR((data.mpMap?.[ing.mpId]?.custo_unitario)||0)+`/${ing.unidade}` : '—'}
                                     </td>
                                     <td style={{padding:'5px 10px',textAlign:'right',fontWeight:600,color:ing.custo>0?'var(--gray-700)':'var(--gray-300)'}}>
                                       {ing.custo>0 ? fmtR(ing.custo) : '—'}
