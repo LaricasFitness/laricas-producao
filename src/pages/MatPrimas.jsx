@@ -1199,6 +1199,28 @@ function CustoPreparacoes() {
 
     const mpMap = {}
     for (const m of (mps||[])) mpMap[m.id] = m
+    const prepMap = {}
+    for (const p of (preps||[])) prepMap[p.id] = p
+
+    // Custo por g recursivo (suporta sub-preparações)
+    const cache = {}
+    function custoPorG(prepId, vis = new Set()) {
+      if (cache[prepId] !== undefined) return cache[prepId]
+      if (vis.has(prepId)) return 0
+      const v = new Set([...vis, prepId])
+      const prep = prepMap[prepId]
+      if (!prep) return 0
+      const ings = (comps||[]).filter(c => c.preparacao_id === prepId)
+      const custo = ings.reduce((s, ing) => {
+        if (ing.sub_preparacao_id) return s + (parseFloat(ing.quantidade)||0) * custoPorG(ing.sub_preparacao_id, v)
+        const mp = ing.materias_primas || mpMap[ing.materia_prima_id]
+        return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp?.custo_unitario)||0)
+      }, 0)
+      const rendLiq = (parseFloat(prep.rendimento_estimado)||1) * (1 - (parseFloat(prep.perda_percentual)||0)/100)
+      cache[prepId] = rendLiq > 0 ? custo/rendLiq : 0
+      return cache[prepId]
+    }
+    for (const p of (preps||[])) custoPorG(p.id)
 
     const resultado = (preps||[]).map(prep => {
       const ings = (comps||[]).filter(c => c.preparacao_id === prep.id)
@@ -1209,18 +1231,31 @@ function CustoPreparacoes() {
       let custoReceita = 0
       let semPreco = 0
       const detalhes = ings.map(ing => {
-        const mp = ing.materias_primas || mpMap[ing.materia_prima_id]
-        const custo_unitario = parseFloat(mp?.custo_unitario)||0
+        let custo_unitario = 0
+        let temMP = false
+        let isSubPrep = false
+        let subPrepNome = null
+
+        if (ing.sub_preparacao_id) {
+          custo_unitario = custoPorG(ing.sub_preparacao_id)
+          isSubPrep = true
+          subPrepNome = prepMap[ing.sub_preparacao_id]?.nome || '—'
+          temMP = true // tem vínculo (sub-prep)
+        } else {
+          const mp = ing.materias_primas || mpMap[ing.materia_prima_id]
+          custo_unitario = parseFloat(mp?.custo_unitario)||0
+          temMP = !!ing.materia_prima_id
+          if (ing.materia_prima_id && custo_unitario === 0) semPreco++
+          if (!ing.materia_prima_id && !ing.sub_preparacao_id) semPreco++
+        }
+
         const qtd = parseFloat(ing.quantidade)||0
         const custo = custo_unitario * qtd
-        if (ing.materia_prima_id && custo_unitario === 0) semPreco++
-        if (!ing.materia_prima_id) semPreco++
         custoReceita += custo
-        return { nome: ing.ingrediente, qtd, unidade: ing.unidade, custo_unitario, custo, temMP: !!ing.materia_prima_id }
+        return { nome: ing.ingrediente, qtd, unidade: ing.unidade, custo_unitario, custo, temMP, isSubPrep, subPrepNome }
       }).sort((a,b) => b.custo - a.custo)
 
       const custoG = rendLiq > 0 ? custoReceita / rendLiq : 0
-
       return { prep, ings: detalhes, rendBruto, rendLiq, custoReceita, custoG, semPreco }
     })
 
@@ -1339,7 +1374,10 @@ function CustoPreparacoes() {
                                   {Number(ing.qtd).toLocaleString('pt-BR',{maximumFractionDigits:2})} {ing.unidade}
                                 </td>
                                 <td style={{padding:'6px 10px',textAlign:'right',color:'var(--gray-500)'}}>
-                                  {ing.custo_unitario > 0 ? `${fmtR(ing.custo_unitario)}/${ing.unidade}` : <span style={{color:'var(--warning)'}}>sem preço</span>}
+                                  {ing.isSubPrep
+                                    ? <span style={{color:'var(--purple)',fontStyle:'italic',fontSize:11}}>🧪 {ing.subPrepNome}</span>
+                                    : ing.custo_unitario > 0 ? `${fmtR(ing.custo_unitario)}/${ing.unidade}` : <span style={{color:'var(--warning)'}}>sem preço</span>
+                                  }
                                 </td>
                                 <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700,color:ing.custo>0?'var(--purple)':'var(--gray-300)'}}>
                                   {ing.custo > 0 ? fmtR(ing.custo) : '—'}
