@@ -922,10 +922,12 @@ export default function MatPrimas() {
         <button className={`tab${sub==='situacao'?' active':''}`} onClick={()=>setSub('situacao')}>📊 Situação</button>
         <button className={`tab${sub==='historico'?' active':''}`} onClick={()=>setSub('historico')}>📦 Compras</button>
         <button className={`tab${sub==='evolucao'?' active':''}`} onClick={()=>setSub('evolucao')}>📈 Evolução de Preços</button>
+        <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
       </div>
-      {sub==='situacao'  && <DashMP />}
-      {sub==='historico' && <HistoricoCompras />}
-      {sub==='evolucao'  && <EvolucaoPrecos />}
+      {sub==='situacao'   && <DashMP />}
+      {sub==='historico'  && <HistoricoCompras />}
+      {sub==='evolucao'   && <EvolucaoPrecos />}
+      {sub==='custo_prep' && <CustoPreparacoes />}
     </>
   )
 }
@@ -1176,6 +1178,208 @@ function EvolucaoPrecos() {
           })
         )
       )}
+    </div>
+  )
+}
+
+// ── Custo de Preparações ──────────────────────────────────────────────────────
+function CustoPreparacoes() {
+  const [data, setData] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expandido, setExpandido] = useState(null)
+  const [filtro, setFiltro] = useState('')
+
+  async function load() {
+    setLoading(true)
+    const [{ data: preps }, { data: comps }, { data: mps }] = await Promise.all([
+      supabase.from('preparacoes').select('*').eq('ativo', true).order('tipo').order('nome'),
+      supabase.from('preparacao_composicao').select('*, materias_primas(id,nome,custo_unitario,unidade)'),
+      supabase.from('materias_primas').select('id,nome,custo_unitario,unidade').eq('ativo', true),
+    ])
+
+    const mpMap = {}
+    for (const m of (mps||[])) mpMap[m.id] = m
+
+    const resultado = (preps||[]).map(prep => {
+      const ings = (comps||[]).filter(c => c.preparacao_id === prep.id)
+      const rendBruto = ings.reduce((s,i) => s + (parseFloat(i.quantidade)||0), 0)
+      const perda = parseFloat(prep.perda_percentual)||0
+      const rendLiq = rendBruto * (1 - perda/100)
+
+      let custoReceita = 0
+      let semPreco = 0
+      const detalhes = ings.map(ing => {
+        const mp = ing.materias_primas || mpMap[ing.materia_prima_id]
+        const custo_unitario = parseFloat(mp?.custo_unitario)||0
+        const qtd = parseFloat(ing.quantidade)||0
+        const custo = custo_unitario * qtd
+        if (ing.materia_prima_id && custo_unitario === 0) semPreco++
+        if (!ing.materia_prima_id) semPreco++
+        custoReceita += custo
+        return { nome: ing.ingrediente, qtd, unidade: ing.unidade, custo_unitario, custo, temMP: !!ing.materia_prima_id }
+      }).sort((a,b) => b.custo - a.custo)
+
+      const custoG = rendLiq > 0 ? custoReceita / rendLiq : 0
+
+      return { prep, ings: detalhes, rendBruto, rendLiq, custoReceita, custoG, semPreco }
+    })
+
+    setData(resultado)
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const TIPO_ICON = { massa:'🍞', recheio:'🥄', creme:'🍮', cobertura:'🍫', cha:'🍵', outro:'📦' }
+  const filtrados = data.filter(d => !filtro || d.prep.nome.toLowerCase().includes(filtro.toLowerCase()))
+
+  // KPIs
+  const comCusto = data.filter(d => d.custoReceita > 0).length
+  const semDados = data.filter(d => d.semPreco > 0).length
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* KPIs */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+        {[
+          {label:'Preparações calculadas',valor:comCusto,sub:`de ${data.length} preparações`,cor:'var(--ok)'},
+          {label:'Com dados incompletos',valor:semDados,sub:'MPs sem preço ou não vinculadas',cor:semDados>0?'var(--warning)':'var(--ok)'},
+          {label:'Total de preparações',valor:data.length,sub:'massas, recheios, cremes, coberturas',cor:'var(--purple)'},
+        ].map(k=>(
+          <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+            <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.04em'}}>{k.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+            <div style={{fontSize:11,color:'var(--gray-400)'}}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabela */}
+      <div className="card">
+        <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
+          <div style={{fontWeight:800,fontSize:15}}>🧪 Custo por Preparação</div>
+          <div style={{flex:1}}/>
+          <input className="form-input" placeholder="Filtrar..." value={filtro}
+            onChange={e=>setFiltro(e.target.value)} style={{width:200,fontSize:13}}/>
+          <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+        </div>
+
+        {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+          <div style={{display:'flex',flexDirection:'column'}}>
+            {filtrados.map((d,i) => {
+              const exp = expandido === d.prep.id
+              const temCusto = d.custoReceita > 0
+              return (
+                <div key={d.prep.id} style={{borderTop:i>0?'1px solid var(--gray-100)':undefined}}>
+                  <div
+                    onClick={() => setExpandido(exp ? null : d.prep.id)}
+                    style={{
+                      padding:'11px 20px',
+                      display:'grid',
+                      gridTemplateColumns:'28px 1fr 130px 130px 130px 80px',
+                      gap:10, alignItems:'center',
+                      background:i%2===0?'#fff':'#fafafa',
+                      cursor:'pointer',
+                    }}>
+                    <div style={{fontSize:16}}>{TIPO_ICON[d.prep.tipo]||'📦'}</div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13}}>{d.prep.nome}</div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>{d.prep.tipo} · {d.ings.length} ingredientes</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Custo/receita</div>
+                      <div style={{fontWeight:800,color:temCusto?'var(--purple)':'var(--gray-300)',fontSize:14}}>
+                        {temCusto ? fmtR(d.custoReceita) : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Rend. líquido</div>
+                      <div style={{fontWeight:600}}>
+                        {d.rendLiq > 0 ? `${Number(d.rendLiq).toLocaleString('pt-BR',{maximumFractionDigits:1})} ${d.prep.unidade_rendimento}` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>
+                        Custo/{d.prep.unidade_rendimento}
+                      </div>
+                      <div style={{fontWeight:800,color:temCusto?'var(--ok)':'var(--gray-300)',fontSize:14}}>
+                        {temCusto && d.custoG > 0 ? fmtR(d.custoG) : '—'}
+                      </div>
+                    </div>
+                    <div style={{textAlign:'right'}}>
+                      {d.semPreco > 0 && (
+                        <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,background:'#fffbf0',color:'var(--warning)',fontWeight:700,border:'1px solid var(--warning)'}}>
+                          ⚠️ {d.semPreco} sem preço
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Detalhe ingredientes */}
+                  {exp && (
+                    <div style={{background:'#f8f5ff',borderTop:'1px solid var(--gray-100)',padding:'0 20px 14px'}}>
+                      <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,marginTop:10}}>
+                        <thead>
+                          <tr style={{background:'var(--gray-50)'}}>
+                            <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Ingrediente</th>
+                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Qtd/receita</th>
+                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Preço/un</th>
+                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--purple)'}}>Custo</th>
+                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>% do total</th>
+                            <th style={{padding:'6px 10px',textAlign:'center',fontWeight:600,color:'var(--gray-500)'}}>MP</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {d.ings.map((ing,ii) => {
+                            const pct = d.custoReceita > 0 ? (ing.custo/d.custoReceita*100) : 0
+                            return (
+                              <tr key={ii} style={{borderTop:'1px solid var(--gray-100)',background:ii%2===0?'#fff':'#f8f5ff'}}>
+                                <td style={{padding:'6px 12px',fontWeight:600}}>{ing.nome}</td>
+                                <td style={{padding:'6px 10px',textAlign:'right',color:'var(--gray-500)'}}>
+                                  {Number(ing.qtd).toLocaleString('pt-BR',{maximumFractionDigits:2})} {ing.unidade}
+                                </td>
+                                <td style={{padding:'6px 10px',textAlign:'right',color:'var(--gray-500)'}}>
+                                  {ing.custo_unitario > 0 ? `${fmtR(ing.custo_unitario)}/${ing.unidade}` : <span style={{color:'var(--warning)'}}>sem preço</span>}
+                                </td>
+                                <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700,color:ing.custo>0?'var(--purple)':'var(--gray-300)'}}>
+                                  {ing.custo > 0 ? fmtR(ing.custo) : '—'}
+                                </td>
+                                <td style={{padding:'6px 10px',textAlign:'right'}}>
+                                  {pct > 0 && (
+                                    <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
+                                      <div style={{width:40,height:6,background:'var(--gray-100)',borderRadius:3}}>
+                                        <div style={{height:'100%',width:`${Math.min(100,pct)}%`,background:'var(--purple)',borderRadius:3}}/>
+                                      </div>
+                                      <span style={{fontSize:11,color:'var(--gray-500)',minWidth:32,textAlign:'right'}}>{pct.toFixed(0)}%</span>
+                                    </div>
+                                  )}
+                                </td>
+                                <td style={{padding:'6px 10px',textAlign:'center',fontSize:12}}>
+                                  {ing.temMP ? <span style={{color:'var(--ok)'}}>✓</span> : <span style={{color:'var(--warning)'}}>—</span>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--purple-pale)'}}>
+                            <td colSpan={3} style={{padding:'8px 12px',fontWeight:800}}>Total da receita</td>
+                            <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)',fontSize:14}}>{fmtR(d.custoReceita)}</td>
+                            <td style={{padding:'8px 10px',textAlign:'right',fontSize:11,color:'var(--gray-500)'}}>
+                              {fmtR(d.custoG)}/{d.prep.unidade_rendimento} líquido
+                            </td>
+                            <td/>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
