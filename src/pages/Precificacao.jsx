@@ -44,8 +44,7 @@ function usePrecificacao() {
         // Volume: soma de produção dos últimos 30 dias ponderada por equivalência de overhead
         supabase.from('producao_diaria')
           .select('quantidade, embalagem_id, embalagens(equivalencia_overhead)')
-          .eq('tipo','rotulo')
-          .gte('data', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
+          .gte('data_producao', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
           .then(r=>r).catch(()=>({data:[]})),
       ])
 
