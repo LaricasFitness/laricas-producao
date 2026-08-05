@@ -923,11 +923,13 @@ export default function MatPrimas() {
         <button className={`tab${sub==='historico'?' active':''}`} onClick={()=>setSub('historico')}>📦 Compras</button>
         <button className={`tab${sub==='evolucao'?' active':''}`} onClick={()=>setSub('evolucao')}>📈 Evolução de Preços</button>
         <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
+        <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
       </div>
       {sub==='situacao'   && <DashMP />}
       {sub==='historico'  && <HistoricoCompras />}
       {sub==='evolucao'   && <EvolucaoPrecos />}
       {sub==='custo_prep' && <CustoPreparacoes />}
+      {sub==='overhead'   && <OverheadMensal />}
     </>
   )
 }
@@ -1418,6 +1420,194 @@ function CustoPreparacoes() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Overhead Mensal ───────────────────────────────────────────────────────────
+function OverheadMensal() {
+  const [itens, setItens] = useState([])
+  const [rotulos, setRotulos] = useState([])
+  const [producao, setProducao] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
+
+  async function load() {
+    setLoading(true)
+    const mesIni = mes + '-01'
+    const mesFim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
+
+    const [{ data: overheadData }, { data: rotulosData }, { data: prodData }] = await Promise.all([
+      supabase.from('overhead_producao').select('*').eq('ativo',true).order('categoria').order('ordem'),
+      supabase.from('embalagens').select('id,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
+      supabase.from('producao_diaria')
+        .select('quantidade, embalagem_id')
+        .gte('data_producao', mesIni)
+        .lte('data_producao', mesFim)
+        .not('registrado_por', 'ilike', '%(auto-embalagem)%'),
+    ])
+
+    // Mapa de equivalência
+    const equivMap = {}
+    for (const r of (rotulosData||[])) equivMap[r.id] = parseFloat(r.equivalencia_overhead)||1
+    const rotuloIds = new Set(Object.keys(equivMap))
+
+    // Volume do mês (só rótulos, com equivalência)
+    const volumeMes = (prodData||[]).reduce((s,r) => {
+      if (!rotuloIds.has(r.embalagem_id)) return s
+      return s + (parseFloat(r.quantidade)||0) * (equivMap[r.embalagem_id]||1)
+    }, 0)
+
+    setItens(overheadData||[])
+    setRotulos(rotulosData||[])
+    setProducao(prodData||[])
+    setLoading(false)
+
+    return { volumeMes, overheadData }
+  }
+
+  const [volumeMes, setVolumeMes] = useState(0)
+
+  useEffect(() => {
+    async function run() {
+      setLoading(true)
+      const mesIni = mes + '-01'
+      const mesFim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
+
+      const [{ data: overheadData }, { data: rotulosData }, { data: prodData }] = await Promise.all([
+        supabase.from('overhead_producao').select('*').eq('ativo',true).order('categoria').order('ordem'),
+        supabase.from('embalagens').select('id,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
+        supabase.from('producao_diaria')
+          .select('quantidade, embalagem_id')
+          .gte('data_producao', mesIni)
+          .lte('data_producao', mesFim)
+          .not('registrado_por', 'ilike', '%(auto-embalagem)%'),
+      ])
+
+      const equivMap = {}
+      for (const r of (rotulosData||[])) equivMap[r.id] = parseFloat(r.equivalencia_overhead)||1
+      const rotuloIds = new Set(Object.keys(equivMap))
+
+      const vol = (prodData||[]).reduce((s,r) => {
+        if (!rotuloIds.has(r.embalagem_id)) return s
+        return s + (parseFloat(r.quantidade)||0) * (equivMap[r.embalagem_id]||1)
+      }, 0)
+
+      setItens(overheadData||[])
+      setVolumeMes(vol)
+      setLoading(false)
+    }
+    run()
+  }, [mes])
+
+  const totalOverhead = itens.reduce((s,it) => s + (parseFloat(it.valor_mensal)||0), 0)
+  const overheadPorUn = volumeMes > 0 ? totalOverhead / volumeMes : 0
+
+  // Agrupa por categoria
+  const porCat = {}
+  for (const it of itens) {
+    if (!porCat[it.categoria]) porCat[it.categoria] = []
+    porCat[it.categoria].push(it)
+  }
+
+  const labelMes = new Date(mes + '-15').toLocaleDateString('pt-BR', { month:'long', year:'numeric' })
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* Filtro mês */}
+      <div className="card" style={{padding:'12px 20px',display:'flex',gap:12,alignItems:'center'}}>
+        <div style={{fontWeight:800,fontSize:15}}>🏭 Análise de Overhead Mensal</div>
+        <div style={{flex:1}}/>
+        <input type="month" className="form-input" value={mes}
+          onChange={e=>setMes(e.target.value)} style={{width:180,fontSize:13}}/>
+      </div>
+
+      {/* KPIs */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
+        {[
+          { label:'Total overhead/mês', valor: fmtR(totalOverhead), sub:'cadastrado em Admin → Overhead', cor:'var(--purple)' },
+          { label:'Volume produzido', valor: `${Math.round(volumeMes).toLocaleString('pt-BR')} un`, sub:'equivalentes no mês', cor:'var(--gray-700)' },
+          { label:'Overhead/unidade', valor: volumeMes>0 ? fmtR(overheadPorUn) : '—', sub:'custo de produção por unidade equiv.', cor:'var(--ok)' },
+          { label:'% sobre faturamento', valor: '—', sub:'configure preço médio para calcular', cor:'var(--gray-400)' },
+        ].map(k=>(
+          <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+            <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.04em'}}>{k.label}</div>
+            <div style={{fontSize:18,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+            <div style={{fontSize:10,color:'var(--gray-400)'}}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Detalhamento por categoria */}
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <div className="card">
+          <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:800,fontSize:14,color:'var(--purple)',textTransform:'capitalize'}}>
+            {labelMes}
+          </div>
+          {Object.entries(porCat).map(([cat, catItens]) => {
+            const totalCat = catItens.reduce((s,it)=>s+(parseFloat(it.valor_mensal)||0),0)
+            const pctTotal = totalOverhead > 0 ? totalCat/totalOverhead*100 : 0
+            return (
+              <div key={cat}>
+                {/* Header categoria */}
+                <div style={{padding:'8px 20px',background:'var(--gray-50)',borderTop:'1px solid var(--gray-200)',
+                  display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div style={{fontWeight:800,fontSize:12,color:'var(--gray-600)',textTransform:'uppercase',letterSpacing:'.05em'}}>{cat}</div>
+                  <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                    <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                      {pctTotal.toFixed(1)}% do total
+                    </div>
+                    <div style={{fontWeight:800,fontSize:13,color:'var(--purple)'}}>
+                      {fmtR(totalCat)}
+                    </div>
+                  </div>
+                </div>
+                {/* Barra proporcional */}
+                <div style={{height:3,background:'var(--gray-100)',margin:'0 20px'}}>
+                  <div style={{height:'100%',width:`${pctTotal}%`,background:'var(--purple)',borderRadius:2}}/>
+                </div>
+                {/* Itens */}
+                {catItens.map((it,i) => {
+                  const pctIt = totalOverhead > 0 ? (parseFloat(it.valor_mensal)||0)/totalOverhead*100 : 0
+                  const overheadIt = volumeMes > 0 ? (parseFloat(it.valor_mensal)||0)/volumeMes : 0
+                  return (
+                    <div key={it.id} style={{
+                      padding:'9px 20px 9px 32px',
+                      borderTop:'1px solid var(--gray-100)',
+                      display:'grid',
+                      gridTemplateColumns:'1fr 100px 100px 80px',
+                      gap:12, alignItems:'center',
+                      background:i%2===0?'#fff':'#fafafa',
+                    }}>
+                      <div style={{fontWeight:600,fontSize:13}}>{it.descricao}</div>
+                      <div style={{textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                        {fmtR(parseFloat(it.valor_mensal)||0)}
+                      </div>
+                      <div style={{textAlign:'right',fontSize:12,color:'var(--gray-500)'}}>
+                        {volumeMes>0 ? `${fmtR(overheadIt)}/un` : '—'}
+                      </div>
+                      <div style={{textAlign:'right',fontSize:11,color:'var(--gray-400)'}}>
+                        {pctIt.toFixed(1)}%
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
+
+          {/* Total geral */}
+          <div style={{padding:'12px 20px',borderTop:'2px solid var(--gray-200)',background:'var(--purple)',
+            display:'grid',gridTemplateColumns:'1fr 100px 100px 80px',gap:12,alignItems:'center'}}>
+            <div style={{fontWeight:800,color:'#fff',fontSize:14}}>Total Overhead</div>
+            <div style={{textAlign:'right',fontWeight:800,color:'var(--gold)',fontSize:16}}>{fmtR(totalOverhead)}</div>
+            <div style={{textAlign:'right',fontWeight:700,color:'rgba(255,255,255,.8)',fontSize:13}}>
+              {volumeMes>0 ? `${fmtR(overheadPorUn)}/un` : '—'}
+            </div>
+            <div style={{textAlign:'right',color:'rgba(255,255,255,.6)',fontSize:11}}>100%</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
