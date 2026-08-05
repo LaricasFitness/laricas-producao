@@ -30,6 +30,8 @@ function usePrecificacao() {
         { data: mps },
         canaisResult,
         { data: precosSalvos },
+        overheadResult,
+        volumeResult,
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
@@ -38,7 +40,19 @@ function usePrecificacao() {
         supabase.from('materias_primas').select('id,nome,unidade,custo_unitario'),
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
+        supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
+        // Volume: soma de produção dos últimos 30 dias (só rótulos)
+        supabase.from('producao_diaria')
+          .select('quantidade')
+          .eq('tipo','rotulo')
+          .gte('data', new Date(Date.now()-30*24*60*60*1000).toISOString().slice(0,10))
+          .then(r=>r).catch(()=>({data:[]})),
       ])
+
+      // Overhead por unidade
+      const totalOverhead = (overheadResult?.data||[]).reduce((s,r)=>s+(parseFloat(r.valor_mensal)||0),0)
+      const volumeMensal = (volumeResult?.data||[]).reduce((s,r)=>s+(parseFloat(r.quantidade)||0),0)
+      const overheadPorUnidade = volumeMensal > 0 ? totalOverhead / volumeMensal : 0
 
       const canaisDB = canaisResult?.data || []
 
@@ -131,7 +145,7 @@ function usePrecificacao() {
       return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
-      setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT })
+      setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade })
     } catch(err) {
       console.error('Erro ao carregar precificação:', err)
     }
@@ -143,7 +157,11 @@ function usePrecificacao() {
 }
 
 // ── Ficha de Custo ─────────────────────────────────────────────────────────────
-function FichaCusto({ data }) {
+function cmvEfetivo(cmvTotal, incluirOverhead, overheadPorUnidade) {
+  return incluirOverhead ? cmvTotal + (overheadPorUnidade||0) : cmvTotal
+}
+
+function FichaCusto({ data, incluirOverhead }) {
   const [busca, setBusca] = useState('')
   const [cat, setCat] = useState('Todas')
   const [expandido, setExpandido] = useState(null)
@@ -194,6 +212,7 @@ function FichaCusto({ data }) {
           <tbody>
             {filtrados.map((p,i) => {
               const exp = expandido === p.emb.codigo
+              const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade)
               const temCusto = p.cmvTotal > 0
               return (<>
                 <tr key={p.emb.codigo}
@@ -210,7 +229,7 @@ function FichaCusto({ data }) {
                     {p.custoRotulo>0 ? fmtR(p.custoRotulo) : '—'}
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:temCusto?'var(--purple)':'var(--gray-300)'}}>
-                    {temCusto ? fmtR(p.cmvTotal) : p.semFicha ? '⚠️ sem ficha' : '—'}
+                    {temCusto ? fmtR(cmvEf) : p.semFicha ? '⚠️ sem ficha' : '—'}
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'center'}}>
                     <span style={{fontSize:11,background:'var(--purple-pale)',color:'var(--purple)',padding:'2px 8px',borderRadius:10,fontWeight:700}}>
@@ -266,9 +285,15 @@ function FichaCusto({ data }) {
                             <span style={{fontWeight:700}}>{fmtR(p.custoRotulo)}</span>
                           </div>
                         )}
+                        {incluirOverhead && data.overheadPorUnidade > 0 && (
+                          <div style={{padding:'8px 14px',border:'1px solid var(--gray-200)',borderRadius:8,display:'flex',justifyContent:'space-between',fontSize:13,background:'#f0faf0'}}>
+                            <span>🏭 Overhead de produção</span>
+                            <span style={{fontWeight:700,color:'var(--ok)'}}>{fmtR(data.overheadPorUnidade)}</span>
+                          </div>
+                        )}
                         <div style={{padding:'10px 14px',background:'var(--purple)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
-                          <span>CMV Total por unidade</span>
-                          <span style={{fontSize:16}}>{fmtR(p.cmvTotal)}</span>
+                          <span>CMV {incluirOverhead ? 'Total' : 'Direto'} por unidade</span>
+                          <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade))}</span>
                         </div>
                       </div>
                     </td>
@@ -284,7 +309,7 @@ function FichaCusto({ data }) {
 }
 
 // ── Simulador ─────────────────────────────────────────────────────────────────
-function Simulador({ data, reload }) {
+function Simulador({ data, reload, incluirOverhead }) {
   const [skuSel, setSkuSel] = useState('')
   const [markup, setMarkup] = useState(3)
   const [precoManual, setPrecoManual] = useState('')
@@ -294,7 +319,7 @@ function Simulador({ data, reload }) {
   const canais = data.canais || CANAIS_DEFAULT
 
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
-  const cmv = prod?.cmvTotal || 0
+  const cmv = cmvEfetivo(prod?.cmvTotal || 0, incluirOverhead, data.overheadPorUnidade)
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
 
   // Carrega preços salvos ao selecionar produto
@@ -455,7 +480,7 @@ function Simulador({ data, reload }) {
 }
 
 // ── Ranking de Margem ─────────────────────────────────────────────────────────
-function RankingMargem({ data, reload }) {
+function RankingMargem({ data, reload, incluirOverhead }) {
   const [precoRef, setPrecoRef] = useState({})
   const [canalSel, setCanalSel] = useState('ecommerce')
   const [saving, setSaving] = useState(false)
@@ -489,11 +514,12 @@ function RankingMargem({ data, reload }) {
   }
 
   const comCusto = data.produtos.filter(p=>p.cmvTotal>0).map(p => {
-    const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal?.[canalSel] || p.cmvTotal*3
+    const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade)
+    const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal?.[canalSel] || cmvEf*3
     const recLiq = preco*(1-canal.totalPct)-canal.totalFixo
-    const mc = recLiq - p.cmvTotal
+    const mc = recLiq - cmvEf
     const mgPct = recLiq>0 ? mc/recLiq : 0
-    return { ...p, preco, recLiq, mc, mgPct }
+    return { ...p, cmvEf, preco, recLiq, mc, mgPct }
   }).sort((a,b)=>b.mgPct-a.mgPct)
 
   const semCusto = data.produtos.filter(p=>p.cmvTotal===0)
@@ -524,7 +550,7 @@ function RankingMargem({ data, reload }) {
             <tr style={{background:'var(--gray-50)',borderBottom:'2px solid var(--gray-200)'}}>
               <th style={{padding:'10px 10px',textAlign:'center',width:36}}>#</th>
               <th style={{padding:'10px 14px',textAlign:'left'}}>Produto</th>
-              <th style={{padding:'10px 10px',textAlign:'right'}}>CMV</th>
+              <th style={{padding:'10px 10px',textAlign:'right'}}>CMV {incluirOverhead?'Total':'Direto'}</th>
               <th style={{padding:'10px 10px',textAlign:'right'}}>Preço</th>
               <th style={{padding:'10px 10px',textAlign:'right'}}>Receita líq.</th>
               <th style={{padding:'10px 10px',textAlign:'right',color:'var(--purple)'}}>MC unitária</th>
@@ -542,10 +568,10 @@ function RankingMargem({ data, reload }) {
                     <div style={{fontWeight:700}}>{p.emb.nome}</div>
                     <div style={{fontSize:11,color:'var(--gray-400)'}}>{p.emb.categoria}</div>
                   </td>
-                  <td style={{padding:'9px 10px',textAlign:'right',color:'var(--gray-500)'}}>{fmtR(p.cmvTotal)}</td>
+                  <td style={{padding:'9px 10px',textAlign:'right',color:'var(--gray-500)'}}>{fmtR(p.cmvEf)}</td>
                   <td style={{padding:'6px 10px',textAlign:'right'}}>
                     <input type="number" value={precoRef[p.emb.codigo]||p.precosCanal[canalSel]||''}
-                      placeholder={fmtR(p.cmvTotal*3)}
+                      placeholder={fmtR(p.cmvEf*3)}
                       onChange={e=>setPrecoRef(pr=>({...pr,[p.emb.codigo]:e.target.value}))}
                       style={{width:80,padding:'3px 6px',fontSize:12,border:'1px solid var(--gray-200)',borderRadius:5,textAlign:'right'}} />
                   </td>
@@ -577,6 +603,7 @@ function RankingMargem({ data, reload }) {
 // ── Componente principal ───────────────────────────────────────────────────────
 export default function Precificacao() {
   const [aba, setAba] = useState('ficha')
+  const [incluirOverhead, setIncluirOverhead] = useState(false)
   const { data, loading, reload } = usePrecificacao()
 
   return (
@@ -594,9 +621,46 @@ export default function Precificacao() {
         </div>
       ) : !data ? null : (
         <>
-          {aba==='ficha'     && <FichaCusto data={data} />}
-          {aba==='simulador' && <Simulador data={data} reload={reload} />}
-          {aba==='ranking'   && <RankingMargem data={data} reload={reload} />}
+          {/* Banner de overhead */}
+          <div style={{
+            display:'flex', alignItems:'center', gap:12, padding:'10px 16px',
+            background: incluirOverhead ? '#f0faf0' : 'var(--gray-50)',
+            border: `1.5px solid ${incluirOverhead ? 'var(--ok)' : 'var(--gray-200)'}`,
+            borderRadius:8,
+          }}>
+            <button
+              onClick={() => setIncluirOverhead(p=>!p)}
+              style={{
+                width:48, height:26, borderRadius:13, border:'none', cursor:'pointer',
+                background: incluirOverhead ? 'var(--ok)' : 'var(--gray-300)',
+                position:'relative', transition:'background .2s', flexShrink:0,
+              }}>
+              <span style={{
+                position:'absolute', top:3,
+                left: incluirOverhead ? 24 : 4,
+                width:20, height:20, borderRadius:'50%',
+                background:'#fff', transition:'left .2s',
+                boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+              }}/>
+            </button>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700, fontSize:13, color: incluirOverhead ? 'var(--ok)' : 'var(--gray-600)'}}>
+                {incluirOverhead ? '✅ CMV Total (com overhead)' : '📦 CMV Direto (sem overhead)'}
+              </div>
+              <div style={{fontSize:11, color:'var(--gray-400)', marginTop:1}}>
+                {data.overheadPorUnidade > 0
+                  ? `Overhead: ${fmtR(data.overheadPorUnidade)}/unidade · R$${fmt(data.totalOverhead,0)}/mês ÷ ${Math.round(data.volumeMensal)} un produzidas (últimos 30d)`
+                  : data.totalOverhead > 0
+                    ? `⚠️ Overhead cadastrado (R$${fmt(data.totalOverhead,0)}/mês) mas sem produção registrada nos últimos 30 dias para calcular overhead/unidade`
+                    : 'Cadastre itens de overhead em Admin → 🏭 Overhead para ativar'
+                }
+              </div>
+            </div>
+          </div>
+
+          {aba==='ficha'     && <FichaCusto data={data} incluirOverhead={incluirOverhead} />}
+          {aba==='simulador' && <Simulador data={data} reload={reload} incluirOverhead={incluirOverhead} />}
+          {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
         </>
       )}
     </>
