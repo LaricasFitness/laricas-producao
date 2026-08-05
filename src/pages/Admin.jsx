@@ -1157,6 +1157,190 @@ function AdminCanais() {
   )
 }
 
+// ── Overhead de Produção ──────────────────────────────────────────────────────
+const CATS_OVERHEAD = ['Mão de Obra Direta', 'Materiais de Apoio', 'Utilidades', 'Outros']
+
+function AdminOverhead() {
+  const [itens, setItens] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editando, setEditando] = useState(null) // id ou 'novo'
+  const [form, setForm] = useState({ categoria:'Mão de Obra Direta', descricao:'', valor_mensal:'' })
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('overhead_producao')
+      .select('*').eq('ativo',true).order('categoria').order('ordem').order('descricao')
+    setItens(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function salvar() {
+    if (!form.descricao.trim() || !form.valor_mensal) return
+    setSaving(true)
+    const payload = {
+      categoria: form.categoria,
+      descricao: form.descricao.trim(),
+      valor_mensal: parseFloat(form.valor_mensal)||0,
+      atualizado_em: new Date().toISOString(),
+    }
+    if (editando === 'novo') {
+      await supabase.from('overhead_producao').insert(payload)
+    } else {
+      await supabase.from('overhead_producao').update(payload).eq('id', editando)
+    }
+    setEditando(null)
+    setForm({ categoria:'Mão de Obra Direta', descricao:'', valor_mensal:'' })
+    setSaving(false)
+    load()
+  }
+
+  async function excluir(id, descricao) {
+    if (!window.confirm(`Excluir "${descricao}"?`)) return
+    await supabase.from('overhead_producao').update({ ativo: false }).eq('id', id)
+    load()
+  }
+
+  function abrirNovo() {
+    setForm({ categoria:'Mão de Obra Direta', descricao:'', valor_mensal:'' })
+    setEditando('novo')
+  }
+
+  function abrirEditar(item) {
+    setForm({ categoria: item.categoria, descricao: item.descricao, valor_mensal: item.valor_mensal })
+    setEditando(item.id)
+  }
+
+  // Agrupa por categoria
+  const porCat = {}
+  for (const it of itens) {
+    if (!porCat[it.categoria]) porCat[it.categoria] = []
+    porCat[it.categoria].push(it)
+  }
+
+  const totalMensal = itens.reduce((s,it) => s + (parseFloat(it.valor_mensal)||0), 0)
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* KPI */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+        {[
+          { label:'Total overhead/mês', valor: `R$ ${Number(totalMensal).toLocaleString('pt-BR',{minimumFractionDigits:2})}`, cor:'var(--purple)' },
+          { label:'Itens cadastrados', valor: itens.length, cor:'var(--gray-600)' },
+          { label:'Categorias', valor: Object.keys(porCat).length, cor:'var(--gray-600)' },
+        ].map(k=>(
+          <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+            <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
+            <div style={{fontSize:20,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:15}}>🏭 Overhead de Produção</div>
+            <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>
+              Custos mensais fixos rateados por unidade produzida
+            </div>
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={abrirNovo}><Plus size={13}/> Novo item</button>
+        </div>
+
+        {/* Form inline novo/editar */}
+        {editando && (
+          <div style={{padding:'14px 20px',background:'var(--purple-pale)',borderBottom:'1px solid var(--gray-200)'}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:'var(--purple)'}}>
+              {editando==='novo' ? '+ Novo item' : '✏️ Editando'}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'180px 1fr 130px auto',gap:8,alignItems:'end'}}>
+              <div>
+                <label style={{fontSize:11,color:'var(--gray-500)',display:'block',marginBottom:3}}>Categoria</label>
+                <select className="form-input" value={form.categoria} onChange={e=>setForm(p=>({...p,categoria:e.target.value}))} style={{fontSize:13}}>
+                  {CATS_OVERHEAD.map(c=><option key={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:'var(--gray-500)',display:'block',marginBottom:3}}>Descrição *</label>
+                <input className="form-input" value={form.descricao} onChange={e=>setForm(p=>({...p,descricao:e.target.value}))}
+                  placeholder="Ex: Virgínia (produção)" autoFocus style={{fontSize:13}}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:'var(--gray-500)',display:'block',marginBottom:3}}>Valor mensal (R$) *</label>
+                <input type="number" className="form-input" value={form.valor_mensal}
+                  onChange={e=>setForm(p=>({...p,valor_mensal:e.target.value}))}
+                  min={0} step={0.01} placeholder="0,00" style={{fontSize:13}}/>
+              </div>
+              <div style={{display:'flex',gap:6,paddingBottom:2}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setEditando(null)}>Cancelar</button>
+                <button className="btn btn-primary btn-sm" onClick={salvar}
+                  disabled={saving||!form.descricao.trim()||!form.valor_mensal}>
+                  {saving?<RefreshCw size={13} className="spin"/>:<Save size={13}/>} Salvar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+          <div>
+            {Object.entries(porCat).map(([cat, catItens]) => {
+              const totalCat = catItens.reduce((s,it)=>s+(parseFloat(it.valor_mensal)||0),0)
+              return (
+                <div key={cat}>
+                  {/* Header categoria */}
+                  <div style={{padding:'8px 20px',background:'var(--gray-50)',borderTop:'1px solid var(--gray-200)',
+                    display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div style={{fontWeight:800,fontSize:12,color:'var(--gray-600)',textTransform:'uppercase',letterSpacing:'.05em'}}>
+                      {cat}
+                    </div>
+                    <div style={{fontSize:12,fontWeight:700,color:'var(--purple)'}}>
+                      Subtotal: R$ {Number(totalCat).toLocaleString('pt-BR',{minimumFractionDigits:2})}
+                    </div>
+                  </div>
+                  {/* Itens */}
+                  {catItens.map((it,i) => (
+                    <div key={it.id} style={{
+                      padding:'10px 20px',borderTop:'1px solid var(--gray-100)',
+                      display:'flex',justifyContent:'space-between',alignItems:'center',
+                      background:i%2===0?'#fff':'#fafafa',
+                    }}>
+                      <div style={{fontWeight:600,fontSize:13}}>{it.descricao}</div>
+                      <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                        <div style={{fontWeight:800,color:'var(--purple)',fontSize:14,minWidth:100,textAlign:'right'}}>
+                          R$ {Number(it.valor_mensal).toLocaleString('pt-BR',{minimumFractionDigits:2})}
+                          <span style={{fontSize:10,color:'var(--gray-400)',fontWeight:400}}>/mês</span>
+                        </div>
+                        <div style={{display:'flex',gap:4}}>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>abrirEditar(it)}>
+                            <Pencil size={12}/>
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>excluir(it.id,it.descricao)}
+                            style={{color:'var(--danger)'}}>✕</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+
+            {/* Total geral */}
+            <div style={{padding:'12px 20px',borderTop:'2px solid var(--gray-200)',background:'var(--purple)',
+              display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontWeight:800,color:'#fff',fontSize:14}}>Total Overhead Mensal</div>
+              <div style={{fontWeight:800,color:'var(--gold)',fontSize:18}}>
+                R$ {Number(totalMensal).toLocaleString('pt-BR',{minimumFractionDigits:2})}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Configurações do Sistema ──────────────────────────────────────────────────
 function AdminSistema() {
   const [configs, setConfigs] = useState({})
@@ -1321,6 +1505,7 @@ export default function Admin() {
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
         <button className={`tab${tab === 'fichas_produtos' ? ' active' : ''}`} onClick={() => setTab('fichas_produtos')}>🧩 Composição Produtos</button>
         <button className={`tab${tab === 'canais' ? ' active' : ''}`} onClick={() => setTab('canais')}>🛒 Canais</button>
+        <button className={`tab${tab === 'overhead' ? ' active' : ''}`} onClick={() => setTab('overhead')}>🏭 Overhead</button>
         <button className={`tab${tab === 'sistema' ? ' active' : ''}`} onClick={() => setTab('sistema')}>🔧 Sistema</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
@@ -1335,8 +1520,9 @@ export default function Admin() {
 
       {tab === 'fichas_produtos' && <AdminComposicaoProdutos />}
 
-      {tab === 'canais'  && <AdminCanais />}
-      {tab === 'sistema' && <AdminSistema />}
+      {tab === 'canais'   && <AdminCanais />}
+      {tab === 'overhead' && <AdminOverhead />}
+      {tab === 'sistema'  && <AdminSistema />}
 
       {tab === 'embalagens' && <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
