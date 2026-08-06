@@ -365,6 +365,14 @@ export default function Producao() {
                     .from('materias_primas')
                     .update({ estoque_atual: Math.max(0, atual - consumoG), atualizado_em: new Date().toISOString() })
                     .eq('id', mpId)
+                  // Registra histórico de consumo
+                  await supabase.from('mp_consumos').insert({
+                    materia_prima_id: mpId,
+                    quantidade: consumoG,
+                    data_consumo: dataStr || new Date().toISOString().slice(0,10),
+                    origem: 'producao',
+                    descricao: `Baixa automática — produção de ${dataStr}`,
+                  })
                 }
               }
             }
