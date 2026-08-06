@@ -506,7 +506,7 @@ function AdminPreparacoes() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*)').order('tipo').order('nome')
+    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*, materias_primas(id,nome))').order('tipo').order('nome')
     setLista(data || [])
     setLoading(false)
   }
@@ -534,7 +534,8 @@ function AdminPreparacoes() {
               ingrediente: i.ingrediente,
               quantidade: parseFloat(i.quantidade) || 0,
               unidade: i.unidade || 'g',
-              materia_prima_id: i.materia_prima_id || null,
+              materia_prima_id: i.sub_preparacao_id ? null : (i.materia_prima_id || null),
+              sub_preparacao_id: i.sub_preparacao_id || null,
               ordem: idx + 1,
             }))
           )
@@ -556,7 +557,8 @@ function AdminPreparacoes() {
               ingrediente: i.ingrediente,
               quantidade: parseFloat(i.quantidade) || 0,
               unidade: i.unidade || 'g',
-              materia_prima_id: i.materia_prima_id || null,
+              materia_prima_id: i.sub_preparacao_id ? null : (i.materia_prima_id || null),
+              sub_preparacao_id: i.sub_preparacao_id || null,
               ordem: idx + 1,
             }))
           )
@@ -652,14 +654,20 @@ function AdminPreparacoes() {
 function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL }) {
   const [form, setForm] = useState({ ...prep })
   const [mps, setMps] = useState([])
+  const [prepsDisponiveis, setPrepsDisponiveis] = useState([])
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const setIng = (idx, k, v) => setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => n === idx ? { ...i, [k]: v } : i) }))
-  const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g', materia_prima_id: null }] }))
+  const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g', materia_prima_id: null, sub_preparacao_id: null }] }))
   const remIng = (idx) => setForm(p => ({ ...p, ingredientes: p.ingredientes.filter((_, n) => n !== idx) }))
 
   useEffect(() => {
-    supabase.from('materias_primas').select('id,nome,unidade,categoria').eq('ativo',true).order('categoria').order('nome')
-      .then(({ data }) => setMps(data||[]))
+    Promise.all([
+      supabase.from('materias_primas').select('id,nome,unidade,categoria').eq('ativo',true).order('categoria').order('nome'),
+      supabase.from('preparacoes').select('id,nome,tipo').eq('ativo',true).order('tipo').order('nome'),
+    ]).then(([{ data: mpsData }, { data: prepsData }]) => {
+      setMps(mpsData||[])
+      setPrepsDisponiveis(prepsData||[])
+    })
   }, [])
 
   // Rendimento bruto = soma dos ingredientes
@@ -749,8 +757,10 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
             )}
             {(form.ingredientes||[]).map((ing, idx) => {
               const mpVinculada = mps.find(m => m.id === ing.materia_prima_id)
+              const isSubPrep = !!ing.sub_preparacao_id
               return (
-                <div key={idx} style={{ marginBottom:8, border:'1px solid var(--gray-100)', borderRadius:6, padding:'8px 10px', background: ing.materia_prima_id ? '#f0faf0' : '#fff' }}>
+                <div key={idx} style={{ marginBottom:8, border:'1px solid var(--gray-100)', borderRadius:6, padding:'8px 10px',
+                  background: ing.sub_preparacao_id ? '#f0f0ff' : ing.materia_prima_id ? '#f0faf0' : '#fff' }}>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px auto', gap:6, marginBottom:6, alignItems:'center' }}>
                     <input className="form-input" placeholder="Nome do ingrediente" value={ing.ingrediente||''} onChange={e => setIng(idx,'ingrediente',e.target.value)} style={{ fontSize:13 }} />
                     <input type="number" className="form-input" placeholder="Qtd" value={ing.quantidade||''} onChange={e => setIng(idx,'quantidade',e.target.value)} style={{ fontSize:13 }} />
@@ -761,28 +771,73 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                     </select>
                     <button className="btn btn-ghost btn-sm" onClick={() => remIng(idx)} style={{ color:'var(--danger)' }}>✕</button>
                   </div>
-                  {/* Vínculo com MP */}
-                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <span style={{ fontSize:11, color:'var(--gray-400)', whiteSpace:'nowrap' }}>🔗 MP:</span>
-                    <select
-                      value={ing.materia_prima_id||''}
-                      onChange={e => setIng(idx,'materia_prima_id', e.target.value || null)}
-                      style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--gray-200)', borderRadius:5, outline:'none',
-                        background: ing.materia_prima_id ? '#f0faf0' : 'transparent',
-                        color: ing.materia_prima_id ? 'var(--ok)' : 'var(--gray-400)' }}>
-                      <option value="">— Sem vínculo de matéria-prima —</option>
-                      {CATS_MP.map(cat => {
-                        const grupo = mps.filter(m => m.categoria === cat)
-                        if (!grupo.length) return null
-                        return (
-                          <optgroup key={cat} label={cat}>
-                            {grupo.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
-                          </optgroup>
-                        )
-                      })}
-                    </select>
-                    {ing.materia_prima_id && <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>}
+                  {/* Toggle MP vs Sub-preparação */}
+                  <div style={{ display:'flex', gap:4, marginBottom:6 }}>
+                    <button
+                      onClick={() => { setIng(idx,'materia_prima_id', isSubPrep ? null : ing.materia_prima_id); setIng(idx,'sub_preparacao_id', null) }}
+                      style={{ fontSize:10, padding:'2px 8px', borderRadius:10, border:'1px solid', cursor:'pointer',
+                        background: !isSubPrep ? 'var(--purple)' : 'transparent',
+                        color: !isSubPrep ? '#fff' : 'var(--gray-400)',
+                        borderColor: !isSubPrep ? 'var(--purple)' : 'var(--gray-200)' }}>
+                      🧂 MP
+                    </button>
+                    <button
+                      onClick={() => { setIng(idx,'sub_preparacao_id', isSubPrep ? null : ''); setIng(idx,'materia_prima_id', null) }}
+                      style={{ fontSize:10, padding:'2px 8px', borderRadius:10, border:'1px solid', cursor:'pointer',
+                        background: isSubPrep ? 'var(--purple)' : 'transparent',
+                        color: isSubPrep ? '#fff' : 'var(--gray-400)',
+                        borderColor: isSubPrep ? 'var(--purple)' : 'var(--gray-200)' }}>
+                      🧪 Sub-preparação
+                    </button>
                   </div>
+                  {/* Vínculo com MP */}
+                  {!isSubPrep && (
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:11, color:'var(--gray-400)', whiteSpace:'nowrap' }}>🔗 MP:</span>
+                      <select
+                        value={ing.materia_prima_id||''}
+                        onChange={e => setIng(idx,'materia_prima_id', e.target.value || null)}
+                        style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--gray-200)', borderRadius:5, outline:'none',
+                          background: ing.materia_prima_id ? '#f0faf0' : 'transparent',
+                          color: ing.materia_prima_id ? 'var(--ok)' : 'var(--gray-400)' }}>
+                        <option value="">— Sem vínculo de matéria-prima —</option>
+                        {CATS_MP.map(cat => {
+                          const grupo = mps.filter(m => m.categoria === cat)
+                          if (!grupo.length) return null
+                          return (
+                            <optgroup key={cat} label={cat}>
+                              {grupo.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
+                            </optgroup>
+                          )
+                        })}
+                      </select>
+                      {ing.materia_prima_id && <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>}
+                    </div>
+                  )}
+                  {/* Vínculo com Sub-preparação */}
+                  {isSubPrep && (
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:11, color:'var(--purple)', whiteSpace:'nowrap' }}>🧪 Prep:</span>
+                      <select
+                        value={ing.sub_preparacao_id||''}
+                        onChange={e => setIng(idx,'sub_preparacao_id', e.target.value || null)}
+                        style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--purple)', borderRadius:5, outline:'none',
+                          background: ing.sub_preparacao_id ? '#f0f0ff' : 'transparent',
+                          color: ing.sub_preparacao_id ? 'var(--purple)' : 'var(--gray-400)' }}>
+                        <option value="">— Selecione a preparação —</option>
+                        {['massa','recheio','creme','cobertura','cha','outro'].map(tipo => {
+                          const grupo = prepsDisponiveis.filter(p => p.tipo === tipo && p.id !== form.id)
+                          if (!grupo.length) return null
+                          return (
+                            <optgroup key={tipo} label={TIPO_LABEL[tipo]||tipo}>
+                              {grupo.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                            </optgroup>
+                          )
+                        })}
+                      </select>
+                      {ing.sub_preparacao_id && <span style={{ fontSize:10, color:'var(--purple)', whiteSpace:'nowrap' }}>✓ vinculado</span>}
+                    </div>
+                  )}
                 </div>
               )
             })}
