@@ -923,12 +923,14 @@ export default function MatPrimas() {
         <button className={`tab${sub==='historico'?' active':''}`} onClick={()=>setSub('historico')}>📦 Compras</button>
         <button className={`tab${sub==='evolucao'?' active':''}`} onClick={()=>setSub('evolucao')}>📈 Evolução de Preços</button>
         <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
+        <button className={`tab${sub==='consumo'?' active':''}`} onClick={()=>setSub('consumo')}>📉 Consumo</button>
         <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
       </div>
       {sub==='situacao'   && <DashMP />}
       {sub==='historico'  && <HistoricoCompras />}
       {sub==='evolucao'   && <EvolucaoPrecos />}
       {sub==='custo_prep' && <CustoPreparacoes />}
+      {sub==='consumo'    && <HistoricoConsumo />}
       {sub==='overhead'   && <OverheadMensal />}
     </>
   )
@@ -1607,6 +1609,153 @@ function OverheadMensal() {
             <div style={{textAlign:'right',color:'rgba(255,255,255,.6)',fontSize:11}}>100%</div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Histórico de Consumo ──────────────────────────────────────────────────────
+function HistoricoConsumo() {
+  const [consumos, setConsumos] = useState([])
+  const [mps, setMps] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
+  const [mpFiltro, setMpFiltro] = useState('todas')
+
+  async function load() {
+    setLoading(true)
+    const ini = mes + '-01'
+    const fim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
+    const [{ data: consumosData }, { data: mpsData }] = await Promise.all([
+      supabase.from('mp_consumos')
+        .select('*, materias_primas(nome, unidade, categoria)')
+        .gte('data_consumo', ini)
+        .lte('data_consumo', fim)
+        .order('data_consumo', { ascending: false })
+        .order('criado_em', { ascending: false }),
+      supabase.from('materias_primas').select('id,nome,unidade,categoria').eq('ativo',true).order('categoria').order('nome'),
+    ])
+    setConsumos(consumosData||[])
+    setMps(mpsData||[])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [mes])
+
+  const filtrados = consumos.filter(c =>
+    mpFiltro === 'todas' || c.materia_prima_id === mpFiltro
+  )
+
+  // Agrupa por MP para resumo
+  const porMP = {}
+  for (const c of filtrados) {
+    const id = c.materia_prima_id
+    if (!porMP[id]) porMP[id] = { nome: c.materias_primas?.nome, unidade: c.materias_primas?.unidade, total: 0, registros: 0 }
+    porMP[id].total += parseFloat(c.quantidade)||0
+    porMP[id].registros++
+  }
+  const resumo = Object.values(porMP).sort((a,b) => b.total - a.total)
+  const totalRegistros = filtrados.length
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* Filtros */}
+      <div className="card" style={{padding:'12px 20px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{fontWeight:800,fontSize:15}}>📉 Histórico de Consumo</div>
+        <div style={{flex:1}}/>
+        <select className="form-input" value={mpFiltro} onChange={e=>setMpFiltro(e.target.value)} style={{width:220,fontSize:13}}>
+          <option value="todas">Todos os insumos</option>
+          {mps.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
+        </select>
+        <input type="month" className="form-input" value={mes} onChange={e=>setMes(e.target.value)} style={{width:160,fontSize:13}}/>
+        <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+      </div>
+
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+        <>
+          {/* Resumo por MP */}
+          {resumo.length > 0 && (
+            <div className="card">
+              <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13}}>
+                Resumo por insumo — {totalRegistros} lançamentos
+              </div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <thead>
+                  <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                    <th style={{padding:'8px 14px',textAlign:'left'}}>Insumo</th>
+                    <th style={{padding:'8px 10px',textAlign:'right'}}>Total consumido</th>
+                    <th style={{padding:'8px 10px',textAlign:'center'}}>Lançamentos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {resumo.map((r,i)=>(
+                    <tr key={i} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                      <td style={{padding:'8px 14px',fontWeight:600}}>{r.nome}</td>
+                      <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                        {r.total>=1000?`${(r.total/1000).toFixed(2)} kg`:`${r.total.toFixed(1)} ${r.unidade}`}
+                      </td>
+                      <td style={{padding:'8px 10px',textAlign:'center',color:'var(--gray-500)'}}>{r.registros}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Lançamentos detalhados */}
+          <div className="card">
+            <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13}}>
+              Lançamentos detalhados
+            </div>
+            {filtrados.length === 0 ? (
+              <div style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
+                {consumos.length === 0
+                  ? 'Nenhum consumo registrado neste mês — ative a baixa automática em Admin → Sistema'
+                  : 'Nenhum resultado para o filtro'}
+              </div>
+            ) : (
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <thead>
+                  <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                    <th style={{padding:'8px 14px',textAlign:'left'}}>Data</th>
+                    <th style={{padding:'8px 14px',textAlign:'left'}}>Insumo</th>
+                    <th style={{padding:'8px 10px',textAlign:'right'}}>Qtd consumida</th>
+                    <th style={{padding:'8px 10px',textAlign:'left'}}>Origem</th>
+                    <th style={{padding:'8px 14px',textAlign:'left'}}>Descrição</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtrados.map((c,i)=>(
+                    <tr key={c.id} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                      <td style={{padding:'8px 14px',color:'var(--gray-500)',fontSize:12}}>
+                        {new Date(c.data_consumo+'T12:00:00').toLocaleDateString('pt-BR')}
+                      </td>
+                      <td style={{padding:'8px 14px',fontWeight:600}}>
+                        {c.materias_primas?.nome}
+                        <div style={{fontSize:10,color:'var(--gray-400)'}}>{c.materias_primas?.categoria}</div>
+                      </td>
+                      <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:'var(--danger)'}}>
+                        -{parseFloat(c.quantidade)>=1000
+                          ?`${(parseFloat(c.quantidade)/1000).toFixed(2)} kg`
+                          :`${parseFloat(c.quantidade).toFixed(1)} ${c.materias_primas?.unidade}`}
+                      </td>
+                      <td style={{padding:'8px 10px'}}>
+                        <span style={{
+                          fontSize:11,padding:'2px 8px',borderRadius:10,fontWeight:700,
+                          background: c.origem==='producao'?'var(--purple-pale)':'var(--gray-100)',
+                          color: c.origem==='producao'?'var(--purple)':'var(--gray-500)',
+                        }}>
+                          {c.origem==='producao'?'🏭 Produção':c.origem==='manual'?'✏️ Manual':'🔧 Ajuste'}
+                        </span>
+                      </td>
+                      <td style={{padding:'8px 14px',fontSize:12,color:'var(--gray-400)'}}>{c.descricao||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
       )}
     </div>
   )
