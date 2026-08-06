@@ -506,8 +506,16 @@ function AdminPreparacoes() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*)').order('tipo').order('nome')
-    setLista(data || [])
+    const [{ data: prepsData }, { data: compsData }] = await Promise.all([
+      supabase.from('preparacoes').select('*').order('tipo').order('nome'),
+      supabase.from('preparacao_composicao').select('*'),
+    ])
+    // Junta composição nas preparações
+    const lista = (prepsData||[]).map(p => ({
+      ...p,
+      preparacao_composicao: (compsData||[]).filter(c => c.preparacao_id === p.id)
+    }))
+    setLista(lista)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
