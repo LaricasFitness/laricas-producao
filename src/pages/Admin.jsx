@@ -506,7 +506,7 @@ function AdminPreparacoes() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*, materias_primas(id,nome))').order('tipo').order('nome')
+    const { data } = await supabase.from('preparacoes').select('*, preparacao_composicao(*)').order('tipo').order('nome')
     setLista(data || [])
     setLoading(false)
   }
