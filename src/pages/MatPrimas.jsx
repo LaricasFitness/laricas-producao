@@ -800,6 +800,133 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
   )
 }
 
+// ── Modal editar compra ───────────────────────────────────────────────────────
+function ModalEditarCompra({ compra, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    quantidade: String(compra.quantidade),
+    custo_total: String(compra.custo_total),
+    data_compra: compra.data_compra,
+    fornecedor: compra.fornecedor || '',
+    numero_nf: compra.numero_nf || '',
+    observacao: compra.observacao || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setForm(p=>({...p,[k]:v}))
+
+  const qtdAnterior = parseFloat(compra.quantidade)||0
+  const custoAnterior = parseFloat(compra.custo_total)||0
+  const qtdNova = parseFloat(form.quantidade)||0
+  const custoNovo = parseFloat(form.custo_total)||0
+  const custoUnit = qtdNova > 0 ? custoNovo/qtdNova : 0
+  const diffQtd = qtdNova - qtdAnterior
+
+  async function salvar() {
+    if (!form.quantidade || !form.custo_total) return
+    setSaving(true)
+
+    // Atualiza o registro da compra
+    await supabase.from('mp_compras').update({
+      quantidade: qtdNova,
+      custo_total: custoNovo,
+      data_compra: form.data_compra,
+      fornecedor: form.fornecedor || null,
+      numero_nf: form.numero_nf || null,
+      observacao: form.observacao || null,
+    }).eq('id', compra.id)
+
+    // Recalcula estoque e preço médio com a diferença
+    if (diffQtd !== 0 || custoNovo !== custoAnterior) {
+      const { data: mp } = await supabase.from('materias_primas')
+        .select('estoque_atual,custo_unitario').eq('id', compra.materia_prima_id).single()
+      const estoqueAtual = parseFloat(mp?.estoque_atual)||0
+      const custoAtual = parseFloat(mp?.custo_unitario)||0
+
+      // Reverte a compra anterior e aplica a nova
+      const estoqueSemAnterior = estoqueAtual - qtdAnterior
+      const novoEstoque = Math.max(0, estoqueSemAnterior + qtdNova)
+      const novoCusto = novoEstoque > 0
+        ? (Math.max(0,estoqueSemAnterior) * custoAtual + custoNovo) / novoEstoque
+        : custoNovo / Math.max(1, qtdNova)
+
+      await supabase.from('materias_primas').update({
+        estoque_atual: novoEstoque,
+        custo_unitario: novoCusto,
+        atualizado_em: new Date().toISOString(),
+      }).eq('id', compra.materia_prima_id)
+    }
+
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:460}}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">✏️ Editar Compra</div>
+            <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{compra.materias_primas?.nome}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Quantidade ({compra.materias_primas?.unidade}) *</label>
+              <input type="number" className="form-input" value={form.quantidade}
+                onChange={e=>set('quantidade',e.target.value)} min={0} step={0.001} autoFocus/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Custo total (R$) *</label>
+              <input type="number" className="form-input" value={form.custo_total}
+                onChange={e=>set('custo_total',e.target.value)} min={0} step={0.01}/>
+            </div>
+          </div>
+          {custoUnit > 0 && (
+            <div style={{padding:'8px 12px',background:'var(--purple-pale)',borderRadius:6,fontSize:13,marginBottom:12,color:'var(--purple)',fontWeight:700}}>
+              Custo unitário: {fmtR(custoUnit)}/{compra.materias_primas?.unidade}
+              {diffQtd !== 0 && (
+                <span style={{marginLeft:12,color:diffQtd>0?'var(--ok)':'var(--danger)',fontWeight:700}}>
+                  {diffQtd>0?'+':''}{fmt(diffQtd,1)} {compra.materias_primas?.unidade} no estoque
+                </span>
+              )}
+            </div>
+          )}
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Data da compra</label>
+              <input type="date" className="form-input" value={form.data_compra}
+                onChange={e=>set('data_compra',e.target.value)}/>
+            </div>
+            <div className="form-group">
+              <label className="form-label">NF / Pedido</label>
+              <input className="form-input" value={form.numero_nf}
+                onChange={e=>set('numero_nf',e.target.value)}/>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Fornecedor</label>
+            <input className="form-input" value={form.fornecedor}
+              onChange={e=>set('fornecedor',e.target.value)}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={form.observacao}
+              onChange={e=>set('observacao',e.target.value)}/>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar}
+            disabled={saving||!form.quantidade||!form.custo_total}>
+            {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Salvar alterações</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Histórico de compras ──────────────────────────────────────────────────────
 function HistoricoCompras() {
   const [compras, setCompras] = useState([])
@@ -808,6 +935,7 @@ function HistoricoCompras() {
   const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
   const [xmlModal, setXmlModal] = useState(false)
   const [compraModal, setCompraModal] = useState(false)
+  const [editModal, setEditModal] = useState(null) // compra a editar
 
   async function load() {
     setLoading(true)
@@ -848,6 +976,7 @@ function HistoricoCompras() {
     <div className="card">
       {xmlModal && <ModalImportarXML onClose={()=>setXmlModal(false)} onSaved={()=>{setXmlModal(false);load()}} />}
       {compraModal && <ModalCompraAvulsa mps={mps} onClose={()=>setCompraModal(false)} onSaved={()=>{setCompraModal(false);load()}} />}
+      {editModal && <ModalEditarCompra compra={editModal} onClose={()=>setEditModal(null)} onSaved={()=>{setEditModal(null);load()}} />}
       <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
         <div style={{fontWeight:800,fontSize:15}}>📦 Histórico de Compras</div>
         <div style={{flex:1}}/>
@@ -871,7 +1000,7 @@ function HistoricoCompras() {
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Custo unit.</th>
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Total</th>
                   <th style={{padding:'9px 10px',textAlign:'left'}}>NF</th>
-                  <th style={{padding:'9px 10px',width:40}}></th>
+                  <th style={{padding:'9px 10px',width:70}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -890,10 +1019,16 @@ function HistoricoCompras() {
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>{fmtR(c.custo_total)}</td>
                     <td style={{padding:'9px 10px',fontSize:12,color:'var(--gray-400)'}}>{c.numero_nf||'—'}</td>
                     <td style={{padding:'9px 10px',textAlign:'center'}}>
-                      <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
-                        style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
-                        ✕
-                      </button>
+                      <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                        <button className="btn btn-ghost btn-sm" onClick={()=>setEditModal(c)}
+                          title="Editar" style={{fontSize:11}}>
+                          <Pencil size={11}/>
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
+                          style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
+                          ✕
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
