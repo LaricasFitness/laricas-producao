@@ -193,7 +193,7 @@ function ModalAjuste({ emb, onClose, onSaved }) {
     const n = parseInt(qtd)
     if (isNaN(n) || n < 0) { alert('Quantidade inválida.'); return }
     setSaving(true)
-    const anterior = emb.estoque_atual || 0
+    const anterior = emb.estoque_real ?? emb.estoque_atual ?? 0
 
     // Calcula o valor absoluto do novo estoque
     const novoEstoque = tipo === 'entrada' ? anterior + n : n
@@ -233,7 +233,7 @@ function ModalAjuste({ emb, onClose, onSaved }) {
         <div className="modal-body">
           <div style={{ fontWeight: 600, marginBottom: 4 }}>{emb.nome}</div>
           <div style={{ fontSize: 14, color: 'var(--gray-600)', marginBottom: 4 }}>
-            Estoque atual: <strong>{(emb.estoque_atual || 0).toLocaleString('pt-BR')} un</strong>
+            Estoque atual: <strong>{(emb.estoque_real ?? emb.estoque_atual ?? 0).toLocaleString('pt-BR')} un</strong>
           </div>
           <div className="form-group">
             <label className="form-label">Tipo</label>
@@ -1517,7 +1517,12 @@ export default function Admin() {
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('embalagens').select('*').order('categoria').order('nome')
-    setEmbs(data || [])
+    if (!data) { setLoading(false); return }
+    // Calcula estoque real (cronológico) para cada embalagem
+    const { calcularEstoqueCronologico } = await import('../lib/data.js')
+    const estoques = await Promise.all(data.map(e => calcularEstoqueCronologico(e.id)))
+    const comEstoque = data.map((e, i) => ({ ...e, estoque_real: estoques[i] }))
+    setEmbs(comEstoque)
     setLoading(false)
   }
 
@@ -1629,7 +1634,7 @@ export default function Admin() {
                   <tr key={e.id} style={{ opacity: (e.visivel_producao || e.visivel_estoque || e.visivel_analise) ? 1 : 0.45 }}>
                     <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--gray-400)' }}>{e.codigo}</td>
                     <td style={{ fontWeight: 600 }}>{e.nome}</td>
-                    <td style={{ fontWeight: 700 }}>{(e.estoque_atual || 0).toLocaleString('pt-BR')} un</td>
+                    <td style={{ fontWeight: 700 }}>{(e.estoque_real ?? e.estoque_atual ?? 0).toLocaleString('pt-BR')} un</td>
                     <td style={{ fontSize: 13, color: 'var(--gray-600)' }}>{e.dias_producao}d</td>
                     <td>
                       <Toggle
