@@ -52,10 +52,15 @@ export async function calcularMedia(embalagemId) {
   const totalRecente  = recente.reduce((s, r) => s + r.quantidade, 0)
   const totalAnterior = anterior.reduce((s, r) => s + r.quantidade, 0)
 
-  // Média diária ponderada: recente (45d) peso 2, anterior (45d) peso 1
-  const mediaPonderada = (totalRecente * 2 + totalAnterior * 1) / (45 * 2 + 45 * 1)
+  // Dias com produção em cada janela (não dias corridos)
+  const diasRecente  = new Set(recente.map(r => r.data_producao)).size || 1
+  const diasAnterior = new Set(anterior.map(r => r.data_producao)).size || 1
 
-  return mediaPonderada
+  // Média diária ponderada por dias produtivos: recente peso 2, anterior peso 1
+  const mediaRecente  = totalRecente  / diasRecente
+  const mediaAnterior = totalAnterior / diasAnterior
+
+  return (mediaRecente * 2 + mediaAnterior * 1) / 3
 }
 
 // Consumo semanal agrupado (últimas N semanas) para gráfico
