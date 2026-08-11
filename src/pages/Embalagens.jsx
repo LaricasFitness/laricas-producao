@@ -7,7 +7,12 @@ import LogGeral from './LogGeral'
 export default function Embalagens() {
   const [sub, setSub] = useState('situacao')
   const [novoPedidoFlag, setNovoPedidoFlag] = useState(false)
-  const [tipo, setTipo] = useState('rotulo')
+  const [tipo, setTipo] = useState(() => localStorage.getItem('emb_tipo') || 'rotulo')
+
+  function mudarTipo(t) {
+    setTipo(t)
+    localStorage.setItem('emb_tipo', t)
+  }
 
   return (
     <>
@@ -15,12 +20,12 @@ export default function Embalagens() {
       <div style={{ display:'flex', gap:8, marginBottom:12 }}>
         <button
           className={`btn ${tipo==='rotulo'?'btn-primary':'btn-ghost'}`}
-          onClick={()=>setTipo('rotulo')}>
+          onClick={()=>mudarTipo('rotulo')}>
           🏷️ Rótulos
         </button>
         <button
           className={`btn ${tipo==='embalagem'?'btn-primary':'btn-ghost'}`}
-          onClick={()=>setTipo('embalagem')}>
+          onClick={()=>mudarTipo('embalagem')}>
           📦 Embalagens
         </button>
       </div>
