@@ -581,7 +581,7 @@ export default function Logistica({ csvInicial }) {
   }
 
   const missingOrders = orders.filter(o=>!o.rua&&!sugestoes[o.id])
-  const allFilled = missingOrders.every(o=>manualAddr[o.id]?.rua?.trim()&&manualAddr[o.id]?.cep?.trim())
+  const allFilled = missingOrders.every(o=>o.excluir||(manualAddr[o.id]?.rua?.trim()&&manualAddr[o.id]?.cep?.trim()))
   const pendingSugestoes = Object.keys(sugestoes).length>0
   const dateStr = datasAtivas.length === 1 ? datasAtivas[0] : datasAtivas.join(' + ')
   const totalParadas = routes.reduce((s,r)=>s+r.stops.length,0)
