@@ -130,6 +130,13 @@ export default function HistoricoPlanejamento() {
     gerarPDF(plan, itens)
   }
 
+  async function excluirPlano(plan) {
+    if (!window.confirm(`Excluir o planejamento de ${headerDia(plan.data_producao)}?\nEsta ação não pode ser desfeita.`)) return
+    await supabase.from('planejamento_itens').delete().eq('planejamento_id', plan.id)
+    await supabase.from('planejamentos').delete().eq('id', plan.id)
+    load()
+  }
+
   const totalGeral = planos.length
 
   return (
@@ -190,6 +197,10 @@ export default function HistoricoPlanejamento() {
                     </button>
                     <button className="btn btn-gold btn-sm" onClick={() => baixarPDF(plan)}>
                       <FileText size={13} /> Baixar PDF
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => excluirPlano(plan)}
+                      style={{ color:'var(--danger)' }} title="Excluir planejamento">
+                      ✕
                     </button>
                   </div>
                 </div>
