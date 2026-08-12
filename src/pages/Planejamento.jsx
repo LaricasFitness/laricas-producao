@@ -433,63 +433,95 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
 function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const PAGE_H = 297
   const MARGIN = 14
-
-  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
-  doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
-  doc.text(`Gerado: ${agora}`, 140, 9)
-
-  let startY = 22
   let temDados = false
 
-  for (const data of datasAtivas) {
+  const diasComCorreio = datasAtivas.filter(d => {
+    const correio = diasCorreio[d] || {}
+    return Object.values(correio).some(q => q > 0)
+  })
+
+  if (!diasComCorreio.length) {
+    // PDF vazio com aviso
+    doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+    doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+    doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
+    doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
+    doc.text('Nenhum pedido via Correios encontrado para os dias selecionados.', MARGIN, 40)
+    doc.setFontSize(9)
+    doc.text('Verifique se o CSV contém a coluna "Transportadora" com o valor "Correios".', MARGIN, 50)
+    doc.save(`Producao_Correios.pdf`)
+    return
+  }
+
+  diasComCorreio.forEach((data, pageIdx) => {
+    if (pageIdx > 0) doc.addPage()
+
+    // Header
+    doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+    doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+    doc.text('Laricas Fitness', MARGIN, 9)
+    doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+    doc.text(`Gerado: ${agora}`, 130, 9)
+
+    // Título
+    doc.setTextColor(82, 46, 100); doc.setFontSize(16); doc.setFont(undefined, 'bold')
+    doc.text(`Produção Correios — ${headerDia(data)}`, MARGIN, 26)
+
+    // Monta body por categoria (mesmo padrão do PDF Produção)
     const correioNoDia = diasCorreio[data] || {}
-    const itens = Object.entries(correioNoDia)
-      .map(([sku, qtd]) => {
-        const emb = embalagens.find(e => e.codigo === sku)
-        return { sku, qtd, nome: emb?.nome || sku, categoria: emb?.categoria || '' }
-      })
-      .filter(i => i.qtd > 0)
-      .sort((a,b) => a.categoria.localeCompare(b.categoria) || a.nome.localeCompare(b.nome))
+    const body = []
+    let totalDia = 0
 
-    if (!itens.length) continue
-    temDados = true
+    for (const cat of ORDEM_CATS) {
+      const itensCat = embalagens
+        .filter(e => e.categoria === cat && (correioNoDia[e.codigo] || 0) > 0)
+        .map(e => ({ nome: e.nome, sku: e.codigo, qtd: correioNoDia[e.codigo] || 0 }))
+        .sort((a,b) => b.qtd - a.qtd)
 
-    const labelDia = new Date(data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday:'long', day:'numeric', month:'long' })
-    const totalDia = itens.reduce((s,i) => s+i.qtd, 0)
+      if (!itensCat.length) continue
+      const totalCat = itensCat.reduce((s,i) => s+i.qtd, 0)
+      totalDia += totalCat
 
-    doc.setFillColor(103, 63, 124)
-    doc.rect(MARGIN, startY, 182, 8, 'F')
-    doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont(undefined,'bold')
-    doc.text(`📮 ${labelDia.charAt(0).toUpperCase()+labelDia.slice(1)} — ${totalDia} un para Correios`, MARGIN+3, startY+5.5)
-    startY += 10
+      body.push([{
+        content: `${cat}  —  ${totalCat.toLocaleString('pt-BR')} un`,
+        colSpan: 2,
+        styles: { fillColor:[103,63,124], textColor:[255,255,255], fontStyle:'bold', cellPadding:2.5 }
+      }])
+      for (const i of itensCat) {
+        body.push([i.nome, { content: i.qtd.toLocaleString('pt-BR'), styles:{ halign:'center', fontStyle:'bold' } }])
+      }
+    }
+
+    // Calcula fontSize ideal (mesmo algoritmo do PDF Produção)
+    const FOOTER_H = 12
+    const startY = 33
+    const availableH = PAGE_H - startY - FOOTER_H - MARGIN
+    const estimatedRowH = (fs) => fs * 0.45 + 4
+    let fontSize = 9
+    while (fontSize > 5.5) {
+      if (body.length * estimatedRowH(fontSize) <= availableH) break
+      fontSize -= 0.5
+    }
+    const cellPad = fontSize < 7 ? 1.5 : 2
 
     autoTable(doc, {
-      startY,
-      head: [['Produto', 'SKU', 'Qtd']],
-      body: itens.map(i => [i.nome, i.sku, { content: String(i.qtd), styles:{ halign:'center', fontStyle:'bold', fontSize:12 } }]),
-      styles: { fontSize:9, cellPadding:3 },
-      headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold' },
+      startY, body,
+      styles: { fontSize, cellPadding: cellPad },
       alternateRowStyles: { fillColor:[248,245,252] },
-      columnStyles: { 0:{ cellWidth:'auto' }, 1:{ cellWidth:45 }, 2:{ cellWidth:18, halign:'center' } },
+      columnStyles: { 1:{ cellWidth:22, halign:'center' } },
       margin: { left:MARGIN, right:MARGIN },
     })
 
-    startY = doc.lastAutoTable.finalY + 10
-    if (startY > 265) { doc.addPage(); startY = 14 }
-  }
+    const finalY = doc.lastAutoTable.finalY + 4
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+    doc.text(`Total Correios: ${totalDia.toLocaleString('pt-BR')} unidades`, MARGIN, Math.min(finalY, PAGE_H - 10))
 
-  if (!temDados) {
-    doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
-    doc.text('Nenhum pedido via Correios encontrado para os dias selecionados.', MARGIN, 50)
-    doc.setFontSize(9)
-    doc.text('Verifique se o CSV tem a coluna "Transportadora" com o valor "Correios".', MARGIN, 60)
-  }
+    doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+    doc.text('Laricas Fitness — Planejamento de Produção · Correios', MARGIN, PAGE_H - 5)
+  })
 
-  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
-  doc.text('Laricas Fitness — Produção Correios', MARGIN, 289)
   doc.save(`Producao_Correios_${datasAtivas[0]||'sem-data'}.pdf`)
 }
 
