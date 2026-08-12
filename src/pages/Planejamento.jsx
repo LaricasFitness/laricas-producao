@@ -48,29 +48,32 @@ function parsearCSV(texto) {
   const resultado = []
 
   if (!isVendas) {
-    // Tenta pegar coluna de nome/descrição (cols[1] geralmente é o nome no Bling)
     for (const cols of rows.slice(1)) {
       if (cols.length < 6) continue
       const sku = cols[0], qtd = parseFloat(cols[3].replace(',', '.')) || 0
       const dataIso = parsearDataBr(cols[5])
       const nome = cols[1]?.trim() || ''
       if (!sku || qtd <= 0 || !dataIso) continue
-      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome })
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome, transportadora: '' })
     }
   } else {
-    const idxSku = header.indexOf('SKU'), idxQtd = header.indexOf('Quantidade'), idxData = header.indexOf('Data Prevista')
-    // Tenta achar coluna de nome do produto
-    const idxNome = header.indexOf('Produto') >= 0 ? header.indexOf('Produto')
+    const idxSku   = header.indexOf('SKU')
+    const idxQtd   = header.indexOf('Quantidade')
+    const idxData  = header.indexOf('Data Prevista')
+    const idxTrans = header.indexOf('Transportadora')
+    const idxNome  = header.indexOf('Produto') >= 0 ? header.indexOf('Produto')
       : header.indexOf('Descrição') >= 0 ? header.indexOf('Descrição')
       : header.indexOf('Nome') >= 0 ? header.indexOf('Nome') : -1
     if (idxSku < 0 || idxQtd < 0 || idxData < 0) return []
     for (const cols of rows.slice(1)) {
       if (cols.length <= idxData) continue
-      const sku = cols[idxSku], qtd = parseFloat((cols[idxQtd] || '0').replace(',', '.')) || 0
+      const sku   = cols[idxSku]
+      const qtd   = parseFloat((cols[idxQtd] || '0').replace(',', '.')) || 0
       const dataIso = parsearDataBr(cols[idxData])
-      const nome = idxNome >= 0 ? (cols[idxNome]?.trim() || '') : ''
+      const nome  = idxNome >= 0 ? (cols[idxNome]?.trim() || '') : ''
+      const transportadora = idxTrans >= 0 ? (cols[idxTrans]?.trim() || '') : ''
       if (!sku || qtd <= 0 || !dataIso) continue
-      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome })
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome, transportadora })
     }
   }
   return resultado
@@ -426,6 +429,70 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
   )
 }
 
+// ── PDF Correio ───────────────────────────────────────────────────────────────
+function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const MARGIN = 14
+
+  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
+  doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
+  doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
+  doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Gerado: ${agora}`, 140, 9)
+
+  let startY = 22
+  let temDados = false
+
+  for (const data of datasAtivas) {
+    const correioNoDia = diasCorreio[data] || {}
+    const itens = Object.entries(correioNoDia)
+      .map(([sku, qtd]) => {
+        const emb = embalagens.find(e => e.codigo === sku)
+        return { sku, qtd, nome: emb?.nome || sku, categoria: emb?.categoria || '' }
+      })
+      .filter(i => i.qtd > 0)
+      .sort((a,b) => a.categoria.localeCompare(b.categoria) || a.nome.localeCompare(b.nome))
+
+    if (!itens.length) continue
+    temDados = true
+
+    const labelDia = new Date(data + 'T12:00:00').toLocaleDateString('pt-BR', { weekday:'long', day:'numeric', month:'long' })
+    const totalDia = itens.reduce((s,i) => s+i.qtd, 0)
+
+    doc.setFillColor(103, 63, 124)
+    doc.rect(MARGIN, startY, 182, 8, 'F')
+    doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text(`📮 ${labelDia.charAt(0).toUpperCase()+labelDia.slice(1)} — ${totalDia} un para Correios`, MARGIN+3, startY+5.5)
+    startY += 10
+
+    autoTable(doc, {
+      startY,
+      head: [['Produto', 'SKU', 'Qtd']],
+      body: itens.map(i => [i.nome, i.sku, { content: String(i.qtd), styles:{ halign:'center', fontStyle:'bold', fontSize:12 } }]),
+      styles: { fontSize:9, cellPadding:3 },
+      headStyles: { fillColor:[230,225,240], textColor:[60,30,80], fontStyle:'bold' },
+      alternateRowStyles: { fillColor:[248,245,252] },
+      columnStyles: { 0:{ cellWidth:'auto' }, 1:{ cellWidth:45 }, 2:{ cellWidth:18, halign:'center' } },
+      margin: { left:MARGIN, right:MARGIN },
+    })
+
+    startY = doc.lastAutoTable.finalY + 10
+    if (startY > 265) { doc.addPage(); startY = 14 }
+  }
+
+  if (!temDados) {
+    doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
+    doc.text('Nenhum pedido via Correios encontrado para os dias selecionados.', MARGIN, 50)
+    doc.setFontSize(9)
+    doc.text('Verifique se o CSV tem a coluna "Transportadora" com o valor "Correios".', MARGIN, 60)
+  }
+
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+  doc.text('Laricas Fitness — Produção Correios', MARGIN, 289)
+  doc.save(`Producao_Correios_${datasAtivas[0]||'sem-data'}.pdf`)
+}
+
 function gerarPDFPreparacoesDia(dia, linhas, observacao) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
@@ -771,6 +838,7 @@ export default function Planejamento({ onIrLogistica }) {
   const [loading, setLoading] = useState(true)
   const [importando, setImportando] = useState(false)
   const [diasBling, setDiasBling] = useState({})
+  const [diasCorreio, setDiasCorreio] = useState({})
   const [pedidosPorDia, setPedidosPorDia] = useState({})
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
@@ -806,10 +874,17 @@ export default function Planejamento({ onIrLogistica }) {
       setCsvRaw(texto)
       const parsed = parsearCSV(texto)
       const novosBling = {}
-      for (const { sku, qtd, data } of parsed) {
+      const novosCorreio = {} // { data: { sku: qtd } } — só pedidos Correio
+      for (const { sku, qtd, data, transportadora } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
         novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
+        // Identifica Correio por transportadora
+        if (transportadora && transportadora.toLowerCase().includes('correio')) {
+          if (!novosCorreio[data]) novosCorreio[data] = {}
+          novosCorreio[data][sku] = (novosCorreio[data][sku] || 0) + qtd
+        }
       }
+      setDiasCorreio(novosCorreio)
 
       // Conta pedidos distintos por data usando o parser robusto
       const countsPorDia = {}
@@ -878,7 +953,7 @@ export default function Planejamento({ onIrLogistica }) {
   }
 
   function limpar() {
-    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({})
+    setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({}); setDiasCorreio({})
     setSugestoes([]); setItensExtras([])
   }
 
@@ -1042,6 +1117,12 @@ export default function Planejamento({ onIrLogistica }) {
               {diaAtual && (
                 <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras, previsaoDelivery)}>
                   <FileText size={14} /> PDF Produção Completa
+                </button>
+              )}
+              {datasAtivas.length > 0 && (
+                <button className="btn btn-ghost" onClick={() => gerarPDFCorreio(datasAtivas, diasCorreio, embalagens)}
+                  style={{borderColor:'var(--warning)',color:'var(--warning)'}}>
+                  📮 PDF Correios
                 </button>
               )}
             </div>
