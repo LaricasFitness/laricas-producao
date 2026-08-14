@@ -73,24 +73,89 @@ function gerarPDF(numero, itens, obs) {
   doc.save(`Pedido_${numero}.pdf`)
 }
 
-function ModalNovoPedido({ onClose, onSaved, tipo = 'rotulo' }) {
-  const [status, setStatus] = useState([])
+function ModalNovoPedido({ onClose, onSaved }) {
+  const [embs, setEmbs] = useState([])
   const [qtds, setQtds] = useState({})
   const [obs, setObs] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [tipoFiltro, setTipoFiltro] = useState('todos')
 
   useEffect(() => {
-    carregarStatusCompleto(tipo).then(d => {
-      setStatus(d)
+    async function load() {
+      // Carrega todas embalagens (rótulos + embalagens) em uma query
+      const { data: embsData } = await supabase
+        .from('embalagens')
+        .select('id, codigo, nome, categoria, tipo, estoque_atual, custo_unitario, unidade_minima_grafica, dias_producao, margem_seguranca')
+        .eq('ativo', true)
+        .order('tipo').order('categoria').order('nome')
+
+      if (!embsData) { setLoading(false); return }
+
+      // Carrega inventários e produção em batch — uma query cada
+      const ids = embsData.map(e => e.id)
+      const desde90 = new Date(); desde90.setDate(desde90.getDate() - 90)
+      const desde90str = desde90.toISOString().slice(0,10)
+
+      const [{ data: invs }, { data: prods }, { data: entradas }] = await Promise.all([
+        supabase.from('inventarios').select('embalagem_id, quantidade, criado_em').in('embalagem_id', ids).order('criado_em', {ascending:false}),
+        supabase.from('producao_diaria').select('embalagem_id, quantidade, data_producao').in('embalagem_id', ids).gte('data_producao', desde90str),
+        supabase.from('compras').select('embalagem_id, quantidade_recebida, recebido_em').in('embalagem_id', ids).order('recebido_em', {ascending:true}),
+      ])
+
+      // Para cada embalagem calcula estoque e sugestão de pedido
+      const resultado = embsData.map(emb => {
+        // Último inventário
+        const ultInv = (invs||[]).filter(i => i.embalagem_id === emb.id)[0]
+        const baseQtd = ultInv ? ultInv.quantidade : 0
+        const baseTs = ultInv ? ultInv.criado_em : null
+        const baseDt = baseTs ? baseTs.slice(0,10) : desde90str
+
+        // Entradas após inventário
+        const totalEntradas = (entradas||[])
+          .filter(c => c.embalagem_id === emb.id && c.recebido_em >= baseDt)
+          .reduce((s,c) => s + c.quantidade_recebida, 0)
+
+        // Saídas após inventário
+        const totalSaidas = (prods||[])
+          .filter(p => p.embalagem_id === emb.id && p.data_producao >= baseDt)
+          .reduce((s,p) => s + p.quantidade, 0)
+
+        const estoque = Math.max(0, baseQtd + totalEntradas - totalSaidas)
+
+        // Média diária por dias produtivos (últimos 45d vs 45-90d)
+        const corte45 = new Date(); corte45.setDate(corte45.getDate()-45)
+        const corte45str = corte45.toISOString().slice(0,10)
+        const prodEmb = (prods||[]).filter(p => p.embalagem_id === emb.id)
+        const recente = prodEmb.filter(p => p.data_producao >= corte45str)
+        const anterior = prodEmb.filter(p => p.data_producao < corte45str)
+        const diasRec = new Set(recente.map(p=>p.data_producao)).size || 1
+        const diasAnt = new Set(anterior.map(p=>p.data_producao)).size || 1
+        const mediaRec = recente.reduce((s,p)=>s+p.quantidade,0) / diasRec
+        const mediaAnt = anterior.reduce((s,p)=>s+p.quantidade,0) / diasAnt
+        const media = (mediaRec*2 + mediaAnt) / 3
+
+        const dias = emb.dias_producao || 30
+        const margem = emb.margem_seguranca || 0.10
+        const minimoIdeal = Math.ceil(media * dias * (1+margem))
+        const falta = Math.max(0, minimoIdeal - estoque)
+        const minG = emb.unidade_minima_grafica || 100
+        const qtdPedido = falta > 0 ? Math.ceil(falta/minG)*minG : 0
+
+        return { ...emb, estoque_real: estoque, media: Math.round(media*10)/10, qtdPedido }
+      })
+
+      setEmbs(resultado)
+      // Pré-preenche qtds sugeridas
       const pre = {}
-      d.filter(e => e.qtdPedido > 0).forEach(e => { pre[e.id] = e.qtdPedido })
+      resultado.filter(e => e.qtdPedido > 0).forEach(e => { pre[e.id] = e.qtdPedido })
       setQtds(pre)
       setLoading(false)
-    })
+    }
+    load()
   }, [])
 
-  const selecionadas = status.filter(e => parseInt(qtds[e.id] || 0) > 0)
+  const selecionadas = embs.filter(e => parseInt(qtds[e.id]||0) > 0)
 
   async function salvar() {
     if (selecionadas.length === 0) { alert('Selecione pelo menos uma embalagem.'); return }
@@ -99,93 +164,107 @@ function ModalNovoPedido({ onClose, onSaved, tipo = 'rotulo' }) {
       const numero = gerarNumeroPedido()
       const hoje = new Date().toISOString().slice(0, 10)
       const prev = new Date(); prev.setDate(prev.getDate() + 10)
-
       const { data: pedido, error: pe } = await supabase
         .from('pedidos_grafica')
-        .insert({ numero, status: 'enviado', enviado_em: hoje, previsao_entrega: prev.toISOString().slice(0, 10), observacoes: obs || null })
+        .insert({ numero, status:'enviado', enviado_em:hoje, previsao_entrega:prev.toISOString().slice(0,10), observacoes:obs||null })
         .select().single()
       if (pe) throw pe
-
       await supabase.from('pedido_itens').insert(
-        selecionadas.map(e => ({
-          pedido_id: pedido.id,
-          embalagem_id: e.id,
-          quantidade_solicitada: parseInt(qtds[e.id]),
-        }))
+        selecionadas.map(e => ({ pedido_id:pedido.id, embalagem_id:e.id, quantidade_solicitada:parseInt(qtds[e.id]) }))
       )
-
-      gerarPDF(numero, selecionadas.map(e => ({ codigo: e.codigo, nome: e.nome, qtd: parseInt(qtds[e.id]), categoria: e.categoria })), obs)
+      gerarPDF(numero, selecionadas.map(e => ({ codigo:e.codigo, nome:e.nome, qtd:parseInt(qtds[e.id]), categoria:e.categoria })), obs)
       onSaved()
-    } catch (e) { alert('Erro: ' + e.message) }
+    } catch(e) { alert('Erro: ' + e.message) }
     setSaving(false)
   }
 
+  const TIPOS = ['todos','rotulo','embalagem']
+  const filtradas = embs.filter(e => tipoFiltro==='todos' || e.tipo===tipoFiltro)
+  const cats = [...new Set(filtradas.map(e=>e.categoria))]
+
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 620 }}>
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:700,maxHeight:'92vh',overflowY:'auto'}}>
         <div className="modal-header">
-          <div className="modal-title">Novo pedido para a gráfica</div>
+          <div>
+            <div className="modal-title">📦 Novo Pedido à Gráfica</div>
+            <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>
+              {selecionadas.length} item(s) selecionado(s) · {selecionadas.reduce((s,e)=>s+parseInt(qtds[e.id]||0),0).toLocaleString('pt-BR')} unidades
+            </div>
+          </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          {loading ? <div className="loading"><RefreshCw size={16} className="spin" /> Calculando...</div> : (
-            <>
-              <div className="alert alert-tip">
-                💡 Itens pré-selecionados com base no estoque atual. Ajuste as quantidades se necessário.
-              </div>
-              <div style={{ overflowY: 'auto', maxHeight: 340 }}>
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" onChange={e => {
-                        const m = {}
-                        if (e.target.checked) status.forEach(s => { m[s.id] = s.qtdPedido || 100 })
-                        setQtds(m)
-                      }} /></th>
-                      <th>Embalagem</th>
-                      <th>Status</th>
-                      <th>Qtd a pedir</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {status.map(emb => {
-                      const cfg = statusCfg(emb.status)
-                      return (
-                        <tr key={emb.id}>
-                          <td>
-                            <input type="checkbox"
-                              checked={parseInt(qtds[emb.id] || 0) > 0}
-                              onChange={e => setQtds(prev => ({ ...prev, [emb.id]: e.target.checked ? (emb.qtdPedido || 100) : 0 }))} />
-                          </td>
-                          <td>
-                            <div style={{ fontWeight: 600, fontSize: 13 }}>{emb.nome}</div>
-                            <div style={{ fontSize: 11, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{emb.codigo}</div>
-                          </td>
-                          <td><span className={`pill ${cfg.cls}`}>{cfg.label}</span></td>
-                          <td>
-                            <input type="number" min={0} className="qty-input"
-                              value={qtds[emb.id] || ''}
-                              disabled={!parseInt(qtds[emb.id] || 0)}
-                              onChange={e => setQtds(prev => ({ ...prev, [emb.id]: e.target.value }))}
-                              style={{ width: 90 }} />
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Observação para a gráfica (opcional)</label>
-                <input className="form-input" placeholder="Ex: Urgente, precisamos até sexta" value={obs} onChange={e => setObs(e.target.value)} />
-              </div>
-            </>
+          {/* Filtro tipo */}
+          <div style={{display:'flex',gap:6,marginBottom:14}}>
+            {TIPOS.map(t=>(
+              <button key={t} onClick={()=>setTipoFiltro(t)}
+                className={`btn btn-sm ${tipoFiltro===t?'btn-primary':'btn-ghost'}`}>
+                {t==='todos'?'Todos':t==='rotulo'?'Rótulos':'Embalagens'}
+              </button>
+            ))}
+          </div>
+
+          {loading ? (
+            <div style={{textAlign:'center',padding:40,color:'var(--gray-400)'}}>
+              <RefreshCw size={20} className="spin" style={{color:'var(--purple)'}}/> 
+              <div style={{marginTop:8}}>Carregando...</div>
+            </div>
+          ) : (
+            cats.map(cat => {
+              const grupo = filtradas.filter(e=>e.categoria===cat)
+              if (!grupo.length) return null
+              return (
+                <div key={cat} style={{marginBottom:16}}>
+                  <div style={{fontWeight:800,fontSize:12,color:'var(--purple)',textTransform:'uppercase',
+                    letterSpacing:'.05em',padding:'6px 0',borderBottom:'2px solid var(--purple-pale)',marginBottom:8}}>
+                    {cat}
+                  </div>
+                  {grupo.map(e => {
+                    const qtd = parseInt(qtds[e.id]||0)
+                    const selecionado = qtd > 0
+                    return (
+                      <div key={e.id} style={{
+                        display:'grid',gridTemplateColumns:'1fr 80px 90px',gap:10,alignItems:'center',
+                        padding:'7px 10px',borderRadius:6,marginBottom:4,
+                        background:selecionado?'var(--purple-pale)':'var(--gray-50)',
+                        border:`1px solid ${selecionado?'var(--purple)':'var(--gray-200)'}`,
+                      }}>
+                        <div>
+                          <div style={{fontWeight:selecionado?700:400,fontSize:13}}>{e.nome}</div>
+                          <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                            Estoque: {e.estoque_real.toLocaleString('pt-BR')} · Média: {e.media}/dia
+                          </div>
+                        </div>
+                        <div style={{fontSize:11,color:e.qtdPedido>0?'var(--danger)':'var(--ok)',textAlign:'right',fontWeight:700}}>
+                          {e.qtdPedido>0?`Pedir ${e.qtdPedido.toLocaleString('pt-BR')}`:'OK'}
+                        </div>
+                        <input type="number" min={0} step={e.unidade_minima_grafica||100}
+                          value={qtds[e.id]||''}
+                          onChange={ev=>setQtds(p=>({...p,[e.id]:ev.target.value}))}
+                          placeholder="0"
+                          style={{padding:'5px 8px',fontSize:13,border:`1.5px solid ${selecionado?'var(--purple)':'var(--gray-200)'}`,
+                            borderRadius:6,outline:'none',textAlign:'right',
+                            background:selecionado?'#fff':'transparent'}}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })
           )}
+
+          <div className="form-group" style={{marginTop:8}}>
+            <label className="form-label">Observações</label>
+            <textarea className="form-input" rows={2} value={obs} onChange={e=>setObs(e.target.value)}
+              placeholder="Instruções especiais, prazo, etc." style={{resize:'vertical'}}/>
+          </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-gold" onClick={salvar} disabled={saving || selecionadas.length === 0}>
-            {saving ? <><RefreshCw size={14} className="spin" /> Gerando...</> : <><FileText size={14} /> Confirmar e baixar PDF</>}
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||selecionadas.length===0}>
+            {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<>Criar pedido ({selecionadas.length} itens)</>}
           </button>
         </div>
       </div>
@@ -639,7 +718,7 @@ export default function Pedidos({ abrirNovo, onNovoClosed, tipo = 'rotulo' }) {
         ))}
       </div>
 
-      {showNovo && <ModalNovoPedido tipo={tipo} onClose={() => { setShowNovo(false); onNovoClosed?.() }} onSaved={() => { setShowNovo(false); onNovoClosed?.(); load() }} />}
+      {showNovo && <ModalNovoPedido onClose={() => { setShowNovo(false); onNovoClosed?.() }} onSaved={() => { setShowNovo(false); onNovoClosed?.(); load() }} />}
       {conferindo && <ModalConferencia pedido={conferindo} onClose={() => setConferindo(null)} onSaved={() => { setConferindo(null); load() }} />}
     </div>
   )
