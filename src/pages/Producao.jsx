@@ -213,7 +213,7 @@ export default function Producao() {
   const [desperdicio, setDesperdicio] = useState([{ item: '', ocorrido: '' }])
 
   useEffect(() => {
-    carregarEmbalagens('rotulo').then(d => { setEmbalagens(d); setLoading(false) })
+    carregarEmbalagens().then(d => { setEmbalagens(d); setLoading(false) })
   }, [])
 
   async function salvarTudo() {
