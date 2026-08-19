@@ -77,6 +77,128 @@ function gerarPDF(plan, itens) {
   doc.save(`Producao_${plan.data_producao}_reimp.pdf`)
 }
 
+function gerarPDFCompleto(planos, itensPorPlano) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const PAGE_H = 297
+  const MARGIN = 14
+
+  const planosComItens = planos.filter(p => (itensPorPlano[p.id]||[]).some(i => i.quantidade_total > 0))
+  if (!planosComItens.length) return
+
+  planosComItens.forEach((plan, pageIdx) => {
+    if (pageIdx > 0) doc.addPage()
+    const itens = itensPorPlano[plan.id] || []
+
+    doc.setFillColor(82,46,100); doc.rect(0,0,210,14,'F')
+    doc.setTextColor(234,183,130); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text('Laricas Fitness', MARGIN, 9)
+    doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
+    doc.text(`Reimpresso: ${agora}`, 130, 9)
+    doc.setTextColor(82,46,100); doc.setFontSize(16); doc.setFont(undefined,'bold')
+    doc.text(`Produção — ${headerDia(plan.data_producao)}`, MARGIN, 26)
+
+    const body = []
+    for (const cat of ORDEM_CATS) {
+      const grupo = itens.filter(i => (i.embalagens?.categoria||'Outros')===cat && i.quantidade_total>0)
+        .sort((a,b)=>b.quantidade_total-a.quantidade_total)
+      if (!grupo.length) continue
+      const totalCat = grupo.reduce((s,i)=>s+i.quantidade_total,0)
+      body.push([{ content:`${cat}  —  ${fmt(totalCat)} un`, colSpan:2,
+        styles:{fillColor:[103,63,124],textColor:[255,255,255],fontStyle:'bold',cellPadding:2.5} }])
+      for (const i of grupo)
+        body.push([i.embalagens?.nome||'?', {content:fmt(i.quantidade_total),styles:{halign:'center',fontStyle:'bold'}}])
+    }
+
+    const totalGeral = itens.reduce((s,i)=>s+i.quantidade_total,0)
+    const availableH = PAGE_H - 33 - 14 - MARGIN
+    let fontSize = 9
+    while (fontSize > 5.5 && body.length*(fontSize*0.45+4) > availableH) fontSize -= 0.5
+
+    autoTable(doc, { startY:33, body,
+      styles:{fontSize,cellPadding:fontSize<7?1.5:2},
+      alternateRowStyles:{fillColor:[248,245,252]},
+      columnStyles:{1:{cellWidth:22,halign:'center'}},
+      margin:{left:MARGIN,right:MARGIN} })
+
+    const finalY = doc.lastAutoTable.finalY + 4
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+    doc.text(`Total: ${fmt(totalGeral)} unidades`, MARGIN, Math.min(finalY, PAGE_H-10))
+    doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+    doc.text('Laricas Fitness — Planejamento de Produção (reimpressão)', MARGIN, PAGE_H-5)
+  })
+
+  const datas = planosComItens.map(p=>p.data_producao)
+  doc.save(`Producao_Completa_${datas[0]}_a_${datas[datas.length-1]}.pdf`)
+}
+
+function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
+  const doc = new jsPDF()
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const PAGE_H = 297
+  const MARGIN = 14
+
+  const planosComCorreio = planos.filter(p =>
+    (itensPorPlano[p.id]||[]).some(i => (i.quantidade_correio||0) > 0)
+  )
+
+  if (!planosComCorreio.length) {
+    doc.setFillColor(82,46,100); doc.rect(0,0,210,14,'F')
+    doc.setTextColor(234,183,130); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
+    doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
+    doc.text('Nenhum item de Correios encontrado nos planejamentos selecionados.', MARGIN, 40)
+    doc.save('Producao_Correios_historico.pdf')
+    return
+  }
+
+  planosComCorreio.forEach((plan, pageIdx) => {
+    if (pageIdx > 0) doc.addPage()
+    const itens = itensPorPlano[plan.id] || []
+
+    doc.setFillColor(82,46,100); doc.rect(0,0,210,14,'F')
+    doc.setTextColor(234,183,130); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text('Laricas Fitness', MARGIN, 9)
+    doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
+    doc.text(`Reimpresso: ${agora}`, 130, 9)
+    doc.setTextColor(82,46,100); doc.setFontSize(16); doc.setFont(undefined,'bold')
+    doc.text(`Produção Correios — ${headerDia(plan.data_producao)}`, MARGIN, 26)
+
+    const body = []
+    let totalDia = 0
+    for (const cat of ORDEM_CATS) {
+      const grupo = itens.filter(i => (i.embalagens?.categoria||'Outros')===cat && (i.quantidade_correio||0)>0)
+        .sort((a,b)=>b.quantidade_correio-a.quantidade_correio)
+      if (!grupo.length) continue
+      const totalCat = grupo.reduce((s,i)=>s+(i.quantidade_correio||0),0)
+      totalDia += totalCat
+      body.push([{ content:`${cat}  —  ${fmt(totalCat)} un`, colSpan:2,
+        styles:{fillColor:[103,63,124],textColor:[255,255,255],fontStyle:'bold',cellPadding:2.5} }])
+      for (const i of grupo)
+        body.push([i.embalagens?.nome||'?', {content:fmt(i.quantidade_correio||0),styles:{halign:'center',fontStyle:'bold'}}])
+    }
+
+    const availableH = PAGE_H - 33 - 14 - MARGIN
+    let fontSize = 9
+    while (fontSize > 5.5 && body.length*(fontSize*0.45+4) > availableH) fontSize -= 0.5
+
+    autoTable(doc, { startY:33, body,
+      styles:{fontSize,cellPadding:fontSize<7?1.5:2},
+      alternateRowStyles:{fillColor:[248,245,252]},
+      columnStyles:{1:{cellWidth:22,halign:'center'}},
+      margin:{left:MARGIN,right:MARGIN} })
+
+    const finalY = doc.lastAutoTable.finalY + 4
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+    doc.text(`Total Correios: ${fmt(totalDia)} unidades`, MARGIN, Math.min(finalY, PAGE_H-10))
+    doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+    doc.text('Laricas Fitness — Planejamento de Produção · Correios (reimpressão)', MARGIN, PAGE_H-5)
+  })
+
+  const datas = planosComCorreio.map(p=>p.data_producao)
+  doc.save(`Producao_Correios_${datas[0]}.pdf`)
+}
+
 export default function HistoricoPlanejamento() {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
@@ -102,32 +224,40 @@ export default function HistoricoPlanejamento() {
 
   useEffect(() => { load() }, [ini, fim])
 
-  async function verDetalhes(plan) {
-    if (expandido === plan.id) { setExpandido(null); return }
-    setExpandido(plan.id)
-    if (itensPorPlano[plan.id]) return
-    setCarregando(prev => ({ ...prev, [plan.id]: true }))
+  async function carregarItens(planId) {
+    if (itensPorPlano[planId]) return itensPorPlano[planId]
+    setCarregando(prev => ({ ...prev, [planId]: true }))
     const { data } = await supabase
       .from('planejamento_itens')
       .select('*, embalagens(nome, codigo, categoria)')
-      .eq('planejamento_id', plan.id)
+      .eq('planejamento_id', planId)
       .order('quantidade_total', { ascending: false })
-    setItensPorPlano(prev => ({ ...prev, [plan.id]: data || [] }))
-    setCarregando(prev => ({ ...prev, [plan.id]: false }))
+    const itens = data || []
+    setItensPorPlano(prev => ({ ...prev, [planId]: itens }))
+    setCarregando(prev => ({ ...prev, [planId]: false }))
+    return itens
+  }
+
+  async function verDetalhes(plan) {
+    if (expandido === plan.id) { setExpandido(null); return }
+    setExpandido(plan.id)
+    await carregarItens(plan.id)
   }
 
   async function baixarPDF(plan) {
-    let itens = itensPorPlano[plan.id]
-    if (!itens) {
-      const { data } = await supabase
-        .from('planejamento_itens')
-        .select('*, embalagens(nome, codigo, categoria)')
-        .eq('planejamento_id', plan.id)
-        .order('quantidade_total', { ascending: false })
-      itens = data || []
-      setItensPorPlano(prev => ({ ...prev, [plan.id]: itens }))
-    }
+    const itens = await carregarItens(plan.id)
     gerarPDF(plan, itens)
+  }
+
+  async function baixarPDFCompleto() {
+    // Carrega itens de todos os planos visíveis
+    for (const plan of planos) await carregarItens(plan.id)
+    gerarPDFCompleto(planos, itensPorPlano)
+  }
+
+  async function baixarPDFCorreios(plan) {
+    const itens = await carregarItens(plan.id)
+    gerarPDFCorreiosHistorico([plan], { [plan.id]: itens })
   }
 
   async function excluirPlano(plan) {
@@ -162,7 +292,14 @@ export default function HistoricoPlanejamento() {
       <div className="card">
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>Histórico de planejamentos</div>
-          <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>{totalGeral} planejamento(s) no período</div>
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>{totalGeral} planejamento(s) no período</div>
+            {planos.length > 0 && (
+              <button className="btn btn-primary btn-sm" onClick={baixarPDFCompleto}>
+                <FileText size={13}/> PDF Completo do período
+              </button>
+            )}
+          </div>
         </div>
 
         {loading ? (
@@ -196,7 +333,11 @@ export default function HistoricoPlanejamento() {
                       {exp ? '▲ Ocultar' : '▼ Ver detalhes'}
                     </button>
                     <button className="btn btn-gold btn-sm" onClick={() => baixarPDF(plan)}>
-                      <FileText size={13} /> Baixar PDF
+                      <FileText size={13} /> PDF Produção
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => baixarPDFCorreios(plan)}
+                      style={{borderColor:'var(--warning)',color:'var(--warning)'}}>
+                      📮 PDF Correios
                     </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => excluirPlano(plan)}
                       style={{ color:'var(--danger)' }} title="Excluir planejamento">
