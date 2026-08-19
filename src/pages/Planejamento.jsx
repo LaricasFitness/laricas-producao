@@ -1044,6 +1044,7 @@ export default function Planejamento({ onIrLogistica }) {
           itensParaSalvar.push({
             planejamento_id: plan.id, embalagem_id: emb.id,
             quantidade_bling: item.bling, quantidade_delivery: item.delivery, quantidade_total: item.total,
+            quantidade_correio: diasCorreio[diaAtual]?.[emb.codigo] || 0,
           })
         }
       }
