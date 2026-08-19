@@ -62,16 +62,14 @@ function ConferenciaEstoque({ onSalvo }) {
         ajuste_aplicado: true,
       })
 
-      // Aplica ajuste via inventário (mantém histórico cronológico)
-      if (contado !== sistema) {
-        await supabase.from('inventarios').insert({
-          embalagem_id: emb.id,
-          quantidade: contado,
-          data_inventario: new Date().toISOString().slice(0, 10),
-          registrado_por: responsavel || 'Conferência',
-          observacao: `Ajuste de conferência — sistema tinha ${sistema}, contado ${contado}`,
-        })
-      }
+      // Aplica ajuste via inventário para TODOS os itens conferidos (não só divergentes)
+      const { error: invErr } = await supabase.from('inventarios').insert({
+        embalagem_id: emb.id,
+        quantidade: contado,
+        data_inventario: new Date().toISOString().slice(0, 10),
+        observacao: `Conferência física — sistema: ${sistema}, contado: ${contado}${responsavel ? ` — ${responsavel}` : ''}`,
+      })
+      if (invErr) console.error('Erro ao inserir inventário:', invErr)
     }
 
     setSaving(false)
