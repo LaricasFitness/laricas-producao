@@ -80,7 +80,22 @@ function ConferenciaEstoque({ onSalvo }) {
     onSalvo?.() // atualiza situação com novos estoques
   }
 
-  const itensLancados = embs.filter(e => contagens[e.id] !== undefined && contagens[e.id] !== '')
+  async function excluirConferencia(c) {
+    if (!window.confirm(`Excluir conferência de ${new Date(c.data_conferencia+'T12:00:00').toLocaleDateString('pt-BR')} — ${c.embalagens?.nome}?\n\nO inventário ajustado será removido e o estoque voltará ao valor anterior.`)) return
+
+    // Remove o inventário criado pela conferência
+    await supabase.from('inventarios')
+      .delete()
+      .eq('embalagem_id', c.embalagem_id)
+      .eq('data_inventario', c.data_conferencia)
+      .gte('criado_em', c.criado_em) // só remove inventários criados após ou junto com a conferência
+
+    // Remove o registro de conferência
+    await supabase.from('conferencia_estoque').delete().eq('id', c.id)
+
+    await loadHistorico()
+    onSalvo?.() // atualiza situação
+  }
   const comDivergencia = itensLancados.filter(e => parseInt(contagens[e.id]) !== e.estoque_sistema)
 
   return (
@@ -231,6 +246,7 @@ function ConferenciaEstoque({ onSalvo }) {
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Contado</th>
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Diferença</th>
                   <th style={{padding:'9px 14px',textAlign:'left'}}>Responsável</th>
+                  <th style={{padding:'9px 10px',width:40}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -252,6 +268,13 @@ function ConferenciaEstoque({ onSalvo }) {
                         {diff>0?'+':''}{fmt(diff)}
                       </td>
                       <td style={{padding:'8px 14px',color:'var(--gray-500)'}}>{c.responsavel||'—'}</td>
+                      <td style={{padding:'8px 10px',textAlign:'center'}}>
+                        <button className="btn btn-ghost btn-sm"
+                          onClick={()=>excluirConferencia(c)}
+                          style={{color:'var(--danger)'}} title="Excluir conferência">
+                          ✕
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}
