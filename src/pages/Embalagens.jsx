@@ -10,7 +10,7 @@ import { RefreshCw, Save, CheckCircle } from 'lucide-react'
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
 
 // ── Conferência de Estoque ────────────────────────────────────────────────────
-function ConferenciaEstoque() {
+function ConferenciaEstoque({ onSalvo }) {
   const [embs, setEmbs] = useState([])
   const [contagens, setContagens] = useState({}) // id → valor contado
   const [responsavel, setResponsavel] = useState('')
@@ -67,7 +67,8 @@ function ConferenciaEstoque() {
         await supabase.from('inventarios').insert({
           embalagem_id: emb.id,
           quantidade: contado,
-          responsavel: responsavel || 'Conferência',
+          data_inventario: new Date().toISOString().slice(0, 10),
+          registrado_por: responsavel || 'Conferência',
           observacao: `Ajuste de conferência — sistema tinha ${sistema}, contado ${contado}`,
         })
       }
@@ -78,6 +79,7 @@ function ConferenciaEstoque() {
     await load()
     await loadHistorico()
     setAba('historico')
+    onSalvo?.() // atualiza situação com novos estoques
   }
 
   const itensLancados = embs.filter(e => contagens[e.id] !== undefined && contagens[e.id] !== '')
@@ -268,10 +270,16 @@ export default function Embalagens() {
   const [sub, setSub] = useState('situacao')
   const [novoPedidoFlag, setNovoPedidoFlag] = useState(false)
   const [tipo, setTipo] = useState(() => localStorage.getItem('emb_tipo') || 'rotulo')
+  const [refreshKey, setRefreshKey] = useState(0)
 
   function mudarTipo(t) {
     setTipo(t)
     localStorage.setItem('emb_tipo', t)
+  }
+
+  function irParaSituacao() {
+    setRefreshKey(k => k + 1)
+    setSub('situacao')
   }
 
   return (
@@ -291,16 +299,16 @@ export default function Embalagens() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 0 }}>
-        <button className={`tab${sub === 'situacao' ? ' active' : ''}`} onClick={() => setSub('situacao')}>📊 Situação</button>
+        <button className={`tab${sub === 'situacao' ? ' active' : ''}`} onClick={irParaSituacao}>📊 Situação</button>
         <button className={`tab${sub === 'pedidos' ? ' active' : ''}`} onClick={() => setSub('pedidos')}>🛒 Pedidos</button>
         <button className={`tab${sub === 'compras' ? ' active' : ''}`} onClick={() => setSub('compras')}>💰 Compras</button>
         <button className={`tab${sub === 'conferencia' ? ' active' : ''}`} onClick={() => setSub('conferencia')}>🔍 Conferência</button>
         <button className={`tab${sub === 'acoes' ? ' active' : ''}`} onClick={() => setSub('acoes')}>🕓 Minhas ações</button>
       </div>
-      {sub === 'situacao'    && <Dashboard tipo={tipo} onNovoPedido={() => { setSub('pedidos'); setNovoPedidoFlag(true) }} />}
+      {sub === 'situacao'    && <Dashboard key={`${tipo}-${refreshKey}`} tipo={tipo} onNovoPedido={() => { setSub('pedidos'); setNovoPedidoFlag(true) }} />}
       {sub === 'pedidos'     && <Pedidos tipo={tipo} abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
       {sub === 'compras'     && <Compras tipo={tipo} />}
-      {sub === 'conferencia' && <ConferenciaEstoque />}
+      {sub === 'conferencia' && <ConferenciaEstoque onSalvo={irParaSituacao} />}
       {sub === 'acoes'       && <div className="card card-pad"><LogGeral /></div>}
     </>
   )
