@@ -77,6 +77,66 @@ function gerarPDF(plan, itens) {
   doc.save(`Producao_${plan.data_producao}_reimp.pdf`)
 }
 
+function gerarPDFCompletoHistorico(plan, itens) {
+  const doc = new jsPDF('l', 'mm', 'a4')
+  const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+  const MARGIN = 14
+  const PAGE_W = 297
+
+  doc.setFillColor(82,46,100); doc.rect(0,0,PAGE_W,38,'F')
+  doc.setTextColor(234,183,130); doc.setFontSize(18); doc.setFont(undefined,'bold')
+  doc.text('Laricas Fitness', MARGIN, 15)
+  doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
+  doc.text(`Produção Completa — ${headerDia(plan.data_producao)}`, MARGIN, 25)
+  doc.text(`Reimpresso: ${agora}`, MARGIN, 32)
+
+  let startY = 46
+  for (const cat of ORDEM_CATS) {
+    const grupo = itens
+      .filter(i => (i.embalagens?.categoria||'Outros') === cat && i.quantidade_total > 0)
+      .sort((a,b) => b.quantidade_total - a.quantidade_total)
+    if (!grupo.length) continue
+
+    const totalCat = grupo.reduce((s,i) => s + i.quantidade_total, 0)
+
+    autoTable(doc, {
+      startY,
+      head: [[{ content: `${cat}  —  ${fmt(totalCat)} un`, colSpan: 4 }]],
+      body: grupo.map(i => [
+        i.embalagens?.nome || '?',
+        { content: i.quantidade_bling > 0 ? fmt(i.quantidade_bling) : '—', styles: { halign:'center' } },
+        { content: i.quantidade_delivery > 0 ? fmt(i.quantidade_delivery) : '—', styles: { halign:'center' } },
+        { content: fmt(i.quantidade_total), styles: { halign:'center', fontStyle:'bold' } },
+      ]),
+      headStyles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold', fontSize:9 },
+      columnStyles: {
+        0: { cellWidth:'auto' },
+        1: { cellWidth:25, halign:'center' },
+        2: { cellWidth:25, halign:'center' },
+        3: { cellWidth:25, halign:'center' },
+      },
+      head: [[
+        { content: cat + '  —  ' + fmt(totalCat) + ' un', colSpan: 4,
+          styles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold', fontSize:9 } },
+        ],
+        ['Produto', 'Bling', 'Delivery', 'Total']
+      ],
+      alternateRowStyles: { fillColor:[248,245,252] },
+      styles: { fontSize:8, cellPadding:2.5 },
+      margin: { left:MARGIN, right:MARGIN },
+    })
+    startY = doc.lastAutoTable.finalY + 4
+    if (startY > 185) { doc.addPage(); startY = 14 }
+  }
+
+  const totalGeral = itens.reduce((s,i) => s + i.quantidade_total, 0)
+  doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(82,46,100)
+  doc.text(`Total geral: ${fmt(totalGeral)} unidades`, MARGIN, Math.min(startY+6, 195))
+  doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
+  doc.text('Laricas Fitness — Produção Completa (reimpressão)', MARGIN, 205)
+  doc.save(`Producao_Completa_${plan.data_producao}_reimp.pdf`)
+}
+
 function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
@@ -199,6 +259,11 @@ export default function HistoricoPlanejamento() {
     gerarPDFCorreiosHistorico([plan], { [plan.id]: itens })
   }
 
+  async function baixarPDFCompletoHistorico(plan) {
+    const itens = await carregarItens(plan.id)
+    gerarPDFCompletoHistorico(plan, itens)
+  }
+
   async function excluirPlano(plan) {
     if (!window.confirm(`Excluir o planejamento de ${headerDia(plan.data_producao)}?\nEsta ação não pode ser desfeita.`)) return
     await supabase.from('planejamento_itens').delete().eq('planejamento_id', plan.id)
@@ -266,6 +331,9 @@ export default function HistoricoPlanejamento() {
                     </button>
                     <button className="btn btn-gold btn-sm" onClick={() => baixarPDF(plan)}>
                       <FileText size={13} /> PDF Produção
+                    </button>
+                    <button className="btn btn-gold btn-sm" onClick={() => baixarPDFCompletoHistorico(plan)}>
+                      <FileText size={13} /> PDF Completa
                     </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => baixarPDFCorreios(plan)}
                       style={{borderColor:'var(--warning)',color:'var(--warning)'}}>
