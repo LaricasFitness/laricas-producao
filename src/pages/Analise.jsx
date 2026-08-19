@@ -985,8 +985,83 @@ export default function Analise() {
               </div>
             )}
           </div>
+
+          {/* Compilado mensal de desperdícios */}
+          <CompiladorDesperdicio />
         </>
       )}
     </>
+  )
+}
+
+function CompiladorDesperdicio() {
+  const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
+  const [dados, setDados] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const ini = mes + '-01'
+      const fim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
+      const { data } = await supabase
+        .from('producao_interna')
+        .select('item, observacao, data_producao, registrado_por')
+        .eq('fase', 'desperdicio')
+        .gte('data_producao', ini).lte('data_producao', fim)
+        .order('data_producao', { ascending: true })
+      setDados(data || [])
+      setLoading(false)
+    }
+    load()
+  }, [mes])
+
+  const labelMes = new Date(mes+'-15').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+
+  return (
+    <div className="card">
+      <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
+        <div style={{fontWeight:800,fontSize:15}}>📅 Compilado Mensal de Desperdícios</div>
+        <div style={{flex:1}}/>
+        <input type="month" className="form-input" value={mes}
+          onChange={e=>setMes(e.target.value)} style={{width:180,fontSize:13}}/>
+      </div>
+
+      {loading ? (
+        <div className="loading"><RefreshCw size={14} className="spin"/></div>
+      ) : dados.length === 0 ? (
+        <div style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
+          ✅ Nenhum desperdício em {labelMes}.
+        </div>
+      ) : (
+        <>
+          <div style={{padding:'8px 20px',background:'var(--gray-50)',fontSize:12,color:'var(--gray-500)',fontWeight:700,borderBottom:'1px solid var(--gray-200)'}}>
+            {labelMes} — {dados.length} ocorrência{dados.length>1?'s':''}
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                <th style={{padding:'8px 14px',textAlign:'left'}}>Data</th>
+                <th style={{padding:'8px 14px',textAlign:'left'}}>O que foi desperdiçado</th>
+                <th style={{padding:'8px 14px',textAlign:'left'}}>O que aconteceu</th>
+                <th style={{padding:'8px 14px',textAlign:'left'}}>Responsável</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dados.map((d,i) => (
+                <tr key={i} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                  <td style={{padding:'8px 14px',color:'var(--gray-500)',whiteSpace:'nowrap',fontSize:12}}>
+                    {new Date(d.data_producao+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short',day:'numeric',month:'numeric'})}
+                  </td>
+                  <td style={{padding:'8px 14px',fontWeight:600,color:'var(--danger)'}}>{d.item}</td>
+                  <td style={{padding:'8px 14px',color:'var(--gray-600)'}}>{d.observacao||'—'}</td>
+                  <td style={{padding:'8px 14px',color:'var(--gray-500)',fontSize:12}}>{d.registrado_por||'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   )
 }
