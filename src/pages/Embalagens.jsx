@@ -83,19 +83,19 @@ function ConferenciaEstoque({ onSalvo }) {
   async function excluirConferencia(c) {
     if (!window.confirm(`Excluir conferência de ${new Date(c.data_conferencia+'T12:00:00').toLocaleDateString('pt-BR')} — ${c.embalagens?.nome}?\n\nO inventário ajustado será removido e o estoque voltará ao valor anterior.`)) return
 
-    // Remove o inventário criado pela conferência
     await supabase.from('inventarios')
       .delete()
       .eq('embalagem_id', c.embalagem_id)
       .eq('data_inventario', c.data_conferencia)
-      .gte('criado_em', c.criado_em) // só remove inventários criados após ou junto com a conferência
+      .gte('criado_em', c.criado_em)
 
-    // Remove o registro de conferência
     await supabase.from('conferencia_estoque').delete().eq('id', c.id)
 
     await loadHistorico()
-    onSalvo?.() // atualiza situação
+    onSalvo?.()
   }
+
+  const itensLancados = embs.filter(e => contagens[e.id] !== undefined && contagens[e.id] !== '')
   const comDivergencia = itensLancados.filter(e => parseInt(contagens[e.id]) !== e.estoque_sistema)
 
   return (
