@@ -5,7 +5,7 @@ import Compras from './Compras'
 import LogGeral from './LogGeral'
 import { supabase } from '../supabase'
 import { calcularEstoqueCronologico } from '../lib/data'
-import { RefreshCw, Save, CheckCircle } from 'lucide-react'
+import { RefreshCw, Save, CheckCircle, Pencil } from 'lucide-react'
 
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
 
@@ -78,6 +78,31 @@ function ConferenciaEstoque({ onSalvo }) {
     await loadHistorico()
     setAba('historico')
     onSalvo?.() // atualiza situação com novos estoques
+  }
+
+  const [editando, setEditando] = useState(null) // registro de conferência sendo editado
+  const [editQtd, setEditQtd] = useState('')
+
+  async function salvarEdicao() {
+    if (!editando || editQtd === '') return
+    const novaQtd = parseInt(editQtd)
+
+    // Atualiza conferencia_estoque
+    await supabase.from('conferencia_estoque')
+      .update({ estoque_contado: novaQtd })
+      .eq('id', editando.id)
+
+    // Atualiza o inventário correspondente
+    await supabase.from('inventarios')
+      .update({ quantidade: novaQtd })
+      .eq('embalagem_id', editando.embalagem_id)
+      .eq('data_inventario', editando.data_conferencia)
+      .gte('criado_em', editando.criado_em)
+
+    setEditando(null)
+    setEditQtd('')
+    await loadHistorico()
+    onSalvo?.()
   }
 
   async function excluirConferencia(c) {
@@ -230,7 +255,45 @@ function ConferenciaEstoque({ onSalvo }) {
       )}
 
       {aba === 'historico' && (
-        <div className="card">
+        <>
+          {/* Modal de edição inline */}
+          {editando && (
+            <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setEditando(null)}>
+              <div className="modal" style={{maxWidth:400}}>
+                <div className="modal-header">
+                  <div>
+                    <div className="modal-title">✏️ Editar Contagem</div>
+                    <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{editando.embalagens?.nome}</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setEditando(null)}>✕</button>
+                </div>
+                <div className="modal-body">
+                  <div style={{display:'flex',gap:16,marginBottom:16,padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,fontSize:13}}>
+                    <div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>Sistema na época</div>
+                      <div style={{fontWeight:700}}>{editando.estoque_sistema}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>Contado anteriormente</div>
+                      <div style={{fontWeight:700}}>{editando.estoque_contado}</div>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Nova contagem física</label>
+                    <input type="number" className="form-input" value={editQtd} min={0}
+                      onChange={e=>setEditQtd(e.target.value)} autoFocus/>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-ghost" onClick={()=>setEditando(null)}>Cancelar</button>
+                  <button className="btn btn-primary" onClick={salvarEdicao} disabled={editQtd===''}>
+                    <Save size={14}/> Salvar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="card">
           <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:800,fontSize:15}}>
             📋 Histórico de Conferências
           </div>
@@ -269,11 +332,18 @@ function ConferenciaEstoque({ onSalvo }) {
                       </td>
                       <td style={{padding:'8px 14px',color:'var(--gray-500)'}}>{c.responsavel||'—'}</td>
                       <td style={{padding:'8px 10px',textAlign:'center'}}>
-                        <button className="btn btn-ghost btn-sm"
-                          onClick={()=>excluirConferencia(c)}
-                          style={{color:'var(--danger)'}} title="Excluir conferência">
-                          ✕
-                        </button>
+                        <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                          <button className="btn btn-ghost btn-sm"
+                            onClick={()=>{setEditando(c);setEditQtd(String(c.estoque_contado))}}
+                            title="Editar contagem">
+                            <Pencil size={11}/>
+                          </button>
+                          <button className="btn btn-ghost btn-sm"
+                            onClick={()=>excluirConferencia(c)}
+                            style={{color:'var(--danger)'}} title="Excluir conferência">
+                            ✕
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -282,6 +352,7 @@ function ConferenciaEstoque({ onSalvo }) {
             </table>
           )}
         </div>
+        </>
       )}
     </div>
   )
