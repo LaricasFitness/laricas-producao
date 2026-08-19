@@ -10,7 +10,7 @@ import { RefreshCw, Save, CheckCircle } from 'lucide-react'
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
 
 // ── Conferência de Estoque ────────────────────────────────────────────────────
-function ConferenciaEstoque({ tipo }) {
+function ConferenciaEstoque() {
   const [embs, setEmbs] = useState([])
   const [contagens, setContagens] = useState({}) // id → valor contado
   const [responsavel, setResponsavel] = useState('')
@@ -24,12 +24,10 @@ function ConferenciaEstoque({ tipo }) {
     const { data } = await supabase.from('embalagens')
       .select('id, codigo, nome, categoria, tipo')
       .eq('ativo', true)
-      .eq(tipo ? 'tipo' : 'ativo', tipo || true)
-      .order('categoria').order('nome')
+      .order('tipo').order('categoria').order('nome')
 
     if (!data) { setLoading(false); return }
 
-    // Calcula estoque real de cada embalagem em paralelo
     const estoques = await Promise.all(data.map(e => calcularEstoqueCronologico(e.id)))
     setEmbs(data.map((e, i) => ({ ...e, estoque_sistema: estoques[i] })))
     setLoading(false)
@@ -43,7 +41,7 @@ function ConferenciaEstoque({ tipo }) {
     setHistorico(data || [])
   }
 
-  useEffect(() => { load(); loadHistorico() }, [tipo])
+  useEffect(() => { load(); loadHistorico() }, [])
 
   async function confirmarConferencia() {
     const itensComDivergencia = embs.filter(e => contagens[e.id] !== undefined && contagens[e.id] !== '')
@@ -156,7 +154,14 @@ function ConferenciaEstoque({ tipo }) {
                         }}>
                           <div>
                             <div style={{fontWeight:600,fontSize:13}}>{e.nome}</div>
-                            <div style={{fontSize:11,color:'var(--gray-400)'}}>{e.codigo}</div>
+                            <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                              {e.codigo}
+                              <span style={{marginLeft:6,padding:'1px 6px',borderRadius:8,fontSize:10,fontWeight:700,
+                                background:e.tipo==='rotulo'?'#f0eaff':'#e8f5e9',
+                                color:e.tipo==='rotulo'?'var(--purple)':'#2e7d32'}}>
+                                {e.tipo==='rotulo'?'Rótulo':'Embalagem'}
+                              </span>
+                            </div>
                           </div>
                           <div style={{textAlign:'right'}}>
                             <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Sistema</div>
@@ -295,7 +300,7 @@ export default function Embalagens() {
       {sub === 'situacao'    && <Dashboard tipo={tipo} onNovoPedido={() => { setSub('pedidos'); setNovoPedidoFlag(true) }} />}
       {sub === 'pedidos'     && <Pedidos tipo={tipo} abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
       {sub === 'compras'     && <Compras tipo={tipo} />}
-      {sub === 'conferencia' && <ConferenciaEstoque tipo={tipo} />}
+      {sub === 'conferencia' && <ConferenciaEstoque />}
       {sub === 'acoes'       && <div className="card card-pad"><LogGeral /></div>}
     </>
   )
