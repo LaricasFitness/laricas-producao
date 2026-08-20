@@ -19,6 +19,7 @@ function ModalEmb({ emb, onClose, onSaved }) {
     categoria: emb?.categoria || 'Pão de Mel 100g',
     dias_producao: emb?.dias_producao || 15,
     estoque_atual: emb?.estoque_atual || 0,
+    custo_unitario: emb?.custo_unitario || 0,
     unidade_minima_grafica: emb?.unidade_minima_grafica || 100,
     margem_seguranca: emb?.margem_seguranca || 0.10,
     ativo: emb?.ativo ?? true,
@@ -44,6 +45,7 @@ function ModalEmb({ emb, onClose, onSaved }) {
     const payload = {
       ...f,
       codigo: f.codigo.toUpperCase().trim(),
+      custo_unitario: parseFloat(f.custo_unitario) || 0,
       margem_seguranca: parseFloat(f.margem_seguranca),
       dias_producao: parseInt(f.dias_producao),
       estoque_atual: parseInt(f.estoque_atual || 0),
@@ -126,6 +128,13 @@ function ModalEmb({ emb, onClose, onSaved }) {
               <label className="form-label">Estoque atual (un)</label>
               <input type="number" min={0} className="form-input" value={f.estoque_atual}
                 onChange={e => set('estoque_atual', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Custo unitário (R$) — para CMV</label>
+              <input type="number" min={0} step={0.0001} className="form-input" value={f.custo_unitario}
+                onChange={e => set('custo_unitario', e.target.value)}
+                placeholder="ex: 0.15" />
+              <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>Custo do rótulo/embalagem por unidade</span>
             </div>
             <div className="form-group">
               <label className="form-label">Unid. mínima gráfica</label>
@@ -1499,6 +1508,45 @@ function AdminSistema() {
               </div>
             )
           })}
+
+          {/* Percentuais de desperdício */}
+          <div style={{ border:'2px solid var(--warning)', borderRadius:10, padding:16, background:'#fffbf0' }}>
+            <div style={{ fontWeight:800, fontSize:14, marginBottom:4 }}>♻️ Percentuais de Desperdício</div>
+            <div style={{ fontSize:13, color:'var(--gray-500)', marginBottom:14 }}>
+              Aplicados no CMV Mensal como custo adicional sobre matéria-prima e embalagem.
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+              {[
+                { chave:'desperdicio_mp_pct', label:'Desperdício de matéria-prima', padrao:'5' },
+                { chave:'desperdicio_embalagem_pct', label:'Desperdício de embalagem', padrao:'3' },
+              ].map(c => (
+                <div key={c.chave}>
+                  <label className="form-label">{c.label}</label>
+                  <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                    <input
+                      type="number" min={0} max={50} step={0.5}
+                      className="form-input"
+                      value={configs[c.chave]?.valor ?? c.padrao}
+                      onChange={e => {
+                        const v = e.target.value
+                        setConfigs(p => ({ ...p, [c.chave]: { ...(p[c.chave]||{}), chave:c.chave, valor:v } }))
+                      }}
+                      onBlur={async e => {
+                        setSaving(c.chave)
+                        await supabase.from('configuracoes')
+                          .upsert({ chave:c.chave, valor:String(e.target.value), atualizado_em:new Date().toISOString() }, { onConflict:'chave' })
+                        await load()
+                        setSaving(null)
+                      }}
+                      style={{ width:100 }}
+                    />
+                    <span style={{ fontWeight:700, color:'var(--gray-500)' }}>%</span>
+                    {saving === c.chave && <RefreshCw size={13} className="spin" style={{ color:'var(--purple)' }}/>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
