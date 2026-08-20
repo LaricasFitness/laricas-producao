@@ -234,25 +234,6 @@ function usePrecificacao() {
   }
 
   useEffect(() => { load() }, [])
-
-  // Salva snapshot automaticamente quando os dados carregam
-  useEffect(() => {
-    if (!data?.produtos?.length) return
-    const mes = new Date().toISOString().slice(0, 7)
-    const rows = data.produtos
-      .filter(p => p.cmvTotal > 0)
-      .map(p => ({
-        mes,
-        sku_produto: p.emb.codigo,
-        nome_produto: p.emb.nome,
-        categoria: p.emb.categoria,
-        cmv_direto: p.cmvTotal,
-        cmv_real: p.temRendimentoReal ? p.cmvTotalReal : null,
-        overhead_unit: data.overheadPorUnidade || 0,
-        rendimento_usado: p.temRendimentoReal ? 'real' : 'teorico',
-      }))
-    supabase.from('cmv_historico').upsert(rows, { onConflict: 'mes,sku_produto' })
-  }, [data])
   return { data, loading, reload: load }
 }
 
@@ -810,6 +791,25 @@ export default function Precificacao() {
   const [incluirOverhead, setIncluirOverhead] = useState(false)
   const { data, loading, reload } = usePrecificacao()
 
+  // Salva snapshot automaticamente quando os dados carregam
+  useEffect(() => {
+    if (!data?.produtos?.length) return
+    const mes = new Date().toISOString().slice(0, 7)
+    const rows = data.produtos
+      .filter(p => p.cmvTotal > 0)
+      .map(p => ({
+        mes,
+        sku_produto: p.emb.codigo,
+        nome_produto: p.emb.nome,
+        categoria: p.emb.categoria,
+        cmv_direto: p.cmvTotal,
+        cmv_real: p.temRendimentoReal ? p.cmvTotalReal : null,
+        overhead_unit: data.overheadPorUnidade || 0,
+        rendimento_usado: p.temRendimentoReal ? 'real' : 'teorico',
+      }))
+    supabase.from('cmv_historico').upsert(rows, { onConflict: 'mes,sku_produto' })
+  }, [data])
+
   return (
     <>
       <div className="tabs" style={{marginBottom:0}}>
@@ -908,10 +908,10 @@ function EvolucaoCMV() {
 
   if (!historico.length) return (
     <div className="card card-pad" style={{textAlign:'center',color:'var(--gray-400)',padding:40}}>
-      <div style={{fontSize:32,marginBottom:12}}>📸</div>
-      <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>Nenhum snapshot salvo ainda</div>
-      <div style={{fontSize:13}}>Use o botão <strong>"📸 Salvar snapshot do mês"</strong> na barra acima para salvar o CMV atual de todos os produtos.</div>
-      <div style={{fontSize:12,marginTop:8,color:'var(--gray-300)'}}>Faça isso uma vez por mês para acompanhar a evolução ao longo do tempo.</div>
+      <div style={{fontSize:32,marginBottom:12}}>📈</div>
+      <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>Nenhum dado de evolução ainda</div>
+      <div style={{fontSize:13}}>O snapshot deste mês será salvo automaticamente ao carregar a precificação.</div>
+      <div style={{fontSize:12,marginTop:8,color:'var(--gray-300)'}}>Se acabou de abrir a tela, aguarde alguns segundos e recarregue esta aba.</div>
     </div>
   )
 
@@ -930,6 +930,11 @@ function EvolucaoCMV() {
             <option key={s} value={s}>{porSku[s]?.nome || s}</option>
           ))}
         </select>
+        <button className="btn btn-ghost btn-sm" onClick={() => {
+          setLoading(true)
+          supabase.from('cmv_historico').select('*').order('mes', { ascending: true })
+            .then(({ data }) => { setHistorico(data||[]); setLoading(false) })
+        }}><RefreshCw size={13}/></button>
       </div>
 
       {/* Tabela de evolução */}
