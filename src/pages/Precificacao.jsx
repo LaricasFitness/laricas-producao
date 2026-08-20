@@ -312,10 +312,10 @@ function FichaCusto({ data, incluirOverhead }) {
                   <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:temCusto?'var(--purple)':'var(--gray-300)'}}>
                     {temCusto ? (
                       <div>
-                        <div>{fmtR(cmvEf)}</div>
+                        <div>{fmtR(p.temRendimentoReal ? cmvEfetivo(p.cmvTotalReal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1) : cmvEf)}</div>
                         {p.temRendimentoReal && (
-                          <div style={{fontSize:10,color:'var(--ok)',fontWeight:700}}>
-                            Real: {fmtR(cmvEfetivo(p.cmvTotalReal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}
+                          <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:400}}>
+                            Teórico: {fmtR(cmvEf)}
                           </div>
                         )}
                       </div>
@@ -410,16 +410,16 @@ function FichaCusto({ data, incluirOverhead }) {
                             <span style={{fontWeight:700,color:'var(--ok)'}}>{fmtR(data.overheadPorUnidade * (parseFloat(p.emb.equivalencia_overhead)||1))}</span>
                           </div>
                         )}
-                        <div style={{padding:'10px 14px',background:'var(--purple)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
-                          <span>CMV {incluirOverhead ? 'Total' : 'Direto'} — Rendimento Teórico</span>
-                          <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
-                        </div>
                         {p.temRendimentoReal && (
                           <div style={{padding:'10px 14px',background:'var(--ok)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
                             <span>CMV {incluirOverhead ? 'Total' : 'Direto'} — Rendimento Real ✓</span>
                             <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotalReal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
                           </div>
                         )}
+                        <div style={{padding:'10px 14px',background: p.temRendimentoReal ? 'var(--gray-200)' : 'var(--purple)',borderRadius:8,display:'flex',justifyContent:'space-between',color: p.temRendimentoReal ? 'var(--gray-600)' : '#fff',fontWeight:800}}>
+                          <span>CMV {incluirOverhead ? 'Total' : 'Direto'} — Rendimento Teórico</span>
+                          <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
+                        </div>
                       </div>
                     </td>
                   </tr>
