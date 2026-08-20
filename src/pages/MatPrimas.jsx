@@ -1962,6 +1962,7 @@ function CMVMensal() {
       { data: preps },
       { data: prodComps },
       { data: catEmbsData },
+      { data: cfgDesp },
       { data: snapshotAtual },
       { data: snapshotAnterior },
     ] = await Promise.all([
@@ -1985,6 +1986,7 @@ function CMVMensal() {
       // Composição dos produtos + categoria_embalagem
       supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
       supabase.from('categoria_embalagem').select('categoria, quantidade, embalagens(id,nome,custo_unitario)').then(r=>r).catch(()=>({data:[]})),
+      supabase.from('configuracoes').select('chave, valor').like('chave', 'desperdicio%').then(r=>r).catch(()=>({data:[]})),
       // Snapshot CMV do mês atual
       supabase.from('cmv_historico').select('*').eq('mes', mes),
       // Snapshot CMV do mês anterior
@@ -2095,10 +2097,21 @@ function CMVMensal() {
     const divergencia = custoConsumoMP > 0 ? custoConsumoMP - custoPorFicha : null
     const divergenciaPct = custoPorFicha > 0 && divergencia !== null ? (divergencia / custoPorFicha * 100) : null
 
+    // Percentuais de desperdício configuráveis
+    const cfgMap = {}
+    for (const c of (cfgDesp||[])) cfgMap[c.chave] = parseFloat(c.valor)||0
+    const despMPPct = cfgMap['desperdicio_mp_pct'] ?? 5
+    const despEmbPct = cfgMap['desperdicio_embalagem_pct'] ?? 3
+
+    const despMP = custoPorFichaPreps * (despMPPct/100)
+    const despEmb = custoPorFichaEmb * (despEmbPct/100)
+    const cmvComDesperdicio = custoPorFicha + despMP + despEmb
+
     setDados({
       produtosUnitario, totalCMVUnitario,
       custoConsumoMP, custoPorFicha, custoPorFichaPreps, custoPorFichaEmb,
       divergencia, divergenciaPct,
+      despMPPct, despEmbPct, despMP, despEmb, cmvComDesperdicio,
       consumoMPList, mesAnterior,
       totalUnidades: Object.values(prodPorSku).reduce((s,p) => s+p.qtd, 0),
       temConsumoMP: (consumoMP||[]).length > 0,
@@ -2205,68 +2218,87 @@ function CMVMensal() {
                 </div>
               )}
 
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
-                {[
-                  {label:'Consumo real de MP',valor:fmtR(dados.custoConsumoMP),sub:'débitos reais de estoque de MP',cor:'var(--purple)'},
-                  {label:'Custo de embalagem (ficha)',valor:fmtR(dados.custoPorFichaEmb),sub:'rótulo + filmes por unidade produzida',cor:'var(--purple)'},
-                  {label:'Total CMV (ficha)',valor:fmtR(dados.custoPorFicha),sub:'MP + embalagem pela ficha técnica',cor:'var(--ok)'},
-                ].map(k=>(
-                  <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
-                    <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
-                    <div style={{fontSize:18,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
-                    <div style={{fontSize:10,color:'var(--gray-400)'}}>{k.sub}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Linha de soma */}
-              <div style={{padding:'12px 16px',borderRadius:8,background:'var(--purple-pale)',border:'1px solid var(--purple)',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,fontSize:13}}>
-                <div style={{textAlign:'center'}}>
-                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>MP real</div>
-                  <div style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(dados.custoConsumoMP)}</div>
+              {/* ── BLOCO 1: CMV pela ficha técnica (o que DEVERIA custar) ── */}
+              <div className="card">
+                <div style={{padding:'12px 20px',background:'var(--purple)',color:'#fff',fontWeight:800,fontSize:14}}>
+                  1️⃣ CMV Teórico — o que a ficha técnica diz que deveria custar
                 </div>
-                <div style={{textAlign:'center'}}>
-                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>Embalagem (ficha)</div>
-                  <div style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(dados.custoPorFichaEmb)}</div>
-                </div>
-                <div style={{textAlign:'center',borderLeft:'1px solid var(--purple)'}}>
-                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>Total CMV real+emb</div>
-                  <div style={{fontWeight:800,color:'var(--purple)',fontSize:16}}>{fmtR(dados.custoConsumoMP + dados.custoPorFichaEmb)}</div>
-                </div>
-              </div>
-
-              {/* Divergência MP */}
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-                <div className="card card-pad" style={{textAlign:'center'}}>
-                  <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP ficha técnica</div>
-                  <div style={{fontSize:18,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoPorFichaPreps)}</div>
-                  <div style={{fontSize:10,color:'var(--gray-400)'}}>o que deveria ter sido consumido</div>
-                </div>
-                <div className="card card-pad" style={{textAlign:'center',
-                  background: dados.divergenciaPct !== null && Math.abs(dados.divergenciaPct||0)>10 ? '#fff0f0' : '#f0faf0'}}>
-                  <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Divergência MP</div>
-                  <div style={{fontSize:18,fontWeight:800,margin:'4px 0',
-                    color: dados.divergencia===null?'var(--gray-400)':Math.abs(dados.divergenciaPct||0)>10?'var(--danger)':'var(--ok)'}}>
-                    {dados.divergencia !== null ? `${dados.divergencia>=0?'+':''}${fmtR(dados.divergencia)}` : '—'}
-                  </div>
-                  <div style={{fontSize:10,color:'var(--gray-400)'}}>
-                    {dados.divergenciaPct !== null ? `${Math.abs(dados.divergenciaPct).toFixed(1)}% vs ficha` : 'sem dados de consumo'}
+                <div style={{padding:'16px 20px'}}>
+                  <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:14}}>
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0'}}>
+                      <span>Matéria-prima (preparações)</span>
+                      <span style={{fontWeight:700}}>{fmtR(dados.custoPorFichaPreps)}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid var(--gray-100)'}}>
+                      <span>Embalagem (rótulo + filmes)</span>
+                      <span style={{fontWeight:700}}>{fmtR(dados.custoPorFichaEmb)}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0'}}>
+                      <span style={{color:'var(--warning)'}}>+ Desperdício MP ({dados.despMPPct}%)</span>
+                      <span style={{fontWeight:700,color:'var(--warning)'}}>{fmtR(dados.despMP)}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'2px solid var(--gray-200)'}}>
+                      <span style={{color:'var(--warning)'}}>+ Desperdício embalagem ({dados.despEmbPct}%)</span>
+                      <span style={{fontWeight:700,color:'var(--warning)'}}>{fmtR(dados.despEmb)}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:800,fontSize:16,color:'var(--purple)'}}>
+                      <span>CMV Total do mês</span>
+                      <span>{fmtR(dados.cmvComDesperdicio)}</span>
+                    </div>
+                    {dados.totalUnidades > 0 && (
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--gray-400)'}}>
+                        <span>CMV médio por unidade produzida ({dados.totalUnidades.toLocaleString('pt-BR')} un)</span>
+                        <span style={{fontWeight:700}}>{fmtR(dados.cmvComDesperdicio/dados.totalUnidades)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
 
-              {/* Explicação da divergência */}
-              {dados.divergenciaPct !== null && Math.abs(dados.divergenciaPct) > 5 && (
-                <div style={{padding:'12px 16px',borderRadius:8,
-                  background:Math.abs(dados.divergenciaPct)>15?'#fff0f0':'#fff8f0',
-                  border:`1px solid ${Math.abs(dados.divergenciaPct)>15?'var(--danger)':'var(--warning)'}`,
-                  fontSize:13}}>
-                  {dados.divergencia > 0
-                    ? `⚠️ O consumo real de MP foi ${fmtR(dados.divergencia)} (${dados.divergenciaPct?.toFixed(1)}%) maior que o previsto pela ficha técnica. Possíveis causas: desperdício não registrado, rendimento menor que o esperado, ou compras lançadas incorretamente.`
-                    : `✅ O consumo real de MP foi ${fmtR(Math.abs(dados.divergencia||0))} menor que o previsto. Pode indicar rendimento melhor que o esperado ou erro na ficha técnica.`
-                  }
+              {/* ── BLOCO 2: Validação contra o consumo real ── */}
+              <div className="card">
+                <div style={{padding:'12px 20px',background:'var(--gray-600)',color:'#fff',fontWeight:800,fontSize:14}}>
+                  2️⃣ Validação — o consumo real bate com a ficha?
                 </div>
-              )}
+                <div style={{padding:'16px 20px'}}>
+                  {!dados.temConsumoMP ? (
+                    <div style={{padding:'12px 14px',background:'#fff8f0',borderRadius:8,border:'1px solid var(--warning)',fontSize:13,color:'var(--warning)'}}>
+                      ⚠️ Sem registros de consumo real de MP neste mês. A baixa automática precisa estar ativa (Admin → Sistema) para gerar esses dados.
+                    </div>
+                  ) : (
+                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                        <div style={{padding:'12px 14px',background:'var(--gray-50)',borderRadius:8,textAlign:'center'}}>
+                          <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP pela ficha técnica</div>
+                          <div style={{fontSize:20,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoPorFichaPreps)}</div>
+                          <div style={{fontSize:11,color:'var(--gray-400)'}}>quanto deveria ter consumido</div>
+                        </div>
+                        <div style={{padding:'12px 14px',background:'var(--gray-50)',borderRadius:8,textAlign:'center'}}>
+                          <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP consumida de fato</div>
+                          <div style={{fontSize:20,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoConsumoMP)}</div>
+                          <div style={{fontSize:11,color:'var(--gray-400)'}}>débitos reais de estoque</div>
+                        </div>
+                      </div>
+                      <div style={{padding:'12px 16px',borderRadius:8,textAlign:'center',
+                        background: Math.abs(dados.divergenciaPct||0)>10 ? '#fff0f0' : '#f0faf0',
+                        border: `1.5px solid ${Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}`}}>
+                        <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Diferença</div>
+                        <div style={{fontSize:22,fontWeight:800,margin:'4px 0',
+                          color: Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}}>
+                          {dados.divergencia>=0?'+':''}{fmtR(dados.divergencia||0)} ({Math.abs(dados.divergenciaPct||0).toFixed(1)}%)
+                        </div>
+                        <div style={{fontSize:12,color:'var(--gray-500)',maxWidth:600,margin:'6px auto 0',lineHeight:1.5}}>
+                          {Math.abs(dados.divergenciaPct||0) <= 10
+                            ? '✅ Diferença dentro do aceitável. Os dados de ficha técnica e consumo real estão convergindo — o CMV pode ser considerado confiável.'
+                            : dados.divergencia > 0
+                              ? '🚨 Consumiu MAIS do que a ficha previa. Causas prováveis: desperdício não contabilizado, rendimento real pior que o cadastrado, erro na quantidade das fichas técnicas, ou baixa duplicada.'
+                              : '🚨 Consumiu MENOS do que a ficha previa. Causas prováveis: baixa automática não capturou todas as produções, produções registradas sem debitar MP, ou fichas técnicas com quantidades superestimadas.'}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               {/* Detalhamento por MP consumida */}
               {dados.temConsumoMP && (
