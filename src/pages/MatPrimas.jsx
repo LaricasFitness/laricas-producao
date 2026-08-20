@@ -1968,7 +1968,7 @@ function CMVMensal() {
     ] = await Promise.all([
       // Produção do mês por produto
       supabase.from('producao_diaria')
-        .select('embalagem_id, quantidade')
+        .select('embalagem_id, quantidade, data_producao')
         .gte('data_producao', ini).lte('data_producao', fim)
         .not('registrado_por', 'ilike', '%(auto-embalagem)%'),
       // Consumo real de MP do mês
@@ -2007,6 +2007,28 @@ function CMVMensal() {
       if (!emb) continue
       if (!prodPorSku[emb.codigo]) prodPorSku[emb.codigo] = { emb, qtd: 0 }
       prodPorSku[emb.codigo].qtd += p.quantidade
+    }
+
+    // Dias que têm consumo registrado (cobertura da baixa automática)
+    const diasComConsumo = new Set((consumoMP||[]).map(c => c.data_consumo))
+    // Produção restrita aos dias cobertos — para comparação justa com o consumo real
+    const prodPorSkuCoberto = {}
+    let unidadesCobertas = 0
+    let unidadesTotais = 0
+    const diasComProducao = new Set()
+    const diasSemConsumo = new Set()
+    for (const p of (producao||[])) {
+      const emb = embMap[p.embalagem_id]
+      if (!emb) continue
+      unidadesTotais += p.quantidade
+      diasComProducao.add(p.data_producao)
+      if (diasComConsumo.has(p.data_producao)) {
+        if (!prodPorSkuCoberto[emb.codigo]) prodPorSkuCoberto[emb.codigo] = { emb, qtd: 0 }
+        prodPorSkuCoberto[emb.codigo].qtd += p.quantidade
+        unidadesCobertas += p.quantidade
+      } else {
+        diasSemConsumo.add(p.data_producao)
+      }
     }
 
     // Custo MP por preparação (recursivo)
@@ -2093,9 +2115,21 @@ function CMVMensal() {
     })
     const custoPorFicha = custoPorFichaPreps + custoPorFichaEmb
 
-    // Divergência
-    const divergencia = custoConsumoMP > 0 ? custoConsumoMP - custoPorFicha : null
-    const divergenciaPct = custoPorFicha > 0 && divergencia !== null ? (divergencia / custoPorFicha * 100) : null
+    // MP prevista pela ficha SOMENTE nos dias cobertos pela baixa automática
+    let fichaPrepsCoberto = 0
+    Object.values(prodPorSkuCoberto).forEach(({ emb, qtd }) => {
+      const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
+      const custoPreps = comps.reduce((sc, comp) => {
+        const custoPorG = custoPrepPorG(comp.preparacao_id) || 0
+        return sc + custoPorG * (parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade)||0)
+      }, 0)
+      fichaPrepsCoberto += custoPreps * qtd
+    })
+
+    // Divergência calculada na MESMA janela de datas
+    const divergencia = custoConsumoMP > 0 ? custoConsumoMP - fichaPrepsCoberto : null
+    const divergenciaPct = fichaPrepsCoberto > 0 && divergencia !== null ? (divergencia / fichaPrepsCoberto * 100) : null
+    const coberturaPct = unidadesTotais > 0 ? (unidadesCobertas / unidadesTotais * 100) : 0
 
     // Percentuais de desperdício configuráveis
     const cfgMap = {}
@@ -2112,6 +2146,9 @@ function CMVMensal() {
       custoConsumoMP, custoPorFicha, custoPorFichaPreps, custoPorFichaEmb,
       divergencia, divergenciaPct,
       despMPPct, despEmbPct, despMP, despEmb, cmvComDesperdicio,
+      fichaPrepsCoberto, coberturaPct, unidadesCobertas, unidadesTotais,
+      diasSemConsumo: [...diasSemConsumo].sort(),
+      diasComProducao: diasComProducao.size,
       consumoMPList, mesAnterior,
       totalUnidades: Object.values(prodPorSku).reduce((s,p) => s+p.qtd, 0),
       temConsumoMP: (consumoMP||[]).length > 0,
@@ -2218,87 +2255,151 @@ function CMVMensal() {
                 </div>
               )}
 
-              {/* ── BLOCO 1: CMV pela ficha técnica (o que DEVERIA custar) ── */}
-              <div className="card">
-                <div style={{padding:'12px 20px',background:'var(--purple)',color:'#fff',fontWeight:800,fontSize:14}}>
-                  1️⃣ CMV Teórico — o que a ficha técnica diz que deveria custar
-                </div>
-                <div style={{padding:'16px 20px'}}>
-                  <div style={{display:'flex',flexDirection:'column',gap:8,fontSize:14}}>
-                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0'}}>
-                      <span>Matéria-prima (preparações)</span>
-                      <span style={{fontWeight:700}}>{fmtR(dados.custoPorFichaPreps)}</span>
+              {/* ── PREVISTO vs REALIZADO lado a lado ── */}
+              {(() => {
+                const prev = {
+                  mp: dados.custoPorFichaPreps,
+                  emb: dados.custoPorFichaEmb,
+                  despMP: dados.despMP,
+                  despEmb: dados.despEmb,
+                  total: dados.cmvComDesperdicio,
+                }
+                // Realizado: MP vem do consumo real (já contém o desperdício de fato).
+                // Embalagem não tem medição real — usa a ficha e sinaliza.
+                const realMP = dados.custoConsumoMP
+                const realEmb = dados.custoPorFichaEmb
+                const despImplicito = dados.temConsumoMP ? (realMP - dados.fichaPrepsCoberto) : null
+                const real = {
+                  mp: realMP,
+                  emb: realEmb,
+                  despMP: despImplicito,
+                  despEmb: null,
+                  total: realMP + realEmb,
+                }
+                // Comparação justa: só os dias cobertos pela baixa automática
+                const deltaTotal = dados.temConsumoMP ? realMP - dados.fichaPrepsCoberto : null
+                const deltaPct = dados.temConsumoMP && dados.fichaPrepsCoberto > 0
+                  ? (deltaTotal / dados.fichaPrepsCoberto * 100) : null
+                const coberturaOk = (dados.coberturaPct||0) >= 99.5
+
+                const Linha = ({ label, sub, vPrev, vReal, destaque, aviso }) => (
+                  <div style={{
+                    display:'grid', gridTemplateColumns:'1fr 130px 130px', gap:12, alignItems:'center',
+                    padding: destaque ? '12px 16px' : '9px 16px',
+                    borderTop: destaque ? '2px solid var(--gray-200)' : '1px solid var(--gray-100)',
+                    background: destaque ? 'var(--purple-pale)' : undefined,
+                  }}>
+                    <div>
+                      <div style={{fontWeight: destaque?800:600, fontSize: destaque?15:13,
+                        color: destaque?'var(--purple)':aviso?'var(--warning)':undefined}}>{label}</div>
+                      {sub && <div style={{fontSize:10,color:'var(--gray-400)'}}>{sub}</div>}
                     </div>
-                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid var(--gray-100)'}}>
-                      <span>Embalagem (rótulo + filmes)</span>
-                      <span style={{fontWeight:700}}>{fmtR(dados.custoPorFichaEmb)}</span>
+                    <div style={{textAlign:'right', fontWeight: destaque?800:700, fontSize: destaque?16:13,
+                      color: destaque?'var(--purple)':aviso?'var(--warning)':'var(--gray-700)'}}>
+                      {vPrev === null ? '—' : fmtR(vPrev)}
                     </div>
-                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0'}}>
-                      <span style={{color:'var(--warning)'}}>+ Desperdício MP ({dados.despMPPct}%)</span>
-                      <span style={{fontWeight:700,color:'var(--warning)'}}>{fmtR(dados.despMP)}</span>
+                    <div style={{textAlign:'right', fontWeight: destaque?800:700, fontSize: destaque?16:13,
+                      color: vReal === null ? 'var(--gray-300)' : destaque?'var(--purple)':aviso?'var(--warning)':'var(--gray-700)'}}>
+                      {vReal === null ? 'n/d' : `${vReal<0?'−':''}${fmtR(Math.abs(vReal))}`}
                     </div>
-                    <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'2px solid var(--gray-200)'}}>
-                      <span style={{color:'var(--warning)'}}>+ Desperdício embalagem ({dados.despEmbPct}%)</span>
-                      <span style={{fontWeight:700,color:'var(--warning)'}}>{fmtR(dados.despEmb)}</span>
+                  </div>
+                )
+
+                return (
+                  <div className="card">
+                    {/* Cabeçalho das colunas */}
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 130px 130px',gap:12,
+                      padding:'12px 16px',background:'var(--purple)',color:'#fff'}}>
+                      <div style={{fontWeight:800,fontSize:14}}>CMV do mês — Previsto vs Realizado</div>
+                      <div style={{textAlign:'right',fontWeight:800,fontSize:12,textTransform:'uppercase',letterSpacing:'.04em'}}>Previsto</div>
+                      <div style={{textAlign:'right',fontWeight:800,fontSize:12,textTransform:'uppercase',letterSpacing:'.04em'}}>Realizado</div>
                     </div>
-                    <div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:800,fontSize:16,color:'var(--purple)'}}>
-                      <span>CMV Total do mês</span>
-                      <span>{fmtR(dados.cmvComDesperdicio)}</span>
-                    </div>
+
+                    <Linha label="Matéria-prima"
+                      sub={coberturaOk
+                        ? 'previsto = ficha técnica · realizado = débitos reais de estoque'
+                        : `previsto = mês completo · realizado = só ${(dados.coberturaPct||0).toFixed(0)}% da produção`}
+                      vPrev={prev.mp} vReal={dados.temConsumoMP ? real.mp : null} />
+
+                    <Linha label="Embalagem (rótulo + filmes)"
+                      sub="sem medição real — realizado usa a ficha"
+                      vPrev={prev.emb} vReal={real.emb} />
+
+                    <Linha label={`Desperdício MP (${dados.despMPPct}% previsto)`}
+                      sub="realizado é implícito — já está dentro do consumo acima, medido contra os dias cobertos"
+                      vPrev={prev.despMP} vReal={real.despMP} aviso />
+
+                    <Linha label={`Desperdício embalagem (${dados.despEmbPct}% previsto)`}
+                      sub="sem medição real"
+                      vPrev={prev.despEmb} vReal={real.despEmb} aviso />
+
+                    <Linha label="CMV Total do mês"
+                      vPrev={prev.total} vReal={dados.temConsumoMP ? real.total : null} destaque />
+
                     {dados.totalUnidades > 0 && (
-                      <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--gray-400)'}}>
-                        <span>CMV médio por unidade produzida ({dados.totalUnidades.toLocaleString('pt-BR')} un)</span>
-                        <span style={{fontWeight:700}}>{fmtR(dados.cmvComDesperdicio/dados.totalUnidades)}</span>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 130px 130px',gap:12,
+                        padding:'8px 16px',borderTop:'1px solid var(--gray-100)',fontSize:12,color:'var(--gray-500)'}}>
+                        <div>CMV médio por unidade ({dados.totalUnidades.toLocaleString('pt-BR')} un produzidas)</div>
+                        <div style={{textAlign:'right',fontWeight:700}}>{fmtR(prev.total/dados.totalUnidades)}</div>
+                        <div style={{textAlign:'right',fontWeight:700}}>
+                          {dados.temConsumoMP ? fmtR(real.total/dados.totalUnidades) : 'n/d'}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Aviso de cobertura parcial */}
+                    {dados.temConsumoMP && !coberturaOk && (
+                      <div style={{margin:'16px 16px 0',padding:'12px 14px',background:'#fff8f0',borderRadius:8,
+                        border:'1px solid var(--warning)',fontSize:12,color:'var(--gray-600)',lineHeight:1.6}}>
+                        <div style={{fontWeight:800,color:'var(--warning)',marginBottom:4}}>
+                          ⚠️ Cobertura parcial da baixa automática — {(dados.coberturaPct||0).toFixed(1)}%
+                        </div>
+                        {dados.diasSemConsumo?.length > 0 && (
+                          <div>
+                            Estes dias tiveram produção mas <strong>não</strong> tiveram consumo de MP debitado:{' '}
+                            <strong>{dados.diasSemConsumo.map(d => new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})).join(', ')}</strong>
+                            {' '}({(dados.unidadesTotais - dados.unidadesCobertas).toLocaleString('pt-BR')} de {dados.unidadesTotais.toLocaleString('pt-BR')} un).
+                          </div>
+                        )}
+                        <div style={{marginTop:4}}>
+                          A comparação abaixo usa <strong>apenas os dias cobertos</strong> nos dois lados
+                          (ficha: {fmtR(dados.fichaPrepsCoberto)} para {dados.unidadesCobertas.toLocaleString('pt-BR')} un),
+                          senão a diferença refletiria só o recorte de datas. A coluna Realizado do CMV Total continua
+                          incompleta enquanto esses dias não forem compensados.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Diagnóstico */}
+                    {!dados.temConsumoMP ? (
+                      <div style={{margin:16,padding:'12px 14px',background:'#fff8f0',borderRadius:8,
+                        border:'1px solid var(--warning)',fontSize:13,color:'var(--warning)'}}>
+                        ⚠️ Sem registros de consumo real de MP neste mês — a coluna Realizado não pode ser calculada.
+                        A baixa automática precisa estar ativa (Admin → Sistema).
+                      </div>
+                    ) : (
+                      <div style={{margin:16,padding:'12px 16px',borderRadius:8,textAlign:'center',
+                        background: Math.abs(deltaPct||0)>10 ? '#fff0f0' : '#f0faf0',
+                        border: `1.5px solid ${Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}`}}>
+                        <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>
+                          MP realizada vs prevista {coberturaOk ? '(mês completo)' : '(apenas dias cobertos)'}
+                        </div>
+                        <div style={{fontSize:20,fontWeight:800,margin:'4px 0',
+                          color: Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}}>
+                          {deltaTotal>=0?'+':'−'}{fmtR(Math.abs(deltaTotal||0))} ({Math.abs(deltaPct||0).toFixed(1)}%)
+                        </div>
+                        <div style={{fontSize:12,color:'var(--gray-500)',maxWidth:640,margin:'6px auto 0',lineHeight:1.5}}>
+                          {Math.abs(deltaPct||0) <= 10
+                            ? `✅ Consumo real e ficha técnica convergindo${coberturaOk ? '' : ' nos dias cobertos'}. O CMV pode ser considerado confiável.`
+                            : deltaTotal > 0
+                              ? `🚨 Consumiu MAIS do que a ficha previa. Se o excedente for parecido com o desperdício configurado (${dados.despMPPct}%), é desperdício normal. Acima disso: rendimento real pior que o cadastrado, quantidades subestimadas nas fichas, ou baixa duplicada.`
+                              : '🚨 Consumiu MENOS do que a ficha previa mesmo nos dias cobertos. Causas prováveis: SKUs produzidos sem composição cadastrada (não debitam nada), ou quantidades superestimadas nas fichas técnicas.'}
+                        </div>
                       </div>
                     )}
                   </div>
-                </div>
-              </div>
-
-              {/* ── BLOCO 2: Validação contra o consumo real ── */}
-              <div className="card">
-                <div style={{padding:'12px 20px',background:'var(--gray-600)',color:'#fff',fontWeight:800,fontSize:14}}>
-                  2️⃣ Validação — o consumo real bate com a ficha?
-                </div>
-                <div style={{padding:'16px 20px'}}>
-                  {!dados.temConsumoMP ? (
-                    <div style={{padding:'12px 14px',background:'#fff8f0',borderRadius:8,border:'1px solid var(--warning)',fontSize:13,color:'var(--warning)'}}>
-                      ⚠️ Sem registros de consumo real de MP neste mês. A baixa automática precisa estar ativa (Admin → Sistema) para gerar esses dados.
-                    </div>
-                  ) : (
-                    <div style={{display:'flex',flexDirection:'column',gap:10}}>
-                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-                        <div style={{padding:'12px 14px',background:'var(--gray-50)',borderRadius:8,textAlign:'center'}}>
-                          <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP pela ficha técnica</div>
-                          <div style={{fontSize:20,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoPorFichaPreps)}</div>
-                          <div style={{fontSize:11,color:'var(--gray-400)'}}>quanto deveria ter consumido</div>
-                        </div>
-                        <div style={{padding:'12px 14px',background:'var(--gray-50)',borderRadius:8,textAlign:'center'}}>
-                          <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP consumida de fato</div>
-                          <div style={{fontSize:20,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoConsumoMP)}</div>
-                          <div style={{fontSize:11,color:'var(--gray-400)'}}>débitos reais de estoque</div>
-                        </div>
-                      </div>
-                      <div style={{padding:'12px 16px',borderRadius:8,textAlign:'center',
-                        background: Math.abs(dados.divergenciaPct||0)>10 ? '#fff0f0' : '#f0faf0',
-                        border: `1.5px solid ${Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}`}}>
-                        <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Diferença</div>
-                        <div style={{fontSize:22,fontWeight:800,margin:'4px 0',
-                          color: Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}}>
-                          {dados.divergencia>=0?'+':''}{fmtR(dados.divergencia||0)} ({Math.abs(dados.divergenciaPct||0).toFixed(1)}%)
-                        </div>
-                        <div style={{fontSize:12,color:'var(--gray-500)',maxWidth:600,margin:'6px auto 0',lineHeight:1.5}}>
-                          {Math.abs(dados.divergenciaPct||0) <= 10
-                            ? '✅ Diferença dentro do aceitável. Os dados de ficha técnica e consumo real estão convergindo — o CMV pode ser considerado confiável.'
-                            : dados.divergencia > 0
-                              ? '🚨 Consumiu MAIS do que a ficha previa. Causas prováveis: desperdício não contabilizado, rendimento real pior que o cadastrado, erro na quantidade das fichas técnicas, ou baixa duplicada.'
-                              : '🚨 Consumiu MENOS do que a ficha previa. Causas prováveis: baixa automática não capturou todas as produções, produções registradas sem debitar MP, ou fichas técnicas com quantidades superestimadas.'}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+                )
+              })()}
 
               {/* Detalhamento por MP consumida */}
               {dados.temConsumoMP && (
