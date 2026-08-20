@@ -31,6 +31,7 @@ function usePrecificacao() {
         canaisResult,
         { data: precosSalvos },
         overheadResult,
+        { data: catEmbs },
         volumeResult,
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
@@ -41,6 +42,7 @@ function usePrecificacao() {
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
+        supabase.from('categoria_embalagem').select('categoria, quantidade, embalagens(id, nome, custo_unitario)').then(r=>r).catch(()=>({data:[]})),
         // Volume: só registros reais de produção (não auto-embalagem)
         supabase.from('embalagens')
           .select('id, equivalencia_overhead')
@@ -76,6 +78,14 @@ function usePrecificacao() {
       const canaisDB = canaisResult?.data || []
 
       // Mapa de preços salvos: { sku: { canal_id: preco } }
+      // Mapa de custo de embalagem por categoria (filmes + outros via categoria_embalagem)
+      const custoEmbPorCat = {}
+      for (const ce of (catEmbs||[])) {
+        const cat = ce.categoria
+        const custo = (parseFloat(ce.quantidade)||1) * (parseFloat(ce.embalagens?.custo_unitario)||0)
+        custoEmbPorCat[cat] = (custoEmbPorCat[cat]||0) + custo
+      }
+
       const precosMap = {}
       for (const p of (precosSalvos||[])) {
         if (!precosMap[p.sku_produto]) precosMap[p.sku_produto] = {}
@@ -216,7 +226,7 @@ function usePrecificacao() {
         }
       }).filter(Boolean)
 
-      const custoRotulo = parseFloat(emb.custo_unitario) || 0
+      const custoRotulo = (parseFloat(emb.custo_unitario)||0) + (custoEmbPorCat[emb.categoria]||0)
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
       const custoPrepsReal = detalhesPrep.reduce((s,d) => s + d.custoNaUnidadeReal, 0)
       const cmvTotal = custoPreps + custoRotulo
@@ -226,7 +236,7 @@ function usePrecificacao() {
       return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, cmvTotalReal, temRendimentoReal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
-      setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade })
+      setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade, custoEmbPorCat })
     } catch(err) {
       console.error('Erro ao carregar precificação:', err)
     }
@@ -406,9 +416,17 @@ function FichaCusto({ data, incluirOverhead }) {
                           </div>
                         ))}
                         {p.custoRotulo > 0 && (
-                          <div style={{padding:'8px 14px',border:'1px solid var(--gray-200)',borderRadius:8,display:'flex',justifyContent:'space-between',fontSize:13}}>
-                            <span>📦 Embalagem (rótulo + primária)</span>
-                            <span style={{fontWeight:700}}>{fmtR(p.custoRotulo)}</span>
+                          <div style={{padding:'8px 14px',border:'1px solid var(--gray-200)',borderRadius:8,fontSize:13}}>
+                            <div style={{display:'flex',justifyContent:'space-between'}}>
+                              <span>📦 Embalagem</span>
+                              <span style={{fontWeight:700}}>{fmtR(p.custoRotulo)}</span>
+                            </div>
+                            <div style={{fontSize:11,color:'var(--gray-400)',marginTop:4,display:'flex',gap:12}}>
+                              <span>Rótulo: {fmtR(parseFloat(p.emb.custo_unitario)||0)}</span>
+                              {(data.custoEmbPorCat?.[p.emb.categoria]||0) > 0 && (
+                                <span>Filmes/outros: {fmtR(data.custoEmbPorCat[p.emb.categoria])}</span>
+                              )}
+                            </div>
                           </div>
                         )}
                         {incluirOverhead && data.overheadPorUnidade > 0 && (
@@ -789,6 +807,7 @@ function RankingMargem({ data, reload, incluirOverhead }) {
 export default function Precificacao() {
   const [aba, setAba] = useState('ficha')
   const [incluirOverhead, setIncluirOverhead] = useState(false)
+  const [snapshotKey, setSnapshotKey] = useState(0)
   const { data, loading, reload } = usePrecificacao()
 
   // Salva snapshot automaticamente quando os dados carregam
@@ -807,7 +826,9 @@ export default function Precificacao() {
         overhead_unit: data.overheadPorUnidade || 0,
         rendimento_usado: p.temRendimentoReal ? 'real' : 'teorico',
       }))
-    supabase.from('cmv_historico').upsert(rows, { onConflict: 'mes,sku_produto' })
+    supabase.from('cmv_historico')
+      .upsert(rows, { onConflict: 'mes,sku_produto' })
+      .then(() => setSnapshotKey(k => k + 1))
   }, [data])
 
   return (
@@ -866,7 +887,7 @@ export default function Precificacao() {
           {aba==='ficha'     && <FichaCusto data={data} incluirOverhead={incluirOverhead} />}
           {aba==='simulador' && <Simulador data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
-          {aba==='evolucao'  && <EvolucaoCMV />}
+          {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
         </>
       )}
     </>
