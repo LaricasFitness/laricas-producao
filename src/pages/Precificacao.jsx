@@ -34,7 +34,7 @@ function usePrecificacao() {
         { data: catEmbs },
         volumeResult,
       ] = await Promise.all([
-        supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true).order('categoria').order('nome'),
+        supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
         supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
         supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual'),
@@ -44,12 +44,15 @@ function usePrecificacao() {
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
         supabase.from('categoria_embalagem').select('categoria, quantidade, embalagens(id, nome, custo_unitario)').then(r=>r).catch(()=>({data:[]})),
         // Volume: só registros reais de produção (não auto-embalagem)
-        supabase.from('embalagens')
-          .select('id, equivalencia_overhead')
-          .eq('tipo', 'rotulo')
-          .eq('ativo', true)
-          .then(async ({ data: rotulos }) => {
-            if (!rotulos?.length) return { data: [] }
+        supabase.from('produto_composicao')
+          .select('sku_produto')
+          .then(async ({ data: pcs }) => {
+            const comFicha = new Set((pcs||[]).map(p => p.sku_produto))
+            const { data: todas } = await supabase.from('embalagens')
+              .select('id, codigo, tipo, equivalencia_overhead').eq('ativo', true)
+            // Produto acabado = rótulo OU embalagem com ficha técnica (ex: latas)
+            const rotulos = (todas||[]).filter(e => e.tipo === 'rotulo' || comFicha.has(e.codigo))
+            if (!rotulos.length) return { data: [] }
             const ids = rotulos.map(r => r.id)
             const equivMap = {}
             for (const r of rotulos) equivMap[r.id] = parseFloat(r.equivalencia_overhead)||1
@@ -170,8 +173,12 @@ function usePrecificacao() {
       calcCusto(prep.id, true, new Set(), custoPrepPorGReal)
     }
 
+    // Produto acabado = rótulo OU embalagem com ficha técnica (ex: latas)
+    const skusComFicha = new Set((prodComps||[]).map(p => p.sku_produto))
+    const embsProduto = (embs||[]).filter(e => e.tipo === 'rotulo' || skusComFicha.has(e.codigo))
+
     // Calcula CMV por produto (duplo: teórico e real)
-    const produtos = (embs||[]).map(emb => {
+    const produtos = embsProduto.map(emb => {
       const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
 
       // Custo de preparações
