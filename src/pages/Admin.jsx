@@ -884,11 +884,16 @@ function AdminComposicaoProdutos() {
   async function load() {
     setLoading(true)
     const [{ data: embsData }, { data: prepsData }, { data: compData }] = await Promise.all([
-      supabase.from('embalagens').select('id, nome, codigo, categoria').eq('tipo', 'rotulo').eq('ativo', true).order('categoria').order('nome'),
+      supabase.from('embalagens').select('id, nome, codigo, categoria, tipo, visivel_producao').eq('ativo', true).order('categoria').order('nome'),
       supabase.from('preparacoes').select('id, codigo, nome, tipo').eq('ativo', true).order('tipo').order('nome'),
       supabase.from('produto_composicao').select('*, preparacoes(id, nome, codigo, tipo)'),
     ])
-    setEmbs(embsData || [])
+    // Produto acabado = rótulo OU embalagem que já tem ficha OU marcada como visível na produção (ex: latas)
+    const skusComFicha = new Set((compData || []).map(x => x.sku_produto))
+    const embsProduto = (embsData || []).filter(e =>
+      e.tipo === 'rotulo' || skusComFicha.has(e.codigo) || e.visivel_producao === true
+    )
+    setEmbs(embsProduto)
     setPreps(prepsData || [])
     const map = {}
     for (const c of (compData || [])) {
