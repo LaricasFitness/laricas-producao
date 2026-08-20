@@ -1973,8 +1973,8 @@ function CMVMensal() {
       supabase.from('mp_consumos')
         .select('materia_prima_id, quantidade, data_consumo')
         .gte('data_consumo', ini).lte('data_consumo', fim),
-      // Embalagens tipo rotulo
-      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
+      // Embalagens tipo rotulo com custo
+      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
       // MPs com custo
       supabase.from('materias_primas').select('id,nome,unidade,custo_unitario').eq('ativo',true),
       // Composição das preparações
@@ -2065,14 +2065,15 @@ function CMVMensal() {
     const consumoMPList = Object.values(consumoPorMP)
       .sort((a,b) => b.custo - a.custo)
 
-    // VISÃO 2b: CMV por produção × ficha técnica
+    // VISÃO 2b: CMV por produção × ficha técnica (inclui custo embalagem)
     const custoPorFicha = Object.values(prodPorSku).reduce((s, { emb, qtd }) => {
       const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
-      const custoUnit = comps.reduce((sc, comp) => {
+      const custoPreps = comps.reduce((sc, comp) => {
         const custoPorG = custoPrepPorG(comp.preparacao_id) || 0
         return sc + custoPorG * (parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade)||0)
       }, 0)
-      return s + custoUnit * qtd
+      const custoEmb = parseFloat(emb.custo_unitario)||0
+      return s + (custoPreps + custoEmb) * qtd
     }, 0)
 
     // Divergência
@@ -2192,7 +2193,7 @@ function CMVMensal() {
               <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
                 {[
                   {label:'Consumo real de MP',valor:fmtR(dados.custoConsumoMP),sub:'soma dos débitos reais de estoque',cor:'var(--purple)'},
-                  {label:'CMV por ficha técnica',valor:fmtR(dados.custoPorFicha),sub:'produção × custo unitário calculado',cor:'var(--purple)'},
+                  {label:'CMV por ficha técnica',valor:fmtR(dados.custoPorFicha),sub:'produção × (custo preps + embalagem)',cor:'var(--purple)'},
                   {label:'Divergência',
                     valor: dados.divergencia !== null ? `${dados.divergencia>=0?'+':''}${fmtR(dados.divergencia)}` : '—',
                     sub: dados.divergenciaPct !== null ? `${Math.abs(dados.divergenciaPct).toFixed(1)}% ${dados.divergencia>0?'a mais':'a menos'} que o esperado` : 'sem dados de consumo',
