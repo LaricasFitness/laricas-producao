@@ -1099,13 +1099,15 @@ export default function MatPrimas() {
         <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
         <button className={`tab${sub==='consumo'?' active':''}`} onClick={()=>setSub('consumo')}>📉 Consumo</button>
         <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
+        <button className={`tab${sub==='cmv_mensal'?' active':''}`} onClick={()=>setSub('cmv_mensal')}>💰 CMV Mensal</button>
       </div>
       {sub==='situacao'   && <DashMP />}
       {sub==='historico'  && <HistoricoCompras />}
       {sub==='evolucao'   && <EvolucaoPrecos />}
-      {sub==='custo_prep' && <CustoPreparacoes />}
-      {sub==='consumo'    && <HistoricoConsumo />}
-      {sub==='overhead'   && <OverheadMensal />}
+      {sub==='custo_prep'  && <CustoPreparacoes />}
+      {sub==='consumo'     && <HistoricoConsumo />}
+      {sub==='overhead'    && <OverheadMensal />}
+      {sub==='cmv_mensal'  && <CMVMensal />}
     </>
   )
 }
@@ -1929,6 +1931,348 @@ function HistoricoConsumo() {
               </table>
             )}
           </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── CMV Mensal ────────────────────────────────────────────────────────────────
+function CMVMensal() {
+  const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
+  const [visao, setVisao] = useState('unitario') // 'unitario' | 'convergencia'
+  const [dados, setDados] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => { load() }, [mes])
+
+  async function load() {
+    setLoading(true)
+    const ini = mes + '-01'
+    const fim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
+    const mesAnterior = new Date(mes.slice(0,4), mes.slice(5,7)-2, 1).toISOString().slice(0,7)
+
+    // Busca dados em paralelo
+    const [
+      { data: producao },
+      { data: consumoMP },
+      { data: embs },
+      { data: mps },
+      { data: prepComps },
+      { data: preps },
+      { data: prodComps },
+      { data: snapshotAtual },
+      { data: snapshotAnterior },
+    ] = await Promise.all([
+      // Produção do mês por produto
+      supabase.from('producao_diaria')
+        .select('embalagem_id, quantidade')
+        .gte('data_producao', ini).lte('data_producao', fim)
+        .not('registrado_por', 'ilike', '%(auto-embalagem)%'),
+      // Consumo real de MP do mês
+      supabase.from('mp_consumos')
+        .select('materia_prima_id, quantidade, data_consumo')
+        .gte('data_consumo', ini).lte('data_consumo', fim),
+      // Embalagens tipo rotulo
+      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
+      // MPs com custo
+      supabase.from('materias_primas').select('id,nome,unidade,custo_unitario').eq('ativo',true),
+      // Composição das preparações
+      supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
+      // Preparações
+      supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual').eq('ativo',true),
+      // Composição dos produtos
+      supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
+      // Snapshot CMV do mês atual
+      supabase.from('cmv_historico').select('*').eq('mes', mes),
+      // Snapshot CMV do mês anterior
+      supabase.from('cmv_historico').select('*').eq('mes', mesAnterior),
+    ])
+
+    const embMap = {}
+    for (const e of (embs||[])) embMap[e.id] = e
+    const mpMap = {}
+    for (const m of (mps||[])) mpMap[m.id] = m
+    const prepMap = {}
+    for (const p of (preps||[])) prepMap[p.id] = p
+
+    // Produção por SKU no mês
+    const prodPorSku = {}
+    for (const p of (producao||[])) {
+      const emb = embMap[p.embalagem_id]
+      if (!emb) continue
+      if (!prodPorSku[emb.codigo]) prodPorSku[emb.codigo] = { emb, qtd: 0 }
+      prodPorSku[emb.codigo].qtd += p.quantidade
+    }
+
+    // Custo MP por preparação (recursivo)
+    const custoPrepCache = {}
+    function custoPrepPorG(prepId, visitados = new Set()) {
+      if (custoPrepCache[prepId] !== undefined) return custoPrepCache[prepId]
+      if (visitados.has(prepId)) return 0
+      const vis = new Set([...visitados, prepId])
+      const prep = prepMap[prepId]
+      if (!prep) return 0
+      const ings = (prepComps||[]).filter(c => c.preparacao_id === prepId)
+      const custo = ings.reduce((s, ing) => {
+        if (ing.sub_preparacao_id) return s + (parseFloat(ing.quantidade)||0) * custoPrepPorG(ing.sub_preparacao_id, vis)
+        const mp = mpMap[ing.materia_prima_id]
+        return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp?.custo_unitario)||0)
+      }, 0)
+      const rendEst = parseFloat(prep.rendimento_estimado)||1
+      const rendReal = parseFloat(prep.rendimento_real_medio)||null
+      const rend = rendReal || rendEst
+      const rendLiq = rend * (1 - (parseFloat(prep.perda_percentual)||0)/100)
+      custoPrepCache[prepId] = rendLiq > 0 ? custo/rendLiq : 0
+      return custoPrepCache[prepId]
+    }
+    for (const p of (preps||[])) custoPrepPorG(p.id)
+
+    // VISÃO 1: CMV unitário por produto (snapshot + variação vs mês anterior)
+    const snapAtualMap = {}
+    for (const s of (snapshotAtual||[])) snapAtualMap[s.sku_produto] = s
+    const snapAntMap = {}
+    for (const s of (snapshotAnterior||[])) snapAntMap[s.sku_produto] = s
+
+    const produtosUnitario = Object.values(prodPorSku).map(({ emb, qtd }) => {
+      const snap = snapAtualMap[emb.codigo]
+      const snapAnt = snapAntMap[emb.codigo]
+      const cmvUnit = snap ? (snap.cmv_real ?? snap.cmv_direto) : null
+      const cmvUnitAnt = snapAnt ? (snapAnt.cmv_real ?? snapAnt.cmv_direto) : null
+      const varPct = cmvUnit && cmvUnitAnt ? ((cmvUnit - cmvUnitAnt) / cmvUnitAnt * 100) : null
+      const custoTotal = cmvUnit ? cmvUnit * qtd : null
+      return { emb, qtd, cmvUnit, cmvUnitAnt, varPct, custoTotal, usandoReal: !!snap?.cmv_real }
+    }).sort((a,b) => (b.custoTotal||0) - (a.custoTotal||0))
+
+    const totalCMVUnitario = produtosUnitario.reduce((s,p) => s + (p.custoTotal||0), 0)
+
+    // VISÃO 2a: CMV por consumo real de MP
+    const custoConsumoMP = (consumoMP||[]).reduce((s, c) => {
+      const mp = mpMap[c.materia_prima_id]
+      return s + (parseFloat(c.quantidade)||0) * (parseFloat(mp?.custo_unitario)||0)
+    }, 0)
+
+    // Detalhamento por MP consumida
+    const consumoPorMP = {}
+    for (const c of (consumoMP||[])) {
+      const id = c.materia_prima_id
+      if (!consumoPorMP[id]) consumoPorMP[id] = { mp: mpMap[id], qtd: 0, custo: 0 }
+      const qtd = parseFloat(c.quantidade)||0
+      const custo = qtd * (parseFloat(mpMap[id]?.custo_unitario)||0)
+      consumoPorMP[id].qtd += qtd
+      consumoPorMP[id].custo += custo
+    }
+    const consumoMPList = Object.values(consumoPorMP)
+      .sort((a,b) => b.custo - a.custo)
+
+    // VISÃO 2b: CMV por produção × ficha técnica
+    const custoPorFicha = Object.values(prodPorSku).reduce((s, { emb, qtd }) => {
+      const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
+      const custoUnit = comps.reduce((sc, comp) => {
+        const custoPorG = custoPrepPorG(comp.preparacao_id) || 0
+        return sc + custoPorG * (parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade)||0)
+      }, 0)
+      return s + custoUnit * qtd
+    }, 0)
+
+    // Divergência
+    const divergencia = custoConsumoMP > 0 ? custoConsumoMP - custoPorFicha : null
+    const divergenciaPct = custoPorFicha > 0 && divergencia !== null ? (divergencia / custoPorFicha * 100) : null
+
+    setDados({
+      produtosUnitario, totalCMVUnitario,
+      custoConsumoMP, custoPorFicha, divergencia, divergenciaPct,
+      consumoMPList, mesAnterior,
+      totalUnidades: Object.values(prodPorSku).reduce((s,p) => s+p.qtd, 0),
+      temConsumoMP: (consumoMP||[]).length > 0,
+    })
+    setLoading(false)
+  }
+
+  const labelMes = (m) => new Date(m+'-15').toLocaleDateString('pt-BR',{month:'long',year:'numeric'})
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* Header */}
+      <div className="card card-pad" style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{fontWeight:800,fontSize:15}}>💰 CMV Mensal</div>
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',gap:4}}>
+          <button className={`btn btn-sm ${visao==='unitario'?'btn-primary':'btn-ghost'}`} onClick={()=>setVisao('unitario')}>
+            📦 CMV por Produto
+          </button>
+          <button className={`btn btn-sm ${visao==='convergencia'?'btn-primary':'btn-ghost'}`} onClick={()=>setVisao('convergencia')}>
+            🔀 Convergência MP
+          </button>
+        </div>
+        <input type="month" className="form-input" value={mes}
+          onChange={e=>setMes(e.target.value)} style={{width:180,fontSize:13}}/>
+        <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+      </div>
+
+      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : !dados ? null : (
+        <>
+          {/* VISÃO 1: CMV unitário por produto */}
+          {visao === 'unitario' && (
+            <>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+                {[
+                  {label:'Total produzido',valor:`${dados.totalUnidades.toLocaleString('pt-BR')} un`,cor:'var(--gray-700)'},
+                  {label:'CMV total do mês',valor:fmtR(dados.totalCMVUnitario),sub:'produção × CMV unitário',cor:'var(--purple)'},
+                  {label:'CMV médio/unidade',valor:dados.totalUnidades>0?fmtR(dados.totalCMVUnitario/dados.totalUnidades):'—',cor:'var(--ok)'},
+                ].map(k=>(
+                  <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
+                    <div style={{fontSize:20,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+                    {k.sub && <div style={{fontSize:10,color:'var(--gray-400)'}}>{k.sub}</div>}
+                  </div>
+                ))}
+              </div>
+
+              <div className="card">
+                <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13,color:'var(--purple)',textTransform:'capitalize'}}>
+                  {labelMes(mes)} — CMV por produto unitário
+                  {dados.mesAnterior && <span style={{fontSize:11,color:'var(--gray-400)',fontWeight:400,marginLeft:8}}>vs {labelMes(dados.mesAnterior)}</span>}
+                </div>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                  <thead>
+                    <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                      <th style={{padding:'8px 14px',textAlign:'left'}}>Produto</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>Qtd produzida</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>CMV unitário</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>vs mês ant.</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>CMV total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dados.produtosUnitario.map((p,i) => (
+                      <tr key={p.emb.codigo} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                        <td style={{padding:'8px 14px'}}>
+                          <div style={{fontWeight:600}}>{p.emb.nome}</div>
+                          <div style={{fontSize:10,color:'var(--gray-400)'}}>{p.emb.categoria} · {p.usandoReal && <span style={{color:'var(--ok)'}}>rendimento real</span>}</div>
+                        </td>
+                        <td style={{padding:'8px 10px',textAlign:'right',color:'var(--gray-600)'}}>{p.qtd.toLocaleString('pt-BR')}</td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:p.cmvUnit?'var(--purple)':'var(--gray-300)'}}>
+                          {p.cmvUnit ? fmtR(p.cmvUnit) : '—'}
+                        </td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontSize:12}}>
+                          {p.varPct !== null ? (
+                            <span style={{fontWeight:700,color:p.varPct>5?'var(--danger)':p.varPct<-5?'var(--ok)':'var(--gray-500)'}}>
+                              {p.varPct>0?'▲':'▼'} {Math.abs(p.varPct).toFixed(1)}%
+                            </span>
+                          ) : <span style={{color:'var(--gray-300)'}}>—</span>}
+                        </td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>
+                          {p.custoTotal ? fmtR(p.custoTotal) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--purple)'}}>
+                      <td colSpan={4} style={{padding:'10px 14px',fontWeight:800,color:'#fff'}}>Total CMV do mês</td>
+                      <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:'var(--gold)',fontSize:16}}>{fmtR(dados.totalCMVUnitario)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          )}
+
+          {/* VISÃO 2: Convergência MP */}
+          {visao === 'convergencia' && (
+            <>
+              {!dados.temConsumoMP && (
+                <div style={{padding:'14px 20px',background:'#fff8f0',borderRadius:8,border:'1px solid var(--warning)',fontSize:13,color:'var(--warning)',fontWeight:600}}>
+                  ⚠️ Sem dados de consumo real de MP para {labelMes(mes)} — a baixa automática deve estar ativa para acumular esses dados.
+                </div>
+              )}
+
+              {/* KPIs de convergência */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+                {[
+                  {label:'Consumo real de MP',valor:fmtR(dados.custoConsumoMP),sub:'soma dos débitos reais de estoque',cor:'var(--purple)'},
+                  {label:'CMV por ficha técnica',valor:fmtR(dados.custoPorFicha),sub:'produção × custo unitário calculado',cor:'var(--purple)'},
+                  {label:'Divergência',
+                    valor: dados.divergencia !== null ? `${dados.divergencia>=0?'+':''}${fmtR(dados.divergencia)}` : '—',
+                    sub: dados.divergenciaPct !== null ? `${Math.abs(dados.divergenciaPct).toFixed(1)}% ${dados.divergencia>0?'a mais':'a menos'} que o esperado` : 'sem dados de consumo',
+                    cor: dados.divergenciaPct === null ? 'var(--gray-400)' : Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'},
+                ].map(k=>(
+                  <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
+                    <div style={{fontSize:18,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+                    <div style={{fontSize:10,color:'var(--gray-400)'}}>{k.sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Explicação da divergência */}
+              {dados.divergenciaPct !== null && Math.abs(dados.divergenciaPct) > 5 && (
+                <div style={{padding:'12px 16px',borderRadius:8,
+                  background:Math.abs(dados.divergenciaPct)>15?'#fff0f0':'#fff8f0',
+                  border:`1px solid ${Math.abs(dados.divergenciaPct)>15?'var(--danger)':'var(--warning)'}`,
+                  fontSize:13}}>
+                  {dados.divergencia > 0
+                    ? `⚠️ O consumo real de MP foi ${fmtR(dados.divergencia)} (${dados.divergenciaPct?.toFixed(1)}%) maior que o previsto pela ficha técnica. Possíveis causas: desperdício não registrado, rendimento menor que o esperado, ou compras lançadas incorretamente.`
+                    : `✅ O consumo real de MP foi ${fmtR(Math.abs(dados.divergencia||0))} menor que o previsto. Pode indicar rendimento melhor que o esperado ou erro na ficha técnica.`
+                  }
+                </div>
+              )}
+
+              {/* Detalhamento por MP consumida */}
+              {dados.temConsumoMP && (
+                <div className="card">
+                  <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13,color:'var(--purple)'}}>
+                    Consumo real de MP — {labelMes(mes)}
+                  </div>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                    <thead>
+                      <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                        <th style={{padding:'8px 14px',textAlign:'left'}}>Matéria-prima</th>
+                        <th style={{padding:'8px 10px',textAlign:'right'}}>Qty consumida</th>
+                        <th style={{padding:'8px 10px',textAlign:'right'}}>Preço/un</th>
+                        <th style={{padding:'8px 10px',textAlign:'right'}}>Custo total</th>
+                        <th style={{padding:'8px 10px',textAlign:'right'}}>% do total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dados.consumoMPList.map((c,i) => (
+                        <tr key={c.mp?.id||i} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                          <td style={{padding:'8px 14px',fontWeight:600}}>{c.mp?.nome||'—'}</td>
+                          <td style={{padding:'8px 10px',textAlign:'right',color:'var(--gray-600)'}}>
+                            {c.qtd>=1000?`${(c.qtd/1000).toFixed(2)} kg`:`${c.qtd.toFixed(1)} ${c.mp?.unidade||''}`}
+                          </td>
+                          <td style={{padding:'8px 10px',textAlign:'right',color:'var(--gray-500)',fontSize:12}}>
+                            {fmtR(parseFloat(c.mp?.custo_unitario)||0)}/{c.mp?.unidade}
+                          </td>
+                          <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                            {fmtR(c.custo)}
+                          </td>
+                          <td style={{padding:'8px 10px',textAlign:'right'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
+                              <div style={{width:50,height:5,background:'var(--gray-100)',borderRadius:3}}>
+                                <div style={{height:'100%',width:`${Math.min(100,dados.custoConsumoMP>0?c.custo/dados.custoConsumoMP*100:0)}%`,background:'var(--purple)',borderRadius:3}}/>
+                              </div>
+                              <span style={{fontSize:11,color:'var(--gray-500)',minWidth:32,textAlign:'right'}}>
+                                {dados.custoConsumoMP>0?(c.custo/dados.custoConsumoMP*100).toFixed(1):0}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--purple)'}}>
+                        <td colSpan={3} style={{padding:'10px 14px',fontWeight:800,color:'#fff'}}>Total consumo MP</td>
+                        <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:'var(--gold)',fontSize:16}}>{fmtR(dados.custoConsumoMP)}</td>
+                        <td/>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </div>
