@@ -83,72 +83,36 @@ function ModalNovoPedido({ onClose, onSaved }) {
 
   useEffect(() => {
     async function load() {
-      // Carrega todas embalagens (rótulos + embalagens) em uma query
       const { data: embsData } = await supabase
         .from('embalagens')
-        .select('id, codigo, nome, categoria, tipo, estoque_atual, custo_unitario, unidade_minima_grafica, dias_producao, margem_seguranca')
+        .select('id, codigo, nome, categoria, tipo, unidade_minima_grafica')
         .eq('ativo', true)
         .order('tipo').order('categoria').order('nome')
 
       if (!embsData) { setLoading(false); return }
 
-      // Carrega inventários e produção em batch — uma query cada
-      const ids = embsData.map(e => e.id)
-      const desde90 = new Date(); desde90.setDate(desde90.getDate() - 90)
-      const desde90str = desde90.toISOString().slice(0,10)
+      // Usa as mesmas funções do Dashboard — estoque cronológico + média por dias produtivos
+      const { calcularEstoqueCronologico, calcularMedia } = await import('../lib/data.js')
 
-      const [{ data: invs }, { data: prods }, { data: entradas }] = await Promise.all([
-        supabase.from('inventarios').select('embalagem_id, quantidade, criado_em').in('embalagem_id', ids).order('criado_em', {ascending:false}),
-        supabase.from('producao_diaria').select('embalagem_id, quantidade, data_producao').in('embalagem_id', ids).gte('data_producao', desde90str),
-        supabase.from('compras').select('embalagem_id, quantidade_recebida, recebido_em').in('embalagem_id', ids).order('recebido_em', {ascending:true}),
-      ])
+      const resultados = await Promise.all(embsData.map(async emb => {
+        const [estoque, media] = await Promise.all([
+          calcularEstoqueCronologico(emb.id),
+          calcularMedia(emb.id),
+        ])
 
-      // Para cada embalagem calcula estoque e sugestão de pedido
-      const resultado = embsData.map(emb => {
-        // Último inventário
-        const ultInv = (invs||[]).filter(i => i.embalagem_id === emb.id)[0]
-        const baseQtd = ultInv ? ultInv.quantidade : 0
-        const baseTs = ultInv ? ultInv.criado_em : null
-        const baseDt = baseTs ? baseTs.slice(0,10) : desde90str
-
-        // Entradas após inventário
-        const totalEntradas = (entradas||[])
-          .filter(c => c.embalagem_id === emb.id && c.recebido_em >= baseDt)
-          .reduce((s,c) => s + c.quantidade_recebida, 0)
-
-        // Saídas após inventário
-        const totalSaidas = (prods||[])
-          .filter(p => p.embalagem_id === emb.id && p.data_producao >= baseDt)
-          .reduce((s,p) => s + p.quantidade, 0)
-
-        const estoque = Math.max(0, baseQtd + totalEntradas - totalSaidas)
-
-        // Média diária por dias produtivos (últimos 45d vs 45-90d)
-        const corte45 = new Date(); corte45.setDate(corte45.getDate()-45)
-        const corte45str = corte45.toISOString().slice(0,10)
-        const prodEmb = (prods||[]).filter(p => p.embalagem_id === emb.id)
-        const recente = prodEmb.filter(p => p.data_producao >= corte45str)
-        const anterior = prodEmb.filter(p => p.data_producao < corte45str)
-        const diasRec = new Set(recente.map(p=>p.data_producao)).size || 1
-        const diasAnt = new Set(anterior.map(p=>p.data_producao)).size || 1
-        const mediaRec = recente.reduce((s,p)=>s+p.quantidade,0) / diasRec
-        const mediaAnt = anterior.reduce((s,p)=>s+p.quantidade,0) / diasAnt
-        const media = (mediaRec*2 + mediaAnt) / 3
-
-        const dias = emb.dias_producao || 30
-        const margem = emb.margem_seguranca || 0.10
-        const minimoIdeal = Math.ceil(media * dias * (1+margem))
+        const DIAS = 15
+        const MARGEM = 0.10
+        const minimoIdeal = Math.ceil(media * DIAS * (1 + MARGEM))
         const falta = Math.max(0, minimoIdeal - estoque)
         const minG = emb.unidade_minima_grafica || 100
-        const qtdPedido = falta > 0 ? Math.ceil(falta/minG)*minG : 0
+        const qtdPedido = falta > 0 ? Math.ceil(falta / minG) * minG : 0
 
-        return { ...emb, estoque_real: estoque, media: Math.round(media*10)/10, qtdPedido }
-      })
+        return { ...emb, estoque_real: estoque, media: Math.round(media * 10) / 10, minimoIdeal, qtdPedido }
+      }))
 
-      setEmbs(resultado)
-      // Pré-preenche qtds sugeridas
+      setEmbs(resultados)
       const pre = {}
-      resultado.filter(e => e.qtdPedido > 0).forEach(e => { pre[e.id] = e.qtdPedido })
+      resultados.filter(e => e.qtdPedido > 0).forEach(e => { pre[e.id] = e.qtdPedido })
       setQtds(pre)
       setLoading(false)
     }
@@ -233,7 +197,7 @@ function ModalNovoPedido({ onClose, onSaved }) {
                         <div>
                           <div style={{fontWeight:selecionado?700:400,fontSize:13}}>{e.nome}</div>
                           <div style={{fontSize:11,color:'var(--gray-400)'}}>
-                            Estoque: {e.estoque_real.toLocaleString('pt-BR')} · Média: {e.media}/dia
+                            Estoque: {e.estoque_real.toLocaleString('pt-BR')} · Média: {e.media}/dia · Ideal 15d: {(e.minimoIdeal||0).toLocaleString('pt-BR')}
                           </div>
                         </div>
                         <div style={{fontSize:11,color:e.qtdPedido>0?'var(--danger)':'var(--ok)',textAlign:'right',fontWeight:700}}>
