@@ -104,52 +104,81 @@ function usePrecificacao() {
     const mpMap = {}
     for (const m of (mps||[])) mpMap[m.id] = m
 
-    // Calcula custo por g de uma preparação (com suporte a sub-preparações)
-    // Usa memoização para evitar loops
-    const custoPrepPorG = {}
-    function calcCustoPrepPorG(prepId, visitados = new Set()) {
-      if (custoPrepPorG[prepId] !== undefined) return custoPrepPorG[prepId]
-      if (visitados.has(prepId)) return 0 // evita loop circular
-      visitados = new Set([...visitados, prepId])
+    // Helper: custo total de ingredientes de uma preparação (sem divisão pelo rendimento)
+    function custoIngredientes(prepId, visitados = new Set()) {
+      if (visitados.has(prepId)) return 0
+      const vis = new Set([...visitados, prepId])
+      const ings = (prepComps||[]).filter(pc => pc.preparacao_id === prepId)
+      return ings.reduce((s, ing) => {
+        if (ing.sub_preparacao_id) {
+          const subPrep = prepMap[ing.sub_preparacao_id]
+          const rendSub = parseFloat(subPrep?.rendimento_real_medio || subPrep?.rendimento_estimado) || 1
+          const perdaSub = parseFloat(subPrep?.perda_percentual) || 0
+          const rendLiqSub = rendSub * (1 - perdaSub/100)
+          const custoSubPorG = rendLiqSub > 0 ? custoIngredientes(ing.sub_preparacao_id, vis) / rendLiqSub : 0
+          return s + (parseFloat(ing.quantidade)||0) * custoSubPorG
+        }
+        const mp = mpMap[ing.materia_prima_id]
+        if (!mp) return s
+        return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp.custo_unitario)||0)
+      }, 0)
+    }
 
+    // Calcula custo/g com rendimento específico (estimado ou real)
+    const custoPrepPorG = {}     // usa estimado
+    const custoPrepPorGReal = {} // usa real quando disponível
+
+    function calcCusto(prepId, useReal, visitados = new Set(), cache) {
+      if (cache[prepId] !== undefined) return cache[prepId]
+      if (visitados.has(prepId)) return 0
+      const vis = new Set([...visitados, prepId])
       const prep = prepMap[prepId]
       if (!prep) return 0
-      const ings = (prepComps||[]).filter(pc => pc.preparacao_id === prepId)
 
+      const ings = (prepComps||[]).filter(pc => pc.preparacao_id === prepId)
       const custo = ings.reduce((s, ing) => {
-        // Sub-preparação (ex: Chá dentro da Massa)
         if (ing.sub_preparacao_id) {
-          const custoPorG = calcCustoPrepPorG(ing.sub_preparacao_id, visitados)
+          const custoPorG = calcCusto(ing.sub_preparacao_id, useReal, vis, cache)
           return s + (parseFloat(ing.quantidade)||0) * custoPorG
         }
-        // Matéria-prima normal
         const mp = mpMap[ing.materia_prima_id]
         if (!mp) return s
         return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp.custo_unitario)||0)
       }, 0)
 
-      const bruto = parseFloat(prep.rendimento_estimado) || 1
+      const rendEstimado = parseFloat(prep.rendimento_estimado) || 1
+      const rendReal = parseFloat(prep.rendimento_real_medio) || null
+      const rend = useReal && rendReal ? rendReal : rendEstimado
       const perda = parseFloat(prep.perda_percentual) || 0
-      const rendLiq = bruto * (1 - perda/100)
-      custoPrepPorG[prepId] = rendLiq > 0 ? custo / rendLiq : 0
-      return custoPrepPorG[prepId]
+      const rendLiq = rend * (1 - perda/100)
+      cache[prepId] = rendLiq > 0 ? custo / rendLiq : 0
+      return cache[prepId]
     }
 
     for (const prep of (preps||[])) {
-      calcCustoPrepPorG(prep.id)
+      calcCusto(prep.id, false, new Set(), custoPrepPorG)
+      calcCusto(prep.id, true, new Set(), custoPrepPorGReal)
     }
 
-    // Calcula CMV por produto
+    // Calcula CMV por produto (duplo: teórico e real)
     const produtos = (embs||[]).map(emb => {
       const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
-      
+
       // Custo de preparações
       const detalhesPrep = comps.map(comp => {
         const prep = prepMap[comp.preparacao_id]
         if (!prep) return null
         const qtdCrua = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
-        const custoPorG = custoPrepPorG[comp.preparacao_id] || 0
-        const custoNaUnidade = custoPorG * qtdCrua
+
+        const custoPorGTeorico = custoPrepPorG[comp.preparacao_id] || 0
+        const custoPorGReal = custoPrepPorGReal[comp.preparacao_id] || 0
+        const custoNaUnidade = custoPorGTeorico * qtdCrua
+        const custoNaUnidadeReal = custoPorGReal * qtdCrua
+
+        // Rendimento info
+        const rendEstimado = parseFloat(prep.rendimento_estimado) || 0
+        const rendReal = parseFloat(prep.rendimento_real_medio) || null
+        const usandoReal = !!rendReal
 
         // Ingredientes desta preparação
         const ings = (prepComps||[]).filter(pc => pc.preparacao_id === comp.preparacao_id).map(ing => {
@@ -160,7 +189,6 @@ function usePrecificacao() {
           const qtdPorUnidade = (qtdIng/rendLiq)*qtdCrua
 
           if (ing.sub_preparacao_id) {
-            // Sub-preparação
             const subPrep = prepMap[ing.sub_preparacao_id]
             const custoPorGSub = custoPrepPorG[ing.sub_preparacao_id] || 0
             const custo = qtdPorUnidade * custoPorGSub
@@ -177,22 +205,28 @@ function usePrecificacao() {
           tipo: prep.tipo,
           qtdCrua,
           unidade: comp.unidade,
-          custoPorG,
+          custoPorG: custoPorGTeorico,
           custoNaUnidade,
+          custoNaUnidadeReal,
+          rendEstimado,
+          rendReal,
+          usandoReal,
+          unidadeRendimento: prep.unidade_rendimento,
           ingredientes: ings,
         }
       }).filter(Boolean)
 
-      // Custo de embalagem primária (filme/vidrinho via categoria_embalagem)
-      // Por ora usa custo_unitario do próprio rótulo como proxy
       const custoRotulo = parseFloat(emb.custo_unitario) || 0
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
+      const custoPrepsReal = detalhesPrep.reduce((s,d) => s + d.custoNaUnidadeReal, 0)
       const cmvTotal = custoPreps + custoRotulo
+      const cmvTotalReal = custoPrepsReal + custoRotulo
+      const temRendimentoReal = detalhesPrep.some(d => d.usandoReal)
 
-      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
+      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, cmvTotalReal, temRendimentoReal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
-      setData({ produtos, custoPrepPorG, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade })
+      setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade })
     } catch(err) {
       console.error('Erro ao carregar precificação:', err)
     }
@@ -276,7 +310,16 @@ function FichaCusto({ data, incluirOverhead }) {
                     {p.custoRotulo>0 ? fmtR(p.custoRotulo) : '—'}
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:temCusto?'var(--purple)':'var(--gray-300)'}}>
-                    {temCusto ? fmtR(cmvEf) : p.semFicha ? '⚠️ sem ficha' : '—'}
+                    {temCusto ? (
+                      <div>
+                        <div>{fmtR(cmvEf)}</div>
+                        {p.temRendimentoReal && (
+                          <div style={{fontSize:10,color:'var(--ok)',fontWeight:700}}>
+                            Real: {fmtR(cmvEfetivo(p.cmvTotalReal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}
+                          </div>
+                        )}
+                      </div>
+                    ) : p.semFicha ? '⚠️ sem ficha' : '—'}
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'center'}}>
                     <span style={{fontSize:11,background:'var(--purple-pale)',color:'var(--purple)',padding:'2px 8px',borderRadius:10,fontWeight:700}}>
@@ -293,11 +336,29 @@ function FichaCusto({ data, incluirOverhead }) {
                       <div style={{display:'flex',flexDirection:'column',gap:8,paddingTop:12}}>
                         {p.detalhesPrep.map(d => (
                           <div key={d.prepId} style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
-                            <div style={{padding:'8px 14px',background:'var(--purple-pale)',display:'flex',justifyContent:'space-between'}}>
-                              <div style={{fontWeight:700,fontSize:13}}>{TIPO_ICON[d.tipo]} {d.nome}</div>
-                              <div style={{fontSize:13}}>
-                                <span style={{color:'var(--gray-500)'}}>{fmt(d.qtdCrua,1)}{d.unidade} × {fmtR(d.custoPorG)}/{d.unidade} = </span>
-                                <span style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(d.custoNaUnidade)}</span>
+                            <div style={{padding:'8px 14px',background:'var(--purple-pale)'}}>
+                              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                                <div style={{fontWeight:700,fontSize:13}}>{TIPO_ICON[d.tipo]} {d.nome}</div>
+                                <div style={{fontSize:13}}>
+                                  <span style={{color:'var(--gray-500)'}}>{fmt(d.qtdCrua,1)}{d.unidade} × {fmtR(d.custoPorG)}/{d.unidade} = </span>
+                                  <span style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(d.custoNaUnidade)}</span>
+                                </div>
+                              </div>
+                              {/* Rendimento info */}
+                              <div style={{display:'flex',gap:12,fontSize:11,flexWrap:'wrap'}}>
+                                <span style={{color:'var(--gray-500)'}}>
+                                  📐 Teórico: <strong>{fmt(d.rendEstimado,1)} {d.unidadeRendimento}</strong>
+                                  {' → '}<span style={{color:'var(--gray-600)'}}>{fmtR(d.custoNaUnidade)}</span>
+                                </span>
+                                {d.rendReal ? (
+                                  <span style={{color: d.usandoReal ? 'var(--ok)' : 'var(--gray-500)'}}>
+                                    📊 Real: <strong>{fmt(d.rendReal,1)} {d.unidadeRendimento}</strong>
+                                    {' → '}<span style={{fontWeight:700}}>{fmtR(d.custoNaUnidadeReal)}</span>
+                                    {d.usandoReal && <span style={{marginLeft:4,background:'var(--ok)',color:'#fff',padding:'1px 5px',borderRadius:8,fontSize:10}}>em uso</span>}
+                                  </span>
+                                ) : (
+                                  <span style={{color:'var(--warning)',fontSize:11}}>⚠️ Sem rendimento real registrado</span>
+                                )}
                               </div>
                             </div>
                             <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
@@ -341,9 +402,15 @@ function FichaCusto({ data, incluirOverhead }) {
                           </div>
                         )}
                         <div style={{padding:'10px 14px',background:'var(--purple)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
-                          <span>CMV {incluirOverhead ? 'Total' : 'Direto'} por unidade</span>
+                          <span>CMV {incluirOverhead ? 'Total' : 'Direto'} — Rendimento Teórico</span>
                           <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
                         </div>
+                        {p.temRendimentoReal && (
+                          <div style={{padding:'10px 14px',background:'var(--ok)',borderRadius:8,display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:800}}>
+                            <span>CMV {incluirOverhead ? 'Total' : 'Direto'} — Rendimento Real ✓</span>
+                            <span style={{fontSize:16}}>{fmtR(cmvEfetivo(p.cmvTotalReal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1))}</span>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>
