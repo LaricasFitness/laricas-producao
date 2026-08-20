@@ -1978,7 +1978,7 @@ function CMVMensal() {
         .select('materia_prima_id, quantidade, data_consumo')
         .gte('data_consumo', ini).lte('data_consumo', fim),
       // Embalagens tipo rotulo com custo
-      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('tipo','rotulo').eq('ativo',true),
+      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('ativo',true),
       // MPs com custo
       supabase.from('materias_primas').select('id,nome,unidade,custo_unitario').eq('ativo',true),
       // Composição das preparações
@@ -1995,8 +1995,12 @@ function CMVMensal() {
       supabase.from('cmv_historico').select('*').eq('mes', mesAnterior),
     ])
 
+    // Produto acabado = rótulo OU embalagem com ficha técnica (ex: latas)
+    const skusComFicha = new Set((prodComps||[]).map(p => p.sku_produto))
     const embMap = {}
-    for (const e of (embs||[])) embMap[e.id] = e
+    for (const e of (embs||[])) {
+      if (e.tipo === 'rotulo' || skusComFicha.has(e.codigo)) embMap[e.id] = e
+    }
     const mpMap = {}
     for (const m of (mps||[])) mpMap[m.id] = m
     const prepMap = {}
