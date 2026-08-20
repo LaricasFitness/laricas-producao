@@ -234,6 +234,25 @@ function usePrecificacao() {
   }
 
   useEffect(() => { load() }, [])
+
+  // Salva snapshot automaticamente quando os dados carregam
+  useEffect(() => {
+    if (!data?.produtos?.length) return
+    const mes = new Date().toISOString().slice(0, 7)
+    const rows = data.produtos
+      .filter(p => p.cmvTotal > 0)
+      .map(p => ({
+        mes,
+        sku_produto: p.emb.codigo,
+        nome_produto: p.emb.nome,
+        categoria: p.emb.categoria,
+        cmv_direto: p.cmvTotal,
+        cmv_real: p.temRendimentoReal ? p.cmvTotalReal : null,
+        overhead_unit: data.overheadPorUnidade || 0,
+        rendimento_usado: p.temRendimentoReal ? 'real' : 'teorico',
+      }))
+    supabase.from('cmv_historico').upsert(rows, { onConflict: 'mes,sku_produto' })
+  }, [data])
   return { data, loading, reload: load }
 }
 
@@ -778,6 +797,7 @@ export default function Precificacao() {
         <button className={`tab${aba==='ficha'?' active':''}`} onClick={()=>setAba('ficha')}>📊 Ficha de Custo</button>
         <button className={`tab${aba==='simulador'?' active':''}`} onClick={()=>setAba('simulador')}>💡 Simulador</button>
         <button className={`tab${aba==='ranking'?' active':''}`} onClick={()=>setAba('ranking')}>🏆 Ranking de Margem</button>
+        <button className={`tab${aba==='evolucao'?' active':''}`} onClick={()=>setAba('evolucao')}>📈 Evolução do CMV</button>
       </div>
 
       {loading ? (
@@ -827,8 +847,142 @@ export default function Precificacao() {
           {aba==='ficha'     && <FichaCusto data={data} incluirOverhead={incluirOverhead} />}
           {aba==='simulador' && <Simulador data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
+          {aba==='evolucao'  && <EvolucaoCMV />}
         </>
       )}
     </>
+  )
+}
+
+// ── Evolução do CMV ───────────────────────────────────────────────────────────
+function EvolucaoCMV() {
+  const [historico, setHistorico] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [skuFiltro, setSkuFiltro] = useState('todos')
+  const [catFiltro, setCatFiltro] = useState('todas')
+
+  useEffect(() => {
+    supabase.from('cmv_historico')
+      .select('*')
+      .order('mes', { ascending: true })
+      .then(({ data }) => { setHistorico(data||[]); setLoading(false) })
+  }, [])
+
+  const meses = [...new Set(historico.map(h => h.mes))].sort()
+  const skus = [...new Set(historico.map(h => h.sku_produto))]
+  const cats = ['todas', ...new Set(historico.map(h => h.categoria).filter(Boolean))]
+
+  const filtrado = historico.filter(h =>
+    (skuFiltro === 'todos' || h.sku_produto === skuFiltro) &&
+    (catFiltro === 'todas' || h.categoria === catFiltro)
+  )
+
+  // Agrupa por SKU → array de meses
+  const porSku = {}
+  for (const h of filtrado) {
+    if (!porSku[h.sku_produto]) porSku[h.sku_produto] = { nome: h.nome_produto, categoria: h.categoria, meses: {} }
+    porSku[h.sku_produto].meses[h.mes] = h
+  }
+  const produtos = Object.entries(porSku).sort((a,b) => a[1].categoria?.localeCompare(b[1].categoria||'')||0)
+
+  if (loading) return <div className="loading"><RefreshCw size={14} className="spin"/></div>
+
+  if (!historico.length) return (
+    <div className="card card-pad" style={{textAlign:'center',color:'var(--gray-400)',padding:40}}>
+      <div style={{fontSize:32,marginBottom:12}}>📸</div>
+      <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>Nenhum snapshot salvo ainda</div>
+      <div style={{fontSize:13}}>Use o botão <strong>"📸 Salvar snapshot do mês"</strong> na barra acima para salvar o CMV atual de todos os produtos.</div>
+      <div style={{fontSize:12,marginTop:8,color:'var(--gray-300)'}}>Faça isso uma vez por mês para acompanhar a evolução ao longo do tempo.</div>
+    </div>
+  )
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {/* Filtros */}
+      <div className="card card-pad" style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{fontWeight:800,fontSize:14}}>📈 Evolução do CMV por Produto</div>
+        <div style={{flex:1}}/>
+        <select className="form-input" value={catFiltro} onChange={e=>{setCatFiltro(e.target.value);setSkuFiltro('todos')}} style={{width:180,fontSize:13}}>
+          {cats.map(c=><option key={c} value={c}>{c==='todas'?'Todas as categorias':c}</option>)}
+        </select>
+        <select className="form-input" value={skuFiltro} onChange={e=>setSkuFiltro(e.target.value)} style={{width:220,fontSize:13}}>
+          <option value="todos">Todos os produtos</option>
+          {skus.filter(s => catFiltro==='todas' || porSku[s]?.categoria===catFiltro).map(s=>(
+            <option key={s} value={s}>{porSku[s]?.nome || s}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Tabela de evolução */}
+      <div className="card" style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,minWidth:600}}>
+          <thead>
+            <tr style={{background:'var(--purple)',color:'#fff'}}>
+              <th style={{padding:'10px 14px',textAlign:'left',fontWeight:700,position:'sticky',left:0,background:'var(--purple)'}}>Produto</th>
+              {meses.map(m=>(
+                <th key={m} style={{padding:'10px 12px',textAlign:'center',fontWeight:700,whiteSpace:'nowrap'}}>
+                  {new Date(m+'-15').toLocaleDateString('pt-BR',{month:'short',year:'2-digit'})}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {produtos.map(([sku, prod], pi) => {
+              const valoresMes = meses.map(m => prod.meses[m])
+              const primeiro = valoresMes.find(v => v)
+              const ultimo = [...valoresMes].reverse().find(v => v)
+              const variacao = primeiro && ultimo && primeiro !== ultimo
+                ? ((( ultimo.cmv_real ?? ultimo.cmv_direto) - (primeiro.cmv_real ?? primeiro.cmv_direto)) / (primeiro.cmv_real ?? primeiro.cmv_direto)) * 100
+                : null
+
+              return (
+                <tr key={sku} style={{borderTop:'1px solid var(--gray-100)',background:pi%2===0?'#fff':'#fafafa'}}>
+                  <td style={{padding:'9px 14px',fontWeight:600,position:'sticky',left:0,background:pi%2===0?'#fff':'#fafafa',whiteSpace:'nowrap'}}>
+                    <div>{prod.nome}</div>
+                    <div style={{fontSize:10,color:'var(--gray-400)'}}>{prod.categoria}</div>
+                    {variacao !== null && (
+                      <div style={{fontSize:10,fontWeight:700,color:variacao>5?'var(--danger)':variacao<-5?'var(--ok)':'var(--gray-400)'}}>
+                        {variacao>0?'▲':'▼'} {Math.abs(variacao).toFixed(1)}% vs início
+                      </div>
+                    )}
+                  </td>
+                  {meses.map(m => {
+                    const h = prod.meses[m]
+                    if (!h) return <td key={m} style={{padding:'9px 12px',textAlign:'center',color:'var(--gray-200)'}}>—</td>
+                    const cmvPrincipal = h.cmv_real ?? h.cmv_direto
+                    const temReal = !!h.cmv_real
+                    // Variação vs mês anterior
+                    const idx = meses.indexOf(m)
+                    const anterior = idx > 0 ? prod.meses[meses[idx-1]] : null
+                    const cmvAnterior = anterior ? (anterior.cmv_real ?? anterior.cmv_direto) : null
+                    const diff = cmvAnterior ? ((cmvPrincipal - cmvAnterior) / cmvAnterior * 100) : null
+                    return (
+                      <td key={m} style={{padding:'9px 12px',textAlign:'center'}}>
+                        <div style={{fontWeight:800,color:temReal?'var(--ok)':'var(--purple)'}}>
+                          {fmtR(cmvPrincipal)}
+                        </div>
+                        {temReal && (
+                          <div style={{fontSize:10,color:'var(--gray-400)'}}>teo: {fmtR(h.cmv_direto)}</div>
+                        )}
+                        {diff !== null && (
+                          <div style={{fontSize:10,fontWeight:700,
+                            color:diff>5?'var(--danger)':diff<-5?'var(--ok)':'var(--gray-400)'}}>
+                            {diff>0?'▲':'▼'}{Math.abs(diff).toFixed(1)}%
+                          </div>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{fontSize:11,color:'var(--gray-400)',textAlign:'right'}}>
+        🟢 Verde = usando rendimento real · 🟣 Roxo = usando rendimento teórico · ▲▼ variação vs mês anterior
+      </div>
+    </div>
   )
 }
