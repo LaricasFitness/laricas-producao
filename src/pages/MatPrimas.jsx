@@ -1961,6 +1961,7 @@ function CMVMensal() {
       { data: prepComps },
       { data: preps },
       { data: prodComps },
+      { data: catEmbsData },
       { data: snapshotAtual },
       { data: snapshotAnterior },
     ] = await Promise.all([
@@ -1981,8 +1982,9 @@ function CMVMensal() {
       supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
       // Preparações
       supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual').eq('ativo',true),
-      // Composição dos produtos
+      // Composição dos produtos + categoria_embalagem
       supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
+      supabase.from('categoria_embalagem').select('categoria, quantidade, embalagens(id,nome,custo_unitario)').then(r=>r).catch(()=>({data:[]})),
       // Snapshot CMV do mês atual
       supabase.from('cmv_historico').select('*').eq('mes', mes),
       // Snapshot CMV do mês anterior
@@ -2028,6 +2030,14 @@ function CMVMensal() {
     }
     for (const p of (preps||[])) custoPrepPorG(p.id)
 
+    // Mapa de custo de embalagem por categoria
+    const custoEmbPorCat = {}
+    for (const ce of (catEmbsData||[])) {
+      const cat = ce.categoria
+      const custo = (parseFloat(ce.quantidade)||1) * (parseFloat(ce.embalagens?.custo_unitario)||0)
+      custoEmbPorCat[cat] = (custoEmbPorCat[cat]||0) + custo
+    }
+
     // VISÃO 1: CMV unitário por produto (snapshot + variação vs mês anterior)
     const snapAtualMap = {}
     for (const s of (snapshotAtual||[])) snapAtualMap[s.sku_produto] = s
@@ -2065,16 +2075,21 @@ function CMVMensal() {
     const consumoMPList = Object.values(consumoPorMP)
       .sort((a,b) => b.custo - a.custo)
 
-    // VISÃO 2b: CMV por produção × ficha técnica (inclui custo embalagem)
-    const custoPorFicha = Object.values(prodPorSku).reduce((s, { emb, qtd }) => {
+    // VISÃO 2b: CMV por produção × ficha técnica — separado em preps e embalagem
+    let custoPorFichaPreps = 0
+    let custoPorFichaEmb = 0
+    Object.values(prodPorSku).forEach(({ emb, qtd }) => {
       const comps = (prodComps||[]).filter(c => c.sku_produto === emb.codigo)
       const custoPreps = comps.reduce((sc, comp) => {
         const custoPorG = custoPrepPorG(comp.preparacao_id) || 0
         return sc + custoPorG * (parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade)||0)
       }, 0)
-      const custoEmb = parseFloat(emb.custo_unitario)||0
-      return s + (custoPreps + custoEmb) * qtd
-    }, 0)
+      const custoRotulo = parseFloat(emb.custo_unitario)||0
+      const custoFilme = custoEmbPorCat[emb.categoria]||0
+      custoPorFichaPreps += custoPreps * qtd
+      custoPorFichaEmb += (custoRotulo + custoFilme) * qtd
+    })
+    const custoPorFicha = custoPorFichaPreps + custoPorFichaEmb
 
     // Divergência
     const divergencia = custoConsumoMP > 0 ? custoConsumoMP - custoPorFicha : null
@@ -2082,7 +2097,8 @@ function CMVMensal() {
 
     setDados({
       produtosUnitario, totalCMVUnitario,
-      custoConsumoMP, custoPorFicha, divergencia, divergenciaPct,
+      custoConsumoMP, custoPorFicha, custoPorFichaPreps, custoPorFichaEmb,
+      divergencia, divergenciaPct,
       consumoMPList, mesAnterior,
       totalUnidades: Object.values(prodPorSku).reduce((s,p) => s+p.qtd, 0),
       temConsumoMP: (consumoMP||[]).length > 0,
@@ -2189,15 +2205,11 @@ function CMVMensal() {
                 </div>
               )}
 
-              {/* KPIs de convergência */}
               <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
                 {[
-                  {label:'Consumo real de MP',valor:fmtR(dados.custoConsumoMP),sub:'soma dos débitos reais de estoque',cor:'var(--purple)'},
-                  {label:'CMV por ficha técnica',valor:fmtR(dados.custoPorFicha),sub:'produção × (custo preps + embalagem)',cor:'var(--purple)'},
-                  {label:'Divergência',
-                    valor: dados.divergencia !== null ? `${dados.divergencia>=0?'+':''}${fmtR(dados.divergencia)}` : '—',
-                    sub: dados.divergenciaPct !== null ? `${Math.abs(dados.divergenciaPct).toFixed(1)}% ${dados.divergencia>0?'a mais':'a menos'} que o esperado` : 'sem dados de consumo',
-                    cor: dados.divergenciaPct === null ? 'var(--gray-400)' : Math.abs(dados.divergenciaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'},
+                  {label:'Consumo real de MP',valor:fmtR(dados.custoConsumoMP),sub:'débitos reais de estoque de MP',cor:'var(--purple)'},
+                  {label:'Custo de embalagem (ficha)',valor:fmtR(dados.custoPorFichaEmb),sub:'rótulo + filmes por unidade produzida',cor:'var(--purple)'},
+                  {label:'Total CMV (ficha)',valor:fmtR(dados.custoPorFicha),sub:'MP + embalagem pela ficha técnica',cor:'var(--ok)'},
                 ].map(k=>(
                   <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
                     <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
@@ -2205,6 +2217,42 @@ function CMVMensal() {
                     <div style={{fontSize:10,color:'var(--gray-400)'}}>{k.sub}</div>
                   </div>
                 ))}
+              </div>
+
+              {/* Linha de soma */}
+              <div style={{padding:'12px 16px',borderRadius:8,background:'var(--purple-pale)',border:'1px solid var(--purple)',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,fontSize:13}}>
+                <div style={{textAlign:'center'}}>
+                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>MP real</div>
+                  <div style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(dados.custoConsumoMP)}</div>
+                </div>
+                <div style={{textAlign:'center'}}>
+                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>Embalagem (ficha)</div>
+                  <div style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(dados.custoPorFichaEmb)}</div>
+                </div>
+                <div style={{textAlign:'center',borderLeft:'1px solid var(--purple)'}}>
+                  <div style={{fontSize:11,color:'var(--gray-400)',marginBottom:2}}>Total CMV real+emb</div>
+                  <div style={{fontWeight:800,color:'var(--purple)',fontSize:16}}>{fmtR(dados.custoConsumoMP + dados.custoPorFichaEmb)}</div>
+                </div>
+              </div>
+
+              {/* Divergência MP */}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                <div className="card card-pad" style={{textAlign:'center'}}>
+                  <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>MP ficha técnica</div>
+                  <div style={{fontSize:18,fontWeight:800,color:'var(--purple)',margin:'4px 0'}}>{fmtR(dados.custoPorFichaPreps)}</div>
+                  <div style={{fontSize:10,color:'var(--gray-400)'}}>o que deveria ter sido consumido</div>
+                </div>
+                <div className="card card-pad" style={{textAlign:'center',
+                  background: dados.divergenciaPct !== null && Math.abs(dados.divergenciaPct||0)>10 ? '#fff0f0' : '#f0faf0'}}>
+                  <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Divergência MP</div>
+                  <div style={{fontSize:18,fontWeight:800,margin:'4px 0',
+                    color: dados.divergencia===null?'var(--gray-400)':Math.abs(dados.divergenciaPct||0)>10?'var(--danger)':'var(--ok)'}}>
+                    {dados.divergencia !== null ? `${dados.divergencia>=0?'+':''}${fmtR(dados.divergencia)}` : '—'}
+                  </div>
+                  <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                    {dados.divergenciaPct !== null ? `${Math.abs(dados.divergenciaPct).toFixed(1)}% vs ficha` : 'sem dados de consumo'}
+                  </div>
+                </div>
               </div>
 
               {/* Explicação da divergência */}
