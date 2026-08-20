@@ -1100,6 +1100,7 @@ export default function MatPrimas() {
         <button className={`tab${sub==='consumo'?' active':''}`} onClick={()=>setSub('consumo')}>📉 Consumo</button>
         <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
         <button className={`tab${sub==='cmv_mensal'?' active':''}`} onClick={()=>setSub('cmv_mensal')}>💰 CMV Mensal</button>
+        <button className={`tab${sub==='conferencia'?' active':''}`} onClick={()=>setSub('conferencia')}>🔍 Conferência</button>
       </div>
       {sub==='situacao'   && <DashMP />}
       {sub==='historico'  && <HistoricoCompras />}
@@ -1108,6 +1109,7 @@ export default function MatPrimas() {
       {sub==='consumo'     && <HistoricoConsumo />}
       {sub==='overhead'    && <OverheadMensal />}
       {sub==='cmv_mensal'  && <CMVMensal />}
+      {sub==='conferencia' && <ConferenciaMP />}
     </>
   )
 }
@@ -2455,6 +2457,333 @@ function CMVMensal() {
               )}
             </>
           )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Conferência de Matéria-Prima ──────────────────────────────────────────────
+function ConferenciaMP() {
+  const [mps, setMps] = useState([])
+  const [contagens, setContagens] = useState({})
+  const [responsavel, setResponsavel] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [historico, setHistorico] = useState([])
+  const [aba, setAba] = useState('conferir')
+  const [catFiltro, setCatFiltro] = useState('todas')
+  const [editando, setEditando] = useState(null)
+  const [editQtd, setEditQtd] = useState('')
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('materias_primas')
+      .select('id,nome,unidade,categoria,estoque_atual,custo_unitario')
+      .eq('ativo', true)
+      .order('categoria').order('nome')
+    setMps(data||[])
+    setLoading(false)
+  }
+
+  async function loadHistorico() {
+    const { data } = await supabase.from('conferencia_mp')
+      .select('*, materias_primas(nome,unidade,categoria)')
+      .order('criado_em', { ascending: false })
+      .limit(200)
+    setHistorico(data||[])
+  }
+
+  useEffect(() => { load(); loadHistorico() }, [])
+
+  async function confirmar() {
+    const lancados = mps.filter(m => contagens[m.id] !== undefined && contagens[m.id] !== '')
+    if (!lancados.length) { alert('Nenhuma contagem lançada.'); return }
+    setSaving(true)
+    const hoje = new Date().toISOString().slice(0,10)
+
+    for (const mp of lancados) {
+      const contado = parseFloat(contagens[mp.id])
+      const sistema = parseFloat(mp.estoque_atual)||0
+
+      const { error } = await supabase.from('conferencia_mp').insert({
+        materia_prima_id: mp.id,
+        data_conferencia: hoje,
+        estoque_sistema: sistema,
+        estoque_contado: contado,
+        custo_unitario: parseFloat(mp.custo_unitario)||0,
+        responsavel: responsavel || null,
+        observacao: `Conferência física — sistema: ${sistema}, contado: ${contado}`,
+      })
+      if (error) { console.error('Erro conferência MP:', error); continue }
+
+      await supabase.from('materias_primas')
+        .update({ estoque_atual: contado, atualizado_em: new Date().toISOString() })
+        .eq('id', mp.id)
+    }
+
+    setSaving(false)
+    setContagens({})
+    await load()
+    await loadHistorico()
+    setAba('historico')
+  }
+
+  async function excluir(c) {
+    if (!window.confirm(`Excluir conferência de ${c.materias_primas?.nome}?\n\nO estoque voltará para ${fmt(c.estoque_sistema,1)} ${c.materias_primas?.unidade}.`)) return
+    await supabase.from('materias_primas')
+      .update({ estoque_atual: c.estoque_sistema, atualizado_em: new Date().toISOString() })
+      .eq('id', c.materia_prima_id)
+    await supabase.from('conferencia_mp').delete().eq('id', c.id)
+    await load(); await loadHistorico()
+  }
+
+  async function salvarEdicao() {
+    if (!editando || editQtd === '') return
+    const nova = parseFloat(editQtd)
+    await supabase.from('conferencia_mp').update({ estoque_contado: nova }).eq('id', editando.id)
+    await supabase.from('materias_primas')
+      .update({ estoque_atual: nova, atualizado_em: new Date().toISOString() })
+      .eq('id', editando.materia_prima_id)
+    setEditando(null); setEditQtd('')
+    await load(); await loadHistorico()
+  }
+
+  const cats = ['todas', ...new Set(mps.map(m => m.categoria).filter(Boolean))]
+  const filtradas = mps.filter(m => catFiltro === 'todas' || m.categoria === catFiltro)
+  const lancados = mps.filter(m => contagens[m.id] !== undefined && contagens[m.id] !== '')
+  const comDiferenca = lancados.filter(m => parseFloat(contagens[m.id]) !== (parseFloat(m.estoque_atual)||0))
+  const impactoFinanceiro = lancados.reduce((s,m) => {
+    const diff = parseFloat(contagens[m.id]) - (parseFloat(m.estoque_atual)||0)
+    return s + diff * (parseFloat(m.custo_unitario)||0)
+  }, 0)
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      <div style={{display:'flex',gap:6}}>
+        <button className={`btn btn-sm ${aba==='conferir'?'btn-primary':'btn-ghost'}`} onClick={()=>setAba('conferir')}>
+          🔍 Conferir estoque
+        </button>
+        <button className={`btn btn-sm ${aba==='historico'?'btn-primary':'btn-ghost'}`} onClick={()=>setAba('historico')}>
+          📋 Histórico
+        </button>
+      </div>
+
+      {aba === 'conferir' && (
+        <>
+          <div className="card card-pad" style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <div>
+              <div style={{fontWeight:800,fontSize:14}}>🔍 Conferência de Matéria-Prima</div>
+              <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>
+                Digite a contagem física. Só os itens preenchidos serão ajustados.
+              </div>
+            </div>
+            <div style={{flex:1}}/>
+            <select className="form-input" value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{width:180,fontSize:13}}>
+              {cats.map(c=><option key={c} value={c}>{c==='todas'?'Todas as categorias':c}</option>)}
+            </select>
+            <input className="form-input" placeholder="Responsável" value={responsavel}
+              onChange={e=>setResponsavel(e.target.value)} style={{width:180,fontSize:13}}/>
+            <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
+          </div>
+
+          {lancados.length > 0 && (
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+              {[
+                {label:'Itens conferidos',valor:lancados.length,cor:'var(--purple)'},
+                {label:'Com divergência',valor:comDiferenca.length,cor:comDiferenca.length>0?'var(--danger)':'var(--ok)'},
+                {label:'Impacto financeiro',valor:`${impactoFinanceiro>=0?'+':'−'}${fmtR(Math.abs(impactoFinanceiro))}`,
+                  cor:Math.abs(impactoFinanceiro)<1?'var(--ok)':impactoFinanceiro<0?'var(--danger)':'var(--warning)'},
+              ].map(k=>(
+                <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
+                  <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{k.label}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:k.cor,margin:'4px 0'}}>{k.valor}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+            <div className="card">
+              {[...new Set(filtradas.map(m=>m.categoria))].map(cat => (
+                <div key={cat}>
+                  <div style={{padding:'8px 20px',background:'var(--gray-50)',borderTop:'1px solid var(--gray-200)',
+                    fontWeight:800,fontSize:12,color:'var(--gray-600)',textTransform:'uppercase',letterSpacing:'.05em'}}>
+                    {cat}
+                  </div>
+                  {filtradas.filter(m=>m.categoria===cat).map((m,i) => {
+                    const contado = contagens[m.id]
+                    const tem = contado !== undefined && contado !== ''
+                    const sistema = parseFloat(m.estoque_atual)||0
+                    const diff = tem ? parseFloat(contado) - sistema : null
+                    const diverge = diff !== null && Math.abs(diff) > 0.001
+                    const impacto = diff !== null ? diff * (parseFloat(m.custo_unitario)||0) : null
+                    return (
+                      <div key={m.id} style={{
+                        padding:'10px 20px',
+                        display:'grid',gridTemplateColumns:'1fr 120px 130px 150px',
+                        gap:12,alignItems:'center',
+                        borderTop:'1px solid var(--gray-100)',
+                        background: diverge?'#fff5f5':tem?'#f0faf0':i%2===0?'#fff':'#fafafa',
+                      }}>
+                        <div>
+                          <div style={{fontWeight:600,fontSize:13}}>{m.nome}</div>
+                          <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                            {fmtR(parseFloat(m.custo_unitario)||0)}/{m.unidade}
+                          </div>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Sistema</div>
+                          <div style={{fontWeight:700,fontSize:14}}>{fmt(sistema,1)} {m.unidade}</div>
+                        </div>
+                        <div>
+                          <input type="number" step={0.001} min={0}
+                            value={contagens[m.id]||''}
+                            onChange={ev=>setContagens(p=>({...p,[m.id]:ev.target.value}))}
+                            placeholder={`Contagem (${m.unidade})`}
+                            style={{
+                              width:'100%',padding:'6px 10px',fontSize:13,textAlign:'right',
+                              border:`1.5px solid ${diverge?'var(--danger)':tem?'var(--ok)':'var(--gray-200)'}`,
+                              borderRadius:6,outline:'none',
+                              background:diverge?'#fff0f0':tem?'#f0faf0':'#fff',
+                            }}/>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          {diff !== null && (
+                            <>
+                              <div style={{fontWeight:800,fontSize:13,
+                                color:diff>0?'var(--ok)':diff<0?'var(--danger)':'var(--gray-400)'}}>
+                                {diff>0?'+':''}{fmt(diff,1)} {m.unidade}
+                                {!diverge && ' ✓'}
+                              </div>
+                              {diverge && (
+                                <div style={{fontSize:11,color:'var(--gray-500)'}}>
+                                  {impacto>=0?'+':'−'}{fmtR(Math.abs(impacto))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {lancados.length > 0 && (
+            <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+              <button className="btn btn-ghost" onClick={()=>setContagens({})}>Limpar</button>
+              <button className="btn btn-primary" onClick={confirmar} disabled={saving}>
+                {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</>
+                        : <>✓ Confirmar e ajustar estoque ({lancados.length} itens)</>}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {aba === 'historico' && (
+        <>
+          {editando && (
+            <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setEditando(null)}>
+              <div className="modal" style={{maxWidth:400}}>
+                <div className="modal-header">
+                  <div>
+                    <div className="modal-title">✏️ Editar Contagem</div>
+                    <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{editando.materias_primas?.nome}</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setEditando(null)}>✕</button>
+                </div>
+                <div className="modal-body">
+                  <div style={{display:'flex',gap:16,marginBottom:16,padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,fontSize:13}}>
+                    <div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>Sistema na época</div>
+                      <div style={{fontWeight:700}}>{fmt(editando.estoque_sistema,1)}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,color:'var(--gray-400)'}}>Contado</div>
+                      <div style={{fontWeight:700}}>{fmt(editando.estoque_contado,1)}</div>
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Nova contagem ({editando.materias_primas?.unidade})</label>
+                    <input type="number" step={0.001} min={0} className="form-input" value={editQtd}
+                      onChange={e=>setEditQtd(e.target.value)} autoFocus/>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-ghost" onClick={()=>setEditando(null)}>Cancelar</button>
+                  <button className="btn btn-primary" onClick={salvarEdicao} disabled={editQtd===''}>
+                    <Save size={14}/> Salvar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:800,fontSize:15}}>
+              📋 Histórico de Conferências de MP
+            </div>
+            {historico.length === 0 ? (
+              <div style={{padding:40,textAlign:'center',color:'var(--gray-300)'}}>Nenhuma conferência registrada ainda.</div>
+            ) : (
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <thead>
+                  <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                    <th style={{padding:'9px 14px',textAlign:'left'}}>Data</th>
+                    <th style={{padding:'9px 14px',textAlign:'left'}}>Matéria-prima</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>Sistema</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>Contado</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>Diferença</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>Impacto R$</th>
+                    <th style={{padding:'9px 14px',textAlign:'left'}}>Responsável</th>
+                    <th style={{padding:'9px 10px',width:70}}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historico.map((c,i) => {
+                    const diff = parseFloat(c.estoque_contado) - parseFloat(c.estoque_sistema)
+                    const impacto = diff * (parseFloat(c.custo_unitario)||0)
+                    return (
+                      <tr key={c.id} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                        <td style={{padding:'8px 14px',color:'var(--gray-500)',fontSize:12}}>
+                          {new Date(c.data_conferencia+'T12:00:00').toLocaleDateString('pt-BR')}
+                        </td>
+                        <td style={{padding:'8px 14px'}}>
+                          <div style={{fontWeight:600}}>{c.materias_primas?.nome}</div>
+                          <div style={{fontSize:10,color:'var(--gray-400)'}}>{c.materias_primas?.categoria}</div>
+                        </td>
+                        <td style={{padding:'8px 10px',textAlign:'right'}}>{fmt(c.estoque_sistema,1)}</td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700}}>{fmt(c.estoque_contado,1)}</td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,
+                          color:diff>0?'var(--ok)':diff<0?'var(--danger)':'var(--gray-400)'}}>
+                          {diff>0?'+':''}{fmt(diff,1)}
+                        </td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,
+                          color:Math.abs(impacto)<0.01?'var(--gray-400)':impacto<0?'var(--danger)':'var(--ok)'}}>
+                          {Math.abs(impacto)<0.01?'—':`${impacto>=0?'+':'−'}${fmtR(Math.abs(impacto))}`}
+                        </td>
+                        <td style={{padding:'8px 14px',color:'var(--gray-500)'}}>{c.responsavel||'—'}</td>
+                        <td style={{padding:'8px 10px',textAlign:'center'}}>
+                          <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                            <button className="btn btn-ghost btn-sm"
+                              onClick={()=>{setEditando(c);setEditQtd(String(c.estoque_contado))}} title="Editar">
+                              <Pencil size={11}/>
+                            </button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>excluir(c)}
+                              style={{color:'var(--danger)'}} title="Excluir">✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
         </>
       )}
     </div>
