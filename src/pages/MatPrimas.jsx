@@ -1802,6 +1802,7 @@ function HistoricoConsumo() {
   const [loading, setLoading] = useState(true)
   const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
   const [mpFiltro, setMpFiltro] = useState('todas')
+  const [visao, setVisao] = useState('insumo') // 'insumo' | 'produto'
 
   async function load() {
     setLoading(true)
@@ -1813,7 +1814,8 @@ function HistoricoConsumo() {
         .gte('data_consumo', ini)
         .lte('data_consumo', fim)
         .order('data_consumo', { ascending: false })
-        .order('criado_em', { ascending: false }),
+        .order('criado_em', { ascending: false })
+        .limit(3000),
       supabase.from('materias_primas').select('id,nome,unidade,categoria').eq('ativo',true).order('categoria').order('nome'),
     ])
     setConsumos(consumosData||[])
@@ -1843,6 +1845,14 @@ function HistoricoConsumo() {
       {/* Filtros */}
       <div className="card" style={{padding:'12px 20px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <div style={{fontWeight:800,fontSize:15}}>📉 Histórico de Consumo</div>
+        <div style={{display:'flex',gap:4,marginLeft:12}}>
+          <button className={`btn btn-sm ${visao==='insumo'?'btn-primary':'btn-ghost'}`} onClick={()=>setVisao('insumo')}>
+            🧂 Por insumo
+          </button>
+          <button className={`btn btn-sm ${visao==='produto'?'btn-primary':'btn-ghost'}`} onClick={()=>setVisao('produto')}>
+            📦 Por produto
+          </button>
+        </div>
         <div style={{flex:1}}/>
         <select className="form-input" value={mpFiltro} onChange={e=>setMpFiltro(e.target.value)} style={{width:220,fontSize:13}}>
           <option value="todas">Todos os insumos</option>
@@ -1854,8 +1864,81 @@ function HistoricoConsumo() {
 
       {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
         <>
+          {/* Visão POR PRODUTO */}
+          {visao === 'produto' && (() => {
+            const comSku = filtrados.filter(c => c.sku_produto)
+            const semSku = filtrados.filter(c => !c.sku_produto)
+            const porProduto = {}
+            for (const c of comSku) {
+              const k = c.sku_produto
+              if (!porProduto[k]) porProduto[k] = { sku:k, desc:c.descricao, qtdProd:0, mps:{}, datas:new Set() }
+              porProduto[k].datas.add(c.data_consumo)
+              const mpNome = c.materias_primas?.nome || '—'
+              if (!porProduto[k].mps[mpNome]) porProduto[k].mps[mpNome] = { qtd:0, unidade:c.materias_primas?.unidade }
+              porProduto[k].mps[mpNome].qtd += parseFloat(c.quantidade)||0
+            }
+            // Quantidade produzida: maior valor por data (evita somar duplicado do mesmo lote)
+            for (const c of comSku) {
+              const k = c.sku_produto
+              porProduto[k].qtdProd += 0 // preenchido abaixo
+            }
+            const porProdData = {}
+            for (const c of comSku) {
+              const key = c.sku_produto + '|' + c.data_consumo
+              porProdData[key] = Math.max(porProdData[key]||0, parseFloat(c.quantidade_produzida)||0)
+            }
+            for (const [key, q] of Object.entries(porProdData)) {
+              const sku = key.split('|')[0]
+              if (porProduto[sku]) porProduto[sku].qtdProd += q
+            }
+            const lista = Object.values(porProduto).sort((a,b)=>b.qtdProd-a.qtdProd)
+
+            return (
+              <>
+                {semSku.length > 0 && (
+                  <div style={{padding:'10px 14px',background:'#fff8f0',borderRadius:8,border:'1px solid var(--warning)',fontSize:12,color:'var(--gray-600)'}}>
+                    ⚠️ {semSku.length} lançamento(s) sem produto identificado — são anteriores à rastreabilidade granular
+                    (ativada em 20/08) ou compensações manuais. Aparecem só na visão por insumo.
+                  </div>
+                )}
+                {lista.length === 0 ? (
+                  <div className="card" style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
+                    Nenhum consumo com produto identificado neste mês.
+                  </div>
+                ) : lista.map(p => (
+                  <div key={p.sku} className="card">
+                    <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',
+                      display:'flex',justifyContent:'space-between',alignItems:'center',background:'var(--purple-pale)'}}>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:13,color:'var(--purple)'}}>{p.sku}</div>
+                        <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                          {p.qtdProd.toLocaleString('pt-BR')} un produzidas · {p.datas.size} dia(s) · {Object.keys(p.mps).length} insumos
+                        </div>
+                      </div>
+                    </div>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                      <tbody>
+                        {Object.entries(p.mps).sort((a,b)=>b[1].qtd-a[1].qtd).map(([nome,v],i)=>(
+                          <tr key={nome} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
+                            <td style={{padding:'6px 20px'}}>{nome}</td>
+                            <td style={{padding:'6px 20px',textAlign:'right',fontWeight:700,color:'var(--danger)',width:160}}>
+                              {v.qtd>=1000?`${(v.qtd/1000).toFixed(2)} kg`:`${v.qtd.toFixed(1)} ${v.unidade||''}`}
+                            </td>
+                            <td style={{padding:'6px 20px',textAlign:'right',color:'var(--gray-400)',width:120}}>
+                              {p.qtdProd>0?`${(v.qtd/p.qtdProd).toFixed(2)} ${v.unidade||''}/un`:'—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </>
+            )
+          })()}
+
           {/* Resumo por MP */}
-          {resumo.length > 0 && (
+          {visao === 'insumo' && resumo.length > 0 && (
             <div className="card">
               <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13}}>
                 Resumo por insumo — {totalRegistros} lançamentos
@@ -1884,7 +1967,7 @@ function HistoricoConsumo() {
           )}
 
           {/* Lançamentos detalhados */}
-          <div className="card">
+          {visao === 'insumo' && <div className="card">
             <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13}}>
               Lançamentos detalhados
             </div>
@@ -1935,7 +2018,7 @@ function HistoricoConsumo() {
                 </tbody>
               </table>
             )}
-          </div>
+          </div>}
         </>
       )}
     </div>
@@ -2802,7 +2885,7 @@ function ConferenciaMP() {
                 </tbody>
               </table>
             )}
-          </div>
+          </div>}
         </>
       )}
     </div>
