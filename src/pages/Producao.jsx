@@ -330,14 +330,22 @@ export default function Producao() {
                   rendMap[p.id] = bruto * (1 - perda/100)
                 }
 
-                // Recalcula consumo normalizado pelo rendimento
-                const consumoFinal = {}
+                // Recalcula consumo normalizado pelo rendimento — GRANULAR por produto
+                // Guarda uma linha por (produto × matéria-prima) para rastreabilidade
+                const consumoFinal = {}      // mpId → total (para debitar estoque)
+                const linhasConsumo = []     // uma linha por produto × MP
+                const dataConsumo = dataStr || new Date().toISOString().slice(0,10)
+
                 for (const prod of fase1) {
                   const emb = embalagens.find(e => e.id === prod.embalagem_id)
                   if (!emb) continue
                   const qtdProd = prod.quantidade
                   const compsProdu = prodComps.filter(c => c.sku_produto === emb.codigo)
+                  // id da linha de produção correspondente (para vínculo e reversão)
+                  const prodRowId = (inseridos || []).find(r => r.embalagem_id === prod.embalagem_id)?.id || null
 
+                  // Consolida por MP dentro DESTE produto
+                  const porMPdoProduto = {}
                   for (const comp of compsProdu) {
                     const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
                     const ings = prepComps.filter(pc => pc.preparacao_id === comp.preparacao_id)
@@ -345,14 +353,28 @@ export default function Producao() {
 
                     for (const ing of ings) {
                       const mpId = ing.materia_prima_id
-                      // g consumido = (qtd_ing_por_receita / rend_liq) * qtd_prep_por_unidade * qtd_prod
                       const consumoG = (parseFloat(ing.quantidade) / rendLiq) * qtdPrep * qtdProd
+                      porMPdoProduto[mpId] = (porMPdoProduto[mpId] || 0) + consumoG
                       consumoFinal[mpId] = (consumoFinal[mpId] || 0) + consumoG
                     }
                   }
+
+                  for (const [mpId, consumoG] of Object.entries(porMPdoProduto)) {
+                    if (consumoG <= 0) continue
+                    linhasConsumo.push({
+                      materia_prima_id: mpId,
+                      quantidade: consumoG,
+                      data_consumo: dataConsumo,
+                      origem: 'producao',
+                      sku_produto: emb.codigo,
+                      quantidade_produzida: qtdProd,
+                      producao_diaria_id: prodRowId,
+                      descricao: `${emb.nome} (${qtdProd} un) — produção de ${dataStr}`,
+                    })
+                  }
                 }
 
-                // Debita cada MP
+                // Debita o estoque de cada MP (agregado)
                 for (const [mpId, consumoG] of Object.entries(consumoFinal)) {
                   if (consumoG <= 0) continue
                   const { data: mp } = await supabase
@@ -365,17 +387,11 @@ export default function Producao() {
                     .from('materias_primas')
                     .update({ estoque_atual: Math.max(0, atual - consumoG), atualizado_em: new Date().toISOString() })
                     .eq('id', mpId)
-                  // Registra histórico de consumo
-                  await supabase.from('mp_consumos').insert({
-                    materia_prima_id: mpId,
-                    quantidade: consumoG,
-                    data_consumo: dataStr || new Date().toISOString().slice(0,10),
-                    origem: 'producao',
-                    descricao: `Baixa automática — produção de ${dataStr}`,
-                    // Vincula ao lote de produção: permite propagar edição de data
-                    // e reverter o débito se a produção for excluída
-                    producao_diaria_id: ids?.[0] || null,
-                  })
+                }
+
+                // Grava o histórico granular de uma vez
+                if (linhasConsumo.length) {
+                  await supabase.from('mp_consumos').insert(linhasConsumo)
                 }
               }
             }
