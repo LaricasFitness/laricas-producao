@@ -297,18 +297,32 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   const [itensExtras, setItensExtras] = useState([])
   const [novoItem, setNovoItem] = useState({ nome: '', qtd: '' })
   const [cadastrando, setCadastrando] = useState(null)
-  const [valorTotal, setValorTotal] = useState('')
+  const [valores, setValores] = useState({})      // itemId → valor unitário
+  const [nf, setNf] = useState('')
+  const [prazo, setPrazo] = useState(30)
+  const [fornecedores, setFornecedores] = useState([])
+  const [fornecedorId, setFornecedorId] = useState('')
+  const [gerarConta, setGerarConta] = useState(true)
 
   useEffect(() => {
-    supabase.from('pedido_itens').select('*, embalagens(id, codigo, nome, estoque_atual)')
-      .eq('pedido_id', pedido.id)
-      .then(({ data: d }) => {
-        setItens(d || [])
-        const pre = {}
-        ;(d || []).forEach(i => { pre[i.id] = i.quantidade_recebida ?? i.quantidade_solicitada })
-        setRecebidos(pre)
-        setLoading(false)
+    Promise.all([
+      supabase.from('pedido_itens').select('*, embalagens(id, codigo, nome, estoque_atual, custo_unitario)')
+        .eq('pedido_id', pedido.id),
+      supabase.from('fin_fornecedores').select('id, nome_fantasia').order('nome_fantasia')
+        .then(r => r).catch(() => ({ data: [] })),
+    ]).then(([{ data: d }, forn]) => {
+      setItens(d || [])
+      const pre = {}, preVal = {}
+      ;(d || []).forEach(i => {
+        pre[i.id] = i.quantidade_recebida ?? i.quantidade_solicitada
+        // Pré-preenche com o último custo conhecido da embalagem
+        if (i.embalagens?.custo_unitario) preVal[i.id] = String(i.embalagens.custo_unitario)
       })
+      setRecebidos(pre)
+      setValores(preVal)
+      setFornecedores(forn?.data || [])
+      setLoading(false)
+    })
   }, [pedido.id])
 
   function adicionarItemExtra() {
@@ -338,17 +352,51 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   async function salvar() {
     setSaving(true)
     try {
-      // Itens cadastrados
+      const recebidosValidos = itens.filter(i => (parseInt(recebidos[i.id]) || 0) > 0)
+      const totalGeral = recebidosValidos.reduce((s, i) =>
+        s + (parseInt(recebidos[i.id]) || 0) * (parseFloat(valores[i.id]) || 0), 0)
+
+      // 1) Cria o recebimento — é ele que conta como entrada no estoque cronológico
+      const { data: rec, error: recErr } = await supabase.from('recebimentos').insert({
+        pedido_id: pedido.id,
+        fornecedor_id: fornecedorId || null,
+        numero_nf: nf || null,
+        data_recebimento: dataRec,
+        valor_total: totalGeral || null,
+        observacao: `Recebimento do pedido #${pedido.numero}`,
+      }).select().single()
+      if (recErr) throw recErr
+
+      // 2) Itens do recebimento com valor unitário
+      if (recebidosValidos.length) {
+        await supabase.from('recebimento_itens').insert(
+          recebidosValidos.map(i => ({
+            recebimento_id: rec.id,
+            embalagem_id: i.embalagem_id,
+            quantidade_recebida: parseInt(recebidos[i.id]) || 0,
+            valor_unitario: parseFloat(valores[i.id]) || null,
+          }))
+        )
+      }
+
+      // 3) Atualiza pedido_itens, estoque e custo unitário
       for (const item of itens) {
         const qtd = parseInt(recebidos[item.id]) || 0
         await supabase.from('pedido_itens')
           .update({ quantidade_recebida: qtd, recebido_em: dataRec })
           .eq('id', item.id)
-        const estoqueAtual = item.embalagens?.estoque_atual || 0
-        await supabase.from('embalagens')
-          .update({ estoque_atual: estoqueAtual + qtd, atualizado_em: new Date().toISOString() })
-          .eq('id', item.embalagem_id)
+        if (qtd <= 0) continue
+        const valorUnit = parseFloat(valores[item.id])
+        const upd = {
+          estoque_atual: (item.embalagens?.estoque_atual || 0) + qtd,
+          atualizado_em: new Date().toISOString(),
+        }
+        // Valor informado vira o novo custo da embalagem — alimenta o CMV
+        if (valorUnit > 0) upd.custo_unitario = valorUnit
+        await supabase.from('embalagens').update(upd).eq('id', item.embalagem_id)
       }
+
+
 
       // Itens extras — registra no log
       for (const extra of itensExtras) {
@@ -366,8 +414,9 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
       const novoStatus = todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
 
       // Integração financeira — cria ou atualiza Conta a Pagar
-      const valor = parseFloat(String(valorTotal).replace(',', '.')) || 0
-      if (valor > 0) {
+      // Valor vem da soma (quantidade recebida × valor unitário) de cada item
+      const valor = totalGeral
+      if (gerarConta && valor > 0) {
         // Busca fornecedor PressPlate
         const { data: fornecedor } = await supabase
           .from('fin_fornecedores').select('id').eq('nome_fantasia', 'PressPlate').maybeSingle()
@@ -431,24 +480,47 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
               <label className="form-label">Data de recebimento</label>
               <input type="date" className="form-input" value={dataRec} onChange={e => setDataRec(e.target.value)} />
             </div>
-            <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
-              <label className="form-label">
-                💰 Valor total da nota (R$)
-                <span style={{ fontSize: 11, color: 'var(--gray-400)', marginLeft: 6 }}>→ vence em 30 dias</span>
-              </label>
-              <input type="number" className="form-input" step="0.01" min="0"
-                value={valorTotal} onChange={e => setValorTotal(e.target.value)}
-                placeholder="0,00" />
-              {pedido.fin_lancamento_id
-                ? <div style={{ fontSize: 11, color: 'var(--ok)', marginTop: 3 }}>✓ Vinculado ao financeiro — atualiza valor existente</div>
-                : <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 3 }}>Preencha para criar Conta a Pagar no financeiro</div>
-              }
+            <div className="form-group" style={{ width: 140, marginBottom: 0 }}>
+              <label className="form-label">NF (opcional)</label>
+              <input className="form-input" value={nf} onChange={e => setNf(e.target.value)} placeholder="nº" />
+            </div>
+            <div className="form-group" style={{ flex: 1, minWidth: 160, marginBottom: 0 }}>
+              <label className="form-label">Fornecedor</label>
+              <select className="form-input" value={fornecedorId} onChange={e => setFornecedorId(e.target.value)}>
+                <option value="">— Selecione —</option>
+                {fornecedores.map(f => <option key={f.id} value={f.id}>{f.nome_fantasia}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Conta a pagar */}
+          <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:14,
+            padding:'10px 14px', background:'var(--gray-50)', borderRadius:8 }}>
+            <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+              <input type="checkbox" checked={gerarConta} onChange={e => setGerarConta(e.target.checked)} />
+              Gerar Conta a Pagar
+            </label>
+            {gerarConta && (
+              <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:13 }}>
+                <span style={{ color:'var(--gray-500)' }}>vence em</span>
+                <input type="number" min={0} value={prazo} onChange={e => setPrazo(e.target.value)}
+                  style={{ width:60, padding:'4px 8px', border:'1px solid var(--gray-200)', borderRadius:6, textAlign:'right' }} />
+                <span style={{ color:'var(--gray-500)' }}>dias</span>
+              </div>
+            )}
+            <div style={{ flex:1 }} />
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:11, color:'var(--gray-400)', fontWeight:700, textTransform:'uppercase' }}>Total do recebimento</div>
+              <div style={{ fontSize:18, fontWeight:800, color:'var(--purple)' }}>
+                {`R$ ${itens.reduce((s,i)=> s + (parseInt(recebidos[i.id])||0) * (parseFloat(valores[i.id])||0), 0)
+                  .toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}`}
+              </div>
             </div>
           </div>
           {loading ? <div className="loading"><RefreshCw size={16} className="spin" /></div> : (
             <>
             <table className="tbl">
-              <thead><tr><th>Embalagem</th><th>Pedido</th><th>Recebido</th></tr></thead>
+              <thead><tr><th>Embalagem</th><th>Pedido</th><th>Recebido</th><th>Valor un. (R$)</th><th>Subtotal</th></tr></thead>
               <tbody>
                 {itens.map(item => {
                   const rec = parseInt(recebidos[item.id]) || 0
@@ -468,6 +540,23 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
                         {div && <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, marginTop: 3 }}>
                           {rec > item.quantidade_solicitada ? '+' : ''}{(rec - item.quantidade_solicitada).toLocaleString('pt-BR')} un
                         </div>}
+                      </td>
+                      <td>
+                        <input type="number" min={0} step={0.0001} className="qty-input"
+                          value={valores[item.id] ?? ''}
+                          onChange={e => setValores(prev => ({ ...prev, [item.id]: e.target.value }))}
+                          placeholder="0,00" style={{ width: 90 }} />
+                        {item.embalagens?.custo_unitario > 0 && (
+                          <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2 }}>
+                            atual: R$ {Number(item.embalagens.custo_unitario).toFixed(4)}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ fontWeight: 700, color: 'var(--purple)' }}>
+                        {(() => {
+                          const st = rec * (parseFloat(valores[item.id]) || 0)
+                          return st > 0 ? `R$ ${st.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—'
+                        })()}
                       </td>
                     </tr>
                   )
