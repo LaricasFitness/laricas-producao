@@ -1050,8 +1050,118 @@ function EvolucaoCMV() {
     </div>
   )
 }
-
 // ── Simulador de Produto Novo ─────────────────────────────────────────────────
+function ModalSalvarProduto({ nome, cmv, linhas, catEmb, custoRotulo, data, onClose, onSaved }) {
+  const [f, setF] = useState({
+    codigo: '', nome: nome || '', categoria: catEmb || '',
+    unidade_minima_grafica: 100, dias_producao: 15, margem_seguranca: 0.10,
+  })
+  const [saving, setSaving] = useState(false)
+  const [erro, setErro] = useState('')
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const cats = [...new Set(Object.values(data.prepMap ? {} : {}))]
+
+  async function salvar() {
+    if (!f.codigo.trim() || !f.nome.trim() || !f.categoria.trim()) {
+      setErro('Código, nome e categoria são obrigatórios.'); return
+    }
+    setSaving(true); setErro('')
+    try {
+      const codigo = f.codigo.trim().toUpperCase().replace(/\s+/g, '_')
+      const { data: existe } = await supabase.from('embalagens').select('id').eq('codigo', codigo).maybeSingle()
+      if (existe) { setErro(`Já existe uma embalagem com o código ${codigo}.`); setSaving(false); return }
+
+      const { data: emb, error: e1 } = await supabase.from('embalagens').insert({
+        codigo, nome: f.nome.trim(), tipo: 'rotulo', categoria: f.categoria.trim(),
+        custo_unitario: parseFloat(custoRotulo) || 0,
+        unidade_minima_grafica: parseInt(f.unidade_minima_grafica) || 100,
+        dias_producao: parseInt(f.dias_producao) || 15,
+        margem_seguranca: parseFloat(f.margem_seguranca) || 0.10,
+        estoque_atual: 0, ativo: true, visivel_producao: true, visivel_estoque: true,
+      }).select().single()
+      if (e1) throw e1
+
+      const comps = linhas.filter(l => l.prepId && l.gramas).map(l => ({
+        sku_produto: codigo,
+        preparacao_id: l.prepId,
+        quantidade_por_unidade: parseFloat(l.gramas) || 0,
+        unidade: 'g',
+      }))
+      if (comps.length) {
+        const { error: e2 } = await supabase.from('produto_composicao').insert(comps)
+        if (e2) throw e2
+      }
+      onSaved(codigo)
+    } catch (err) {
+      setErro('Erro ao salvar: ' + (err.message || err))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 480 }}>
+        <div className="modal-header">
+          <div className="modal-title">💾 Salvar como produto</div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ padding: '10px 14px', background: 'var(--purple-pale)', borderRadius: 8,
+            marginBottom: 14, display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+            <span style={{ color: 'var(--gray-600)' }}>{linhas.filter(l => l.prepId && l.gramas).length} preparações</span>
+            <span style={{ fontWeight: 800, color: 'var(--purple)' }}>CMV {fmtR(cmv)}</span>
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Código (SKU) *</label>
+              <input className="form-input" value={f.codigo} autoFocus
+                onChange={e => set('codigo', e.target.value)} placeholder="PM_NOVO_100" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Categoria *</label>
+              <input className="form-input" value={f.categoria} list="cats-existentes"
+                onChange={e => set('categoria', e.target.value)} placeholder="Pão de Mel 100g" />
+              <datalist id="cats-existentes">
+                {Object.keys(data.custoEmbPorCat || {}).map(c => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Nome do produto *</label>
+            <input className="form-input" value={f.nome} onChange={e => set('nome', e.target.value)} />
+          </div>
+          <div className="form-grid-2">
+            <div className="form-group">
+              <label className="form-label">Unid. mínima gráfica</label>
+              <input type="number" className="form-input" value={f.unidade_minima_grafica}
+                onChange={e => set('unidade_minima_grafica', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Dias de cobertura</label>
+              <input type="number" className="form-input" value={f.dias_producao}
+                onChange={e => set('dias_producao', e.target.value)} />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gray-400)', lineHeight: 1.5 }}>
+            Cria o rótulo com custo de {fmtR(parseFloat(custoRotulo) || 0)} e a ficha técnica com as
+            preparações da simulação. O filme/vidro vem da categoria escolhida.
+          </div>
+          {erro && (
+            <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff0f0',
+              border: '1px solid var(--danger)', borderRadius: 6, fontSize: 12, color: 'var(--danger)' }}>{erro}</div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+            {saving ? <><RefreshCw size={14} className="spin" /> Salvando...</> : <><Save size={14} /> Criar produto</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SimularProduto({ data, incluirOverhead }) {
   const [nome, setNome] = useState('')
   const [linhas, setLinhas] = useState([{ id: 1, prepId: '', gramas: '' }])
@@ -1059,6 +1169,8 @@ function SimularProduto({ data, incluirOverhead }) {
   const [custoRotulo, setCustoRotulo] = useState('')
   const [markup, setMarkup] = useState(3)
   const [precoManual, setPrecoManual] = useState('')
+  const [modalSalvar, setModalSalvar] = useState(false)
+  const [salvo, setSalvo] = useState('')
 
   const preps = Object.values(data.prepMap || {}).sort((a, b) =>
     (a.tipo || '').localeCompare(b.tipo || '') || (a.nome || '').localeCompare(b.nome || ''))
@@ -1069,15 +1181,12 @@ function SimularProduto({ data, incluirOverhead }) {
   const remLinha = id => setLinhas(p => p.filter(l => l.id !== id))
   const setLinha = (id, k, v) => setLinhas(p => p.map(l => l.id === id ? { ...l, [k]: v } : l))
 
-  // Cada linha: massa usa quantidade crua (×1,25); demais usam o peso direto
   const detalhes = linhas.filter(l => l.prepId && l.gramas).map(l => {
     const prep = data.prepMap[l.prepId]
     const g = parseFloat(l.gramas) || 0
-    const ehMassa = prep?.tipo === 'massa'
-    const gCru = g   // rendimento já é de produto pronto — sem conversão
     const usaReal = !!prep?.rendimento_real_medio
     const custoPorG = (usaReal ? data.custoPrepPorGReal : data.custoPrepPorG)?.[l.prepId] || 0
-    return { prep, g, gCru, ehMassa, usaReal, custoPorG, custo: gCru * custoPorG }
+    return { id: l.id, prep, g, usaReal, custoPorG, custo: g * custoPorG }
   })
 
   const pesoLiquido = detalhes.reduce((s, d) => s + d.g, 0)
@@ -1087,10 +1196,18 @@ function SimularProduto({ data, incluirOverhead }) {
   const overhead = incluirOverhead ? (data.overheadPorUnidade || 0) : 0
   const cmv = custoPreps + custoEmb + overhead
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
+  const podeSalvar = detalhes.length > 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      {modalSalvar && (
+        <ModalSalvarProduto nome={nome} cmv={cmv} linhas={linhas} catEmb={catEmb}
+          custoRotulo={custoRotulo} data={data}
+          onClose={() => setModalSalvar(false)}
+          onSaved={cod => { setModalSalvar(false); setSalvo(cod) }} />
+      )}
+
+      <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontWeight: 800, fontSize: 15 }}>🧪 Simular Produto Novo</div>
           <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
@@ -1098,22 +1215,40 @@ function SimularProduto({ data, incluirOverhead }) {
           </div>
         </div>
         <div style={{ flex: 1 }} />
-        <input className="form-input" placeholder="Nome do produto (opcional)"
-          value={nome} onChange={e => setNome(e.target.value)} style={{ width: 260, fontSize: 13 }} />
+        <input className="form-input" placeholder="Nome do produto"
+          value={nome} onChange={e => setNome(e.target.value)} style={{ width: 240, fontSize: 13 }} />
+        <button className="btn btn-primary btn-sm" disabled={!podeSalvar}
+          onClick={() => setModalSalvar(true)}>
+          <Save size={13} /> Salvar como produto
+        </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 12, alignItems: 'start' }}>
-        {/* Composição */}
+      {salvo && (
+        <div style={{ padding: '10px 16px', background: '#f0faf0', border: '1px solid var(--ok)',
+          borderRadius: 8, fontSize: 13, color: 'var(--ok)', fontWeight: 600 }}>
+          ✅ Produto <strong>{salvo}</strong> criado. Ele já aparece na Ficha de Custo e no Admin.
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(420px, 1.3fr) minmax(320px, 1fr)', gap: 12, alignItems: 'start' }}>
+        {/* ── Composição ── */}
         <div className="card">
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 13 }}>
-            Composição
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>Composição</span>
+            {pesoLiquido > 0 && (
+              <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+                peso final <strong>{fmt(pesoLiquido, 0)}g</strong>
+              </span>
+            )}
           </div>
           <div style={{ padding: 14 }}>
             {linhas.map(l => {
-              const d = detalhes.find(x => x.prep?.id === l.prepId)
+              const d = detalhes.find(x => x.id === l.id)
               return (
-                <div key={l.id} style={{ marginBottom: 10 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px auto', gap: 6, alignItems: 'center' }}>
+                <div key={l.id} style={{ marginBottom: 10, paddingBottom: 10,
+                  borderBottom: '1px solid var(--gray-100)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px 32px', gap: 6, alignItems: 'center' }}>
                     <select className="form-input" value={l.prepId} style={{ fontSize: 13 }}
                       onChange={e => setLinha(l.id, 'prepId', e.target.value)}>
                       <option value="">Selecione a preparação...</option>
@@ -1126,17 +1261,20 @@ function SimularProduto({ data, incluirOverhead }) {
                       })}
                     </select>
                     <input type="number" className="form-input" placeholder="gramas" min={0} step={0.5}
-                      value={l.gramas} onChange={e => setLinha(l.id, 'gramas', e.target.value)} style={{ fontSize: 13 }} />
+                      value={l.gramas} onChange={e => setLinha(l.id, 'gramas', e.target.value)}
+                      style={{ fontSize: 13, textAlign: 'right' }} />
                     <button className="btn btn-ghost btn-sm" onClick={() => remLinha(l.id)}
-                      style={{ color: 'var(--danger)' }} disabled={linhas.length === 1}>✕</button>
+                      style={{ color: 'var(--danger)', padding: '4px 8px' }} disabled={linhas.length === 1}>✕</button>
                   </div>
                   {d && (
-                    <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      <span>{fmtR(d.custoPorG)}/g</span>
+                    <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 10,
+                      alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--gray-400)' }}>{fmtR(d.custoPorG)}/g</span>
                       <span style={{ color: d.usaReal ? 'var(--ok)' : 'var(--gray-400)' }}>
                         {d.usaReal ? '📊 rendimento real' : '📐 rendimento estimado'}
                       </span>
-                      <span style={{ fontWeight: 700, color: 'var(--purple)' }}>= {fmtR(d.custo)}</span>
+                      <div style={{ flex: 1 }} />
+                      <span style={{ fontWeight: 700, color: 'var(--purple)' }}>{fmtR(d.custo)}</span>
                     </div>
                   )}
                 </div>
@@ -1144,35 +1282,34 @@ function SimularProduto({ data, incluirOverhead }) {
             })}
             <button className="btn btn-ghost btn-sm" onClick={addLinha}>+ Adicionar preparação</button>
 
-            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--gray-200)' }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Embalagem</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', gap: 8 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--gray-500)' }}>Herdar filme/vidro da categoria</label>
-                  <select className="form-input" value={catEmb} onChange={e => setCatEmb(e.target.value)} style={{ fontSize: 13 }}>
-                    <option value="">— Nenhum —</option>
-                    {categorias.map(cat => (
-                      <option key={cat} value={cat}>{cat} ({fmtR(data.custoEmbPorCat[cat])})</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: 'var(--gray-500)' }}>Rótulo (R$)</label>
-                  <input type="number" className="form-input" min={0} step={0.01} placeholder="0,00"
-                    value={custoRotulo} onChange={e => setCustoRotulo(e.target.value)} style={{ fontSize: 13 }} />
-                </div>
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '2px solid var(--gray-200)' }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Embalagem</div>
+              <div className="form-group" style={{ marginBottom: 10 }}>
+                <label className="form-label">Filme / vidro (herda da categoria)</label>
+                <select className="form-input" value={catEmb} onChange={e => setCatEmb(e.target.value)} style={{ fontSize: 13 }}>
+                  <option value="">— Nenhum —</option>
+                  {categorias.map(cat => (
+                    <option key={cat} value={cat}>{cat} — {fmtR(data.custoEmbPorCat[cat])}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Rótulo / adesivo (R$)</label>
+                <input type="number" className="form-input" min={0} step={0.01} placeholder="0,00"
+                  value={custoRotulo} onChange={e => setCustoRotulo(e.target.value)}
+                  style={{ fontSize: 13, width: 140, textAlign: 'right' }} />
               </div>
             </div>
           </div>
         </div>
 
-        {/* Resultado */}
+        {/* ── Resultado ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="card">
             <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 13 }}>
               Custo unitário
             </div>
-            <div style={{ padding: 14, fontSize: 13 }}>
+            <div style={{ padding: '12px 16px', fontSize: 13 }}>
               {[
                 ['Preparações', custoPreps],
                 ['Embalagem', custoEmb],
@@ -1184,26 +1321,27 @@ function SimularProduto({ data, incluirOverhead }) {
                 </div>
               ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0',
-                marginTop: 6, borderTop: '2px solid var(--gray-200)', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
+                marginTop: 6, borderTop: '2px solid var(--gray-200)', fontWeight: 800, fontSize: 17, color: 'var(--purple)' }}>
                 <span>CMV</span><span>{fmtR(cmv)}</span>
               </div>
-              {pesoLiquido > 0 && (
-                <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Peso líquido {fmt(pesoLiquido, 0)}g</span>
-                  <span>{fmtR(cmv / (pesoLiquido / 100))}/100g</span>
+              {pesoLiquido > 0 && cmv > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 6,
+                  display: 'flex', justifyContent: 'space-between' }}>
+                  <span>por 100g</span>
+                  <span style={{ fontWeight: 700 }}>{fmtR(cmv / (pesoLiquido / 100))}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {cmv > 0 && (
+          {cmv > 0 ? (
             <div className="card">
               <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)',
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, fontSize: 13 }}>Preço sugerido</span>
                 <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--purple)' }}>{fmtR(precoBase)}</span>
               </div>
-              <div style={{ padding: 14 }}>
+              <div style={{ padding: '12px 16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                   <span style={{ color: 'var(--gray-500)' }}>Markup</span>
                   <span style={{ fontWeight: 700 }}>{fmt(markup, 1)}x</span>
@@ -1215,7 +1353,7 @@ function SimularProduto({ data, incluirOverhead }) {
                   value={precoManual} onChange={e => setPrecoManual(e.target.value)}
                   style={{ fontSize: 13, marginTop: 8 }} />
 
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {canais.map(canal => {
                     const recLiq = precoBase * (1 - canal.totalPct) - canal.totalFixo
                     const mc = recLiq - cmv
@@ -1231,6 +1369,10 @@ function SimularProduto({ data, incluirOverhead }) {
                   })}
                 </div>
               </div>
+            </div>
+          ) : (
+            <div className="card card-pad" style={{ textAlign: 'center', color: 'var(--gray-300)', fontSize: 13, padding: 28 }}>
+              Adicione preparações para ver o preço sugerido e as margens por canal.
             </div>
           )}
         </div>
