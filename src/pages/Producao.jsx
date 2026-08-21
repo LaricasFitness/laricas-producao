@@ -372,6 +372,9 @@ export default function Producao() {
                     data_consumo: dataStr || new Date().toISOString().slice(0,10),
                     origem: 'producao',
                     descricao: `Baixa automática — produção de ${dataStr}`,
+                    // Vincula ao lote de produção: permite propagar edição de data
+                    // e reverter o débito se a produção for excluída
+                    producao_diaria_id: ids?.[0] || null,
                   })
                 }
               }
