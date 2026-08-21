@@ -469,7 +469,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={{ maxWidth: 880, maxHeight: '92vh', overflowY: 'auto' }}>
         <div className="modal-header">
           <div className="modal-title">📥 Conferir recebimento — {pedido.numero}</div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -520,7 +520,13 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           {loading ? <div className="loading"><RefreshCw size={16} className="spin" /></div> : (
             <>
             <table className="tbl">
-              <thead><tr><th>Embalagem</th><th>Pedido</th><th>Recebido</th><th>Valor un. (R$)</th><th>Subtotal</th></tr></thead>
+              <thead><tr>
+                <th>Embalagem</th>
+                <th style={{ width: 80, textAlign: 'right' }}>Pedido</th>
+                <th style={{ width: 110, textAlign: 'right' }}>Recebido</th>
+                <th style={{ width: 120, textAlign: 'right' }}>Valor un. (R$)</th>
+                <th style={{ width: 110, textAlign: 'right' }}>Subtotal</th>
+              </tr></thead>
               <tbody>
                 {itens.map(item => {
                   const rec = parseInt(recebidos[item.id]) || 0
@@ -531,28 +537,28 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
                         <div style={{ fontWeight: 600 }}>{item.embalagens?.nome}</div>
                         <div style={{ fontSize: 11, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{item.embalagens?.codigo}</div>
                       </td>
-                      <td style={{ fontWeight: 600 }}>{item.quantidade_solicitada.toLocaleString('pt-BR')}</td>
-                      <td>
+                      <td style={{ fontWeight: 600, textAlign: 'right', color: 'var(--gray-500)' }}>{item.quantidade_solicitada.toLocaleString('pt-BR')}</td>
+                      <td style={{ textAlign: 'right' }}>
                         <input type="number" min={0} className="qty-input"
-                          style={{ borderColor: div ? 'var(--warning)' : undefined, background: div ? 'var(--warning-pale)' : undefined }}
+                          style={{ width: 90, textAlign: 'right', borderColor: div ? 'var(--warning)' : undefined, background: div ? 'var(--warning-pale)' : undefined }}
                           value={recebidos[item.id] ?? ''}
                           onChange={e => setRecebidos(prev => ({ ...prev, [item.id]: e.target.value }))} />
-                        {div && <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, marginTop: 3 }}>
+                        {div && <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, marginTop: 3, textAlign: 'right' }}>
                           {rec > item.quantidade_solicitada ? '+' : ''}{(rec - item.quantidade_solicitada).toLocaleString('pt-BR')} un
                         </div>}
                       </td>
-                      <td>
+                      <td style={{ textAlign: 'right' }}>
                         <input type="number" min={0} step={0.0001} className="qty-input"
                           value={valores[item.id] ?? ''}
                           onChange={e => setValores(prev => ({ ...prev, [item.id]: e.target.value }))}
-                          placeholder="0,00" style={{ width: 90 }} />
+                          placeholder="0,00" style={{ width: 100, textAlign: 'right' }} />
                         {item.embalagens?.custo_unitario > 0 && (
-                          <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2 }}>
+                          <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 2, textAlign: 'right' }}>
                             atual: R$ {Number(item.embalagens.custo_unitario).toFixed(4)}
                           </div>
                         )}
                       </td>
-                      <td style={{ fontWeight: 700, color: 'var(--purple)' }}>
+                      <td style={{ fontWeight: 700, color: 'var(--purple)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                         {(() => {
                           const st = rec * (parseFloat(valores[item.id]) || 0)
                           return st > 0 ? `R$ ${st.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—'
