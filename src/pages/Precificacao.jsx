@@ -260,6 +260,11 @@ function usePrecificacao() {
 }
 
 // ── Ficha de Custo ─────────────────────────────────────────────────────────────
+const TIPO_LABEL = {
+  massa: '🍞 Massas', recheio: '🥄 Recheios', creme: '🍮 Cremes',
+  cobertura: '🍫 Coberturas', cha: '🍵 Chás', outro: '📦 Outros',
+}
+
 function cmvEfetivo(cmvTotal, incluirOverhead, overheadPorUnidade, equivalencia = 1) {
   return incluirOverhead ? cmvTotal + (overheadPorUnidade||0) * equivalencia : cmvTotal
 }
@@ -850,6 +855,7 @@ export default function Precificacao() {
         <button className={`tab${aba==='simulador'?' active':''}`} onClick={()=>setAba('simulador')}>💡 Simulador</button>
         <button className={`tab${aba==='ranking'?' active':''}`} onClick={()=>setAba('ranking')}>🏆 Ranking de Margem</button>
         <button className={`tab${aba==='evolucao'?' active':''}`} onClick={()=>setAba('evolucao')}>📈 Evolução do CMV</button>
+        <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>🧪 Simular Produto</button>
       </div>
 
       {loading ? (
@@ -900,6 +906,7 @@ export default function Precificacao() {
           {aba==='simulador' && <Simulador data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
+          {aba==='simular'   && <SimularProduto data={data} incluirOverhead={incluirOverhead} />}
         </>
       )}
     </>
@@ -1039,6 +1046,195 @@ function EvolucaoCMV() {
 
       <div style={{fontSize:11,color:'var(--gray-400)',textAlign:'right'}}>
         🟢 Verde = usando rendimento real · 🟣 Roxo = usando rendimento teórico · ▲▼ variação vs mês anterior
+      </div>
+    </div>
+  )
+}
+
+// ── Simulador de Produto Novo ─────────────────────────────────────────────────
+function SimularProduto({ data, incluirOverhead }) {
+  const [nome, setNome] = useState('')
+  const [linhas, setLinhas] = useState([{ id: 1, prepId: '', gramas: '' }])
+  const [catEmb, setCatEmb] = useState('')
+  const [custoRotulo, setCustoRotulo] = useState('')
+  const [markup, setMarkup] = useState(3)
+  const [precoManual, setPrecoManual] = useState('')
+
+  const preps = Object.values(data.prepMap || {}).sort((a, b) =>
+    (a.tipo || '').localeCompare(b.tipo || '') || (a.nome || '').localeCompare(b.nome || ''))
+  const categorias = Object.keys(data.custoEmbPorCat || {}).sort()
+  const canais = data.canais || CANAIS_DEFAULT
+
+  const addLinha = () => setLinhas(p => [...p, { id: Date.now(), prepId: '', gramas: '' }])
+  const remLinha = id => setLinhas(p => p.filter(l => l.id !== id))
+  const setLinha = (id, k, v) => setLinhas(p => p.map(l => l.id === id ? { ...l, [k]: v } : l))
+
+  // Cada linha: massa usa quantidade crua (×1,25); demais usam o peso direto
+  const detalhes = linhas.filter(l => l.prepId && l.gramas).map(l => {
+    const prep = data.prepMap[l.prepId]
+    const g = parseFloat(l.gramas) || 0
+    const ehMassa = prep?.tipo === 'massa'
+    const gCru = ehMassa ? g * 1.25 : g
+    const usaReal = !!prep?.rendimento_real_medio
+    const custoPorG = (usaReal ? data.custoPrepPorGReal : data.custoPrepPorG)?.[l.prepId] || 0
+    return { prep, g, gCru, ehMassa, usaReal, custoPorG, custo: gCru * custoPorG }
+  })
+
+  const pesoLiquido = detalhes.reduce((s, d) => s + d.g, 0)
+  const custoPreps = detalhes.reduce((s, d) => s + d.custo, 0)
+  const custoFilme = data.custoEmbPorCat?.[catEmb] || 0
+  const custoEmb = (parseFloat(custoRotulo) || 0) + custoFilme
+  const overhead = incluirOverhead ? (data.overheadPorUnidade || 0) : 0
+  const cmv = custoPreps + custoEmb + overhead
+  const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>🧪 Simular Produto Novo</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+            Monta a composição com as preparações existentes e calcula o CMV
+          </div>
+        </div>
+        <div style={{ flex: 1 }} />
+        <input className="form-input" placeholder="Nome do produto (opcional)"
+          value={nome} onChange={e => setNome(e.target.value)} style={{ width: 260, fontSize: 13 }} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 12, alignItems: 'start' }}>
+        {/* Composição */}
+        <div className="card">
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 13 }}>
+            Composição
+          </div>
+          <div style={{ padding: 14 }}>
+            {linhas.map(l => {
+              const d = detalhes.find(x => x.prep?.id === l.prepId)
+              return (
+                <div key={l.id} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px auto', gap: 6, alignItems: 'center' }}>
+                    <select className="form-input" value={l.prepId} style={{ fontSize: 13 }}
+                      onChange={e => setLinha(l.id, 'prepId', e.target.value)}>
+                      <option value="">Selecione a preparação...</option>
+                      {['massa', 'recheio', 'creme', 'cobertura', 'cha', 'outro'].map(t => {
+                        const grupo = preps.filter(p => p.tipo === t)
+                        if (!grupo.length) return null
+                        return <optgroup key={t} label={TIPO_LABEL[t] || t}>
+                          {grupo.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                        </optgroup>
+                      })}
+                    </select>
+                    <input type="number" className="form-input" placeholder="gramas" min={0} step={0.5}
+                      value={l.gramas} onChange={e => setLinha(l.id, 'gramas', e.target.value)} style={{ fontSize: 13 }} />
+                    <button className="btn btn-ghost btn-sm" onClick={() => remLinha(l.id)}
+                      style={{ color: 'var(--danger)' }} disabled={linhas.length === 1}>✕</button>
+                  </div>
+                  {d && (
+                    <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {d.ehMassa && <span style={{ color: 'var(--purple)' }}>massa: {fmt(d.gCru, 1)}g crua (×1,25)</span>}
+                      <span>{fmtR(d.custoPorG)}/g</span>
+                      <span style={{ color: d.usaReal ? 'var(--ok)' : 'var(--gray-400)' }}>
+                        {d.usaReal ? '📊 rendimento real' : '📐 rendimento estimado'}
+                      </span>
+                      <span style={{ fontWeight: 700, color: 'var(--purple)' }}>= {fmtR(d.custo)}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            <button className="btn btn-ghost btn-sm" onClick={addLinha}>+ Adicionar preparação</button>
+
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--gray-200)' }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Embalagem</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', gap: 8 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--gray-500)' }}>Herdar filme/vidro da categoria</label>
+                  <select className="form-input" value={catEmb} onChange={e => setCatEmb(e.target.value)} style={{ fontSize: 13 }}>
+                    <option value="">— Nenhum —</option>
+                    {categorias.map(cat => (
+                      <option key={cat} value={cat}>{cat} ({fmtR(data.custoEmbPorCat[cat])})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--gray-500)' }}>Rótulo (R$)</label>
+                  <input type="number" className="form-input" min={0} step={0.01} placeholder="0,00"
+                    value={custoRotulo} onChange={e => setCustoRotulo(e.target.value)} style={{ fontSize: 13 }} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Resultado */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="card">
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 13 }}>
+              Custo unitário
+            </div>
+            <div style={{ padding: 14, fontSize: 13 }}>
+              {[
+                ['Preparações', custoPreps],
+                ['Embalagem', custoEmb],
+                ...(incluirOverhead ? [['Overhead', overhead]] : []),
+              ].map(([lbl, v]) => (
+                <div key={lbl} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0' }}>
+                  <span style={{ color: 'var(--gray-600)' }}>{lbl}</span>
+                  <span style={{ fontWeight: 700 }}>{fmtR(v)}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0',
+                marginTop: 6, borderTop: '2px solid var(--gray-200)', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
+                <span>CMV</span><span>{fmtR(cmv)}</span>
+              </div>
+              {pesoLiquido > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Peso líquido {fmt(pesoLiquido, 0)}g</span>
+                  <span>{fmtR(cmv / (pesoLiquido / 100))}/100g</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {cmv > 0 && (
+            <div className="card">
+              <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>Preço sugerido</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--purple)' }}>{fmtR(precoBase)}</span>
+              </div>
+              <div style={{ padding: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--gray-500)' }}>Markup</span>
+                  <span style={{ fontWeight: 700 }}>{fmt(markup, 1)}x</span>
+                </div>
+                <input type="range" min={1.5} max={6} step={0.1} value={markup}
+                  onChange={e => { setMarkup(parseFloat(e.target.value)); setPrecoManual('') }}
+                  style={{ width: '100%', accentColor: 'var(--purple)' }} />
+                <input type="number" className="form-input" placeholder="ou preço manual (R$)"
+                  value={precoManual} onChange={e => setPrecoManual(e.target.value)}
+                  style={{ fontSize: 13, marginTop: 8 }} />
+
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {canais.map(canal => {
+                    const recLiq = precoBase * (1 - canal.totalPct) - canal.totalFixo
+                    const mc = recLiq - cmv
+                    const mg = recLiq > 0 ? mc / recLiq : 0
+                    const cor = mg >= 0.4 ? 'var(--ok)' : mg >= 0.2 ? 'var(--warning)' : 'var(--danger)'
+                    return (
+                      <div key={canal.id} style={{ display: 'flex', justifyContent: 'space-between',
+                        fontSize: 12, padding: '5px 8px', background: 'var(--gray-50)', borderRadius: 6 }}>
+                        <span>{canal.label}</span>
+                        <span style={{ fontWeight: 700, color: cor }}>{fmtR(mc)} ({pct(mg)})</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
