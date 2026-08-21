@@ -35,7 +35,7 @@ function usePrecificacao() {
         volumeResult,
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('ativo',true).order('categoria').order('nome'),
-        supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,quantidade_crua,unidade'),
+        supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,unidade'),
         supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
         supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual'),
         supabase.from('materias_primas').select('id,nome,unidade,custo_unitario,atualizado_em'),
@@ -190,7 +190,7 @@ function usePrecificacao() {
       const detalhesPrep = comps.map(comp => {
         const prep = prepMap[comp.preparacao_id]
         if (!prep) return null
-        const qtdCrua = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
+        const qtdCrua = parseFloat(comp.quantidade_por_unidade) || 0
 
         const custoPorGTeorico = custoPrepPorG[comp.preparacao_id] || 0
         const custoPorGReal = custoPrepPorGReal[comp.preparacao_id] || 0
@@ -1074,7 +1074,7 @@ function SimularProduto({ data, incluirOverhead }) {
     const prep = data.prepMap[l.prepId]
     const g = parseFloat(l.gramas) || 0
     const ehMassa = prep?.tipo === 'massa'
-    const gCru = ehMassa ? g * 1.25 : g
+    const gCru = g   // rendimento já é de produto pronto — sem conversão
     const usaReal = !!prep?.rendimento_real_medio
     const custoPorG = (usaReal ? data.custoPrepPorGReal : data.custoPrepPorG)?.[l.prepId] || 0
     return { prep, g, gCru, ehMassa, usaReal, custoPorG, custo: gCru * custoPorG }
@@ -1132,7 +1132,6 @@ function SimularProduto({ data, incluirOverhead }) {
                   </div>
                   {d && (
                     <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      {d.ehMassa && <span style={{ color: 'var(--purple)' }}>massa: {fmt(d.gCru, 1)}g crua (×1,25)</span>}
                       <span>{fmtR(d.custoPorG)}/g</span>
                       <span style={{ color: d.usaReal ? 'var(--ok)' : 'var(--gray-400)' }}>
                         {d.usaReal ? '📊 rendimento real' : '📐 rendimento estimado'}
