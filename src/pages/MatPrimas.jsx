@@ -2475,8 +2475,8 @@ function CMVMensal() {
                       </div>
                     ) : (
                       <div style={{margin:16,padding:'12px 16px',borderRadius:8,textAlign:'center',
-                        background: Math.abs(deltaPct||0)>10 ? '#fff0f0' : '#f0faf0',
-                        border: `1.5px solid ${Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}`}}>
+                        background: Math.abs(deltaPct||0)>5 ? '#fff0f0' : '#f0faf0',
+                        border: `1.5px solid ${Math.abs(deltaPct||0)>5 ? 'var(--danger)' : 'var(--ok)'}`}}>
                         <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>
                           MP realizada vs prevista {coberturaOk ? '(mês completo)' : '(apenas dias cobertos)'}
                         </div>
@@ -2489,11 +2489,11 @@ function CMVMensal() {
                           </span>
                         </div>
                         <div style={{fontSize:20,fontWeight:800,margin:'4px 0',
-                          color: Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}}>
+                          color: Math.abs(deltaPct||0)>5 ? 'var(--danger)' : 'var(--ok)'}}>
                           {deltaTotal>=0?'+':'−'}{fmtR(Math.abs(deltaTotal||0))} ({Math.abs(deltaPct||0).toFixed(1)}%)
                         </div>
                         <div style={{fontSize:12,color:'var(--gray-500)',maxWidth:640,margin:'6px auto 0',lineHeight:1.5}}>
-                          {Math.abs(deltaPct||0) <= 10
+                          {Math.abs(deltaPct||0) <= 5
                             ? `✅ Consumo real e ficha técnica convergindo${coberturaOk ? '' : ' nos dias cobertos'}. O CMV pode ser considerado confiável.`
                             : deltaTotal > 0
                               ? `🚨 Consumiu MAIS do que a ficha previa. Se o excedente for parecido com o desperdício configurado (${dados.despMPPct}%), é desperdício normal. Acima disso: rendimento real pior que o cadastrado, quantidades subestimadas nas fichas, ou baixa duplicada.`
