@@ -277,7 +277,7 @@ export default function Producao() {
           if (skus.length) {
             const { data: prodComps } = await supabase
               .from('produto_composicao')
-              .select('sku_produto, quantidade_por_unidade, quantidade_crua, unidade, preparacao_id')
+              .select('sku_produto, quantidade_por_unidade, unidade, preparacao_id')
               .in('sku_produto', skus)
 
             if (prodComps?.length) {
@@ -299,7 +299,7 @@ export default function Producao() {
                   // Preparações do produto
                   const compsProdu = prodComps.filter(c => c.sku_produto === emb.codigo)
                   for (const comp of compsProdu) {
-                    const qtdPrep = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
+                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
                     const rendLiq = 1 // será calculado abaixo
 
                     // Ingredientes da preparação
@@ -349,8 +349,8 @@ export default function Producao() {
                   // Consolida por MP dentro DESTE produto
                   const porMPdoProduto = {}
                   for (const comp of compsProdu) {
-                    // Mesma base do CMV: quantidade crua (o que sai do estoque)
-                    const qtdPrep = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
+                    // Peso no produto pronto — o rendimento já é de massa assada
+                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
                     const ings = prepComps.filter(pc => pc.preparacao_id === comp.preparacao_id)
                     const rendLiq = rendMap[comp.preparacao_id] || 1
 
