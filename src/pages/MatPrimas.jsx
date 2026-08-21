@@ -1398,7 +1398,10 @@ function CustoPreparacoes() {
         const mp = ing.materias_primas || mpMap[ing.materia_prima_id]
         return s + (parseFloat(ing.quantidade)||0) * (parseFloat(mp?.custo_unitario)||0)
       }, 0)
-      const rendLiq = (parseFloat(prep.rendimento_estimado)||1) * (1 - (parseFloat(prep.perda_percentual)||0)/100)
+      const rendRealP = parseFloat(prep.rendimento_real_medio)||null
+      const rendLiq = rendRealP
+        ? rendRealP
+        : (parseFloat(prep.rendimento_estimado)||1) * (1 - (parseFloat(prep.perda_percentual)||0)/100)
       cache[prepId] = rendLiq > 0 ? custo/rendLiq : 0
       return cache[prepId]
     }
@@ -2053,8 +2056,10 @@ function CMVMensal() {
       }, 0)
       const rendEst = parseFloat(prep.rendimento_estimado)||1
       const rendReal = parseFloat(prep.rendimento_real_medio)||null
-      const rend = rendReal || rendEst
-      const rendLiq = rend * (1 - (parseFloat(prep.perda_percentual)||0)/100)
+      // Real já é líquido (medido); estimado é bruto e leva a perda de processo
+      const rendLiq = rendReal
+        ? rendReal
+        : rendEst * (1 - (parseFloat(prep.perda_percentual)||0)/100)
       custoPrepCache[prepId] = rendLiq > 0 ? custo/rendLiq : 0
       return custoPrepCache[prepId]
     }
