@@ -277,7 +277,7 @@ export default function Producao() {
           if (skus.length) {
             const { data: prodComps } = await supabase
               .from('produto_composicao')
-              .select('sku_produto, quantidade_por_unidade, unidade, preparacao_id')
+              .select('sku_produto, quantidade_por_unidade, quantidade_crua, unidade, preparacao_id')
               .in('sku_produto', skus)
 
             if (prodComps?.length) {
@@ -299,7 +299,7 @@ export default function Producao() {
                   // Preparações do produto
                   const compsProdu = prodComps.filter(c => c.sku_produto === emb.codigo)
                   for (const comp of compsProdu) {
-                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
+                    const qtdPrep = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
                     const rendLiq = 1 // será calculado abaixo
 
                     // Ingredientes da preparação
@@ -320,14 +320,16 @@ export default function Producao() {
                 // Busca rendimentos das preparações para normalizar
                 const { data: preps } = await supabase
                   .from('preparacoes')
-                  .select('id, rendimento_estimado, perda_percentual')
+                  .select('id, rendimento_estimado, rendimento_real_medio, perda_percentual')
                   .in('id', prepIds)
 
                 const rendMap = {}
                 for (const p of (preps||[])) {
+                  // Mesma regra do CMV: real já é líquido (medido); estimado leva a perda
+                  const real = parseFloat(p.rendimento_real_medio) || null
                   const bruto = parseFloat(p.rendimento_estimado) || 1
                   const perda = parseFloat(p.perda_percentual) || 0
-                  rendMap[p.id] = bruto * (1 - perda/100)
+                  rendMap[p.id] = real ? real : bruto * (1 - perda/100)
                 }
 
                 // Recalcula consumo normalizado pelo rendimento — GRANULAR por produto
@@ -347,7 +349,8 @@ export default function Producao() {
                   // Consolida por MP dentro DESTE produto
                   const porMPdoProduto = {}
                   for (const comp of compsProdu) {
-                    const qtdPrep = parseFloat(comp.quantidade_por_unidade) || 0
+                    // Mesma base do CMV: quantidade crua (o que sai do estoque)
+                    const qtdPrep = parseFloat(comp.quantidade_crua || comp.quantidade_por_unidade) || 0
                     const ings = prepComps.filter(pc => pc.preparacao_id === comp.preparacao_id)
                     const rendLiq = rendMap[comp.preparacao_id] || 1
 
