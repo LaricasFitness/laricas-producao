@@ -125,9 +125,11 @@ function usePrecificacao() {
       return ings.reduce((s, ing) => {
         if (ing.sub_preparacao_id) {
           const subPrep = prepMap[ing.sub_preparacao_id]
-          const rendSub = parseFloat(subPrep?.rendimento_real_medio || subPrep?.rendimento_estimado) || 1
+          const rendRealSub = parseFloat(subPrep?.rendimento_real_medio) || null
           const perdaSub = parseFloat(subPrep?.perda_percentual) || 0
-          const rendLiqSub = rendSub * (1 - perdaSub/100)
+          const rendLiqSub = rendRealSub
+            ? rendRealSub
+            : (parseFloat(subPrep?.rendimento_estimado) || 1) * (1 - perdaSub/100)
           const custoSubPorG = rendLiqSub > 0 ? custoIngredientes(ing.sub_preparacao_id, vis) / rendLiqSub : 0
           return s + (parseFloat(ing.quantidade)||0) * custoSubPorG
         }
@@ -161,9 +163,12 @@ function usePrecificacao() {
 
       const rendEstimado = parseFloat(prep.rendimento_estimado) || 1
       const rendReal = parseFloat(prep.rendimento_real_medio) || null
-      const rend = useReal && rendReal ? rendReal : rendEstimado
       const perda = parseFloat(prep.perda_percentual) || 0
-      const rendLiq = rend * (1 - perda/100)
+      // Rendimento REAL já é medido líquido (o que saiu da panela) — não aplica perda.
+      // Rendimento ESTIMADO é bruto teórico — aplica a perda de processo.
+      const rendLiq = (useReal && rendReal)
+        ? rendReal
+        : rendEstimado * (1 - perda/100)
       cache[prepId] = rendLiq > 0 ? custo / rendLiq : 0
       return cache[prepId]
     }
