@@ -2329,23 +2329,25 @@ function CMVMensal() {
                     <Linha label="Matéria-prima"
                       sub={coberturaOk
                         ? 'previsto = ficha técnica · realizado = débitos reais de estoque'
-                        : `previsto = mês completo · realizado = só ${(dados.coberturaPct||0).toFixed(0)}% da produção`}
-                      vPrev={prev.mp} vReal={dados.temConsumoMP ? real.mp : null} />
+                        : `medição cobre só ${(dados.coberturaPct||0).toFixed(0)}% do mês — comparação válida na reconciliação abaixo`}
+                      vPrev={prev.mp}
+                      vReal={dados.temConsumoMP && coberturaOk ? real.mp : null} />
 
                     <Linha label="Embalagem (rótulo + filmes)"
                       sub="sem medição real — realizado usa a ficha"
                       vPrev={prev.emb} vReal={real.emb} />
 
-                    <Linha label={`Desperdício MP (${dados.despMPPct}% previsto)`}
-                      sub="realizado é implícito — já está dentro do consumo acima, medido contra os dias cobertos"
-                      vPrev={prev.despMP} vReal={real.despMP} aviso />
+                    <Linha label={`Desperdício MP (${dados.despMPPct}% estimado)`}
+                      sub="estimativa — o consumo real já contém o desperdício de fato, não soma duas vezes"
+                      vPrev={prev.despMP} vReal={null} aviso />
 
                     <Linha label={`Desperdício embalagem (${dados.despEmbPct}% previsto)`}
                       sub="sem medição real"
                       vPrev={prev.despEmb} vReal={real.despEmb} aviso />
 
                     <Linha label="CMV Total do mês"
-                      vPrev={prev.total} vReal={dados.temConsumoMP ? real.total : null} destaque />
+                      vPrev={prev.total}
+                      vReal={dados.temConsumoMP && coberturaOk ? real.total : null} destaque />
 
                     {dados.totalUnidades > 0 && (
                       <div style={{display:'grid',gridTemplateColumns:'1fr 130px 130px',gap:12,
@@ -2353,7 +2355,7 @@ function CMVMensal() {
                         <div>CMV médio por unidade ({dados.totalUnidades.toLocaleString('pt-BR')} un produzidas)</div>
                         <div style={{textAlign:'right',fontWeight:700}}>{fmtR(prev.total/dados.totalUnidades)}</div>
                         <div style={{textAlign:'right',fontWeight:700}}>
-                          {dados.temConsumoMP ? fmtR(real.total/dados.totalUnidades) : 'n/d'}
+                          {dados.temConsumoMP && coberturaOk ? fmtR(real.total/dados.totalUnidades) : 'n/d'}
                         </div>
                       </div>
                     )}
@@ -2394,6 +2396,14 @@ function CMVMensal() {
                         border: `1.5px solid ${Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}`}}>
                         <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>
                           MP realizada vs prevista {coberturaOk ? '(mês completo)' : '(apenas dias cobertos)'}
+                        </div>
+                        <div style={{fontSize:13,color:'var(--gray-600)',margin:'6px 0 2px'}}>
+                          Ficha: <strong>{fmtR(dados.fichaPrepsCoberto)}</strong>
+                          {'  →  '}
+                          Consumo real: <strong>{fmtR(dados.custoConsumoMP)}</strong>
+                          <span style={{color:'var(--gray-400)'}}>
+                            {' '}({dados.unidadesCobertas?.toLocaleString('pt-BR')} un)
+                          </span>
                         </div>
                         <div style={{fontSize:20,fontWeight:800,margin:'4px 0',
                           color: Math.abs(deltaPct||0)>10 ? 'var(--danger)' : 'var(--ok)'}}>
