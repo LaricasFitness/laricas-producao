@@ -372,6 +372,144 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
+// ── Modal de pagamento ────────────────────────────────────────────────────────
+function ModalPagamento({ rec, onClose, onSaved }) {
+  const total = parseFloat(rec.valor_total) || 0
+  const jaPago = parseFloat(rec.valor_pago) || 0
+  const [modo, setModo] = useState(rec.status_pagamento === 'agendado' ? 'agendado' : 'pago')
+  const [valor, setValor] = useState(String((total - jaPago).toFixed(2)))
+  const [data, setData] = useState(new Date().toISOString().slice(0, 10))
+  const [obs, setObs] = useState(rec.obs_pagamento || '')
+  const [saving, setSaving] = useState(false)
+
+  const valorNum = parseFloat(String(valor).replace(',', '.')) || 0
+  const novoPago = modo === 'agendado' ? jaPago : jaPago + valorNum
+  const restante = Math.max(0, total - novoPago)
+
+  async function salvar() {
+    setSaving(true)
+    const upd = { obs_pagamento: obs || null }
+    if (modo === 'agendado') {
+      upd.status_pagamento = 'agendado'
+      upd.data_agendada = data
+    } else {
+      upd.valor_pago = novoPago
+      upd.data_pagamento = data
+      upd.data_agendada = null
+      upd.status_pagamento = restante <= 0.009 ? 'pago' : 'parcial'
+    }
+    await supabase.from('recebimentos').update(upd).eq('id', rec.id)
+    setSaving(false)
+    onSaved()
+  }
+
+  async function reabrir() {
+    if (!window.confirm('Voltar este recebimento para "em aberto"? O valor pago será zerado.')) return
+    setSaving(true)
+    await supabase.from('recebimentos').update({
+      status_pagamento: 'em_aberto', valor_pago: 0,
+      data_pagamento: null, data_agendada: null,
+    }).eq('id', rec.id)
+    setSaving(false)
+    onSaved()
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 440 }}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">💳 Pagamento</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+              {new Date(rec.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+              {rec.numero_nf ? ` · NF ${rec.numero_nf}` : ''}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ display: 'flex', gap: 16, padding: '10px 14px', background: 'var(--purple-pale)',
+            borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>Total</div>
+              <div style={{ fontWeight: 800 }}>{fmtR(total)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>Já pago</div>
+              <div style={{ fontWeight: 800, color: jaPago > 0 ? 'var(--ok)' : 'var(--gray-400)' }}>{fmtR(jaPago)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>Em aberto</div>
+              <div style={{ fontWeight: 800, color: 'var(--danger)' }}>{fmtR(total - jaPago)}</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            {[['pago', '💰 Registrar pagamento'], ['agendado', '📅 Agendar']].map(([k, l]) => (
+              <button key={k} onClick={() => setModo(k)}
+                className={`btn btn-sm ${modo === k ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ flex: 1 }}>{l}</button>
+            ))}
+          </div>
+
+          {modo === 'pago' ? (
+            <>
+              <div className="form-group">
+                <label className="form-label">Valor pago agora (R$)</label>
+                <input type="number" className="form-input" step={0.01} min={0} value={valor}
+                  onChange={e => setValor(e.target.value)} autoFocus style={{ textAlign: 'right' }} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button className="btn btn-ghost btn-xs"
+                    onClick={() => setValor(String((total - jaPago).toFixed(2)))}>Valor total restante</button>
+                  <button className="btn btn-ghost btn-xs"
+                    onClick={() => setValor(String(((total - jaPago) / 2).toFixed(2)))}>Metade</button>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Data do pagamento</label>
+                <input type="date" className="form-input" value={data} onChange={e => setData(e.target.value)} />
+              </div>
+              {valorNum > 0 && (
+                <div style={{ padding: '10px 14px', borderRadius: 8, fontSize: 13,
+                  background: restante <= 0.009 ? '#f0faf0' : '#fff8f0',
+                  border: `1px solid ${restante <= 0.009 ? 'var(--ok)' : 'var(--warning)'}` }}>
+                  {restante <= 0.009
+                    ? <span style={{ color: 'var(--ok)', fontWeight: 700 }}>✅ Quita o recebimento</span>
+                    : <span style={{ color: 'var(--warning)', fontWeight: 700 }}>
+                        Pagamento parcial — restam {fmtR(restante)} em aberto
+                      </span>}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="form-group">
+              <label className="form-label">Data agendada para pagamento</label>
+              <input type="date" className="form-input" value={data} onChange={e => setData(e.target.value)} autoFocus />
+            </div>
+          )}
+
+          <div className="form-group" style={{ marginTop: 10 }}>
+            <label className="form-label">Observação</label>
+            <input className="form-input" value={obs} onChange={e => setObs(e.target.value)}
+              placeholder="Ex: PIX, boleto 2/3" />
+          </div>
+        </div>
+        <div className="modal-footer">
+          {rec.status_pagamento !== 'em_aberto' && (
+            <button className="btn btn-ghost btn-sm" onClick={reabrir}
+              style={{ color: 'var(--danger)', marginRight: 'auto' }}>Reabrir</button>
+          )}
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar}
+            disabled={saving || (modo === 'pago' && valorNum <= 0)}>
+            {saving ? <RefreshCw size={14} className="spin" /> : <Save size={14} />} Confirmar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Compras({ tipo = 'rotulo' }) {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
@@ -380,6 +518,7 @@ export default function Compras({ tipo = 'rotulo' }) {
   const [filtroForn, setFiltroForn] = useState('')
   const [filtroTipo, setFiltroTipo] = useState('todos') // todos | rotulo | embalagem | outros
   const [recebimentos, setRecebimentos] = useState([])
+  const [pagando, setPagando] = useState(null)
   const [pedidos, setPedidos] = useState([])
   const [embalagens, setEmbalagens] = useState([])
   const [fornecedores, setFornecedores] = useState([])
@@ -419,6 +558,8 @@ export default function Compras({ tipo = 'rotulo' }) {
   })
 
   const totalPeriodo = recFiltrados.reduce((s, r) => s + (r.valor_total || 0), 0)
+  const totalPago    = recFiltrados.reduce((s, r) => s + (parseFloat(r.valor_pago) || 0), 0)
+  const totalAberto  = totalPeriodo - totalPago
   const totalUnidades = recFiltrados.reduce((s, r) =>
     s + (r.recebimento_itens || []).reduce((ss, i) => ss + i.quantidade_recebida, 0), 0)
 
@@ -476,10 +617,19 @@ export default function Compras({ tipo = 'rotulo' }) {
       </div>
 
       {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
         <div className="card card-pad kpi">
-          <div className="kpi-label">Total pago no período</div>
-          <div className="kpi-value" style={{ color: 'var(--danger)' }}>{fmtR(totalPeriodo)}</div>
+          <div className="kpi-label">Total comprado no período</div>
+          <div className="kpi-value" style={{ color: 'var(--purple)' }}>{fmtR(totalPeriodo)}</div>
+        </div>
+        <div className="card card-pad kpi">
+          <div className="kpi-label">Em aberto</div>
+          <div className="kpi-value" style={{ color: totalAberto > 0.009 ? 'var(--danger)' : 'var(--ok)' }}>
+            {fmtR(totalAberto)}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+            pago: {fmtR(totalPago)}
+          </div>
         </div>
         <div className="card card-pad kpi">
           <div className="kpi-label">Unidades recebidas</div>
@@ -509,7 +659,8 @@ export default function Compras({ tipo = 'rotulo' }) {
                   <th style={{ padding: '10px 14px', textAlign: 'left' }}>NF</th>
                   <th style={{ padding: '10px 14px', textAlign: 'left' }}>Itens</th>
                   <th style={{ padding: '10px 14px', textAlign: 'right' }}>Total un.</th>
-                  <th style={{ padding: '10px 14px', textAlign: 'right' }}>Valor pago</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'right' }}>Valor</th>
+                  <th style={{ padding: '10px 14px', textAlign: 'center' }}>Pagamento</th>
                   <th style={{ padding: '10px 14px' }}></th>
                 </tr>
               </thead>
@@ -550,6 +701,38 @@ export default function Compras({ tipo = 'rotulo' }) {
                         </td>
                         <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--danger)' }}>
                           {r.valor_total ? fmtR(r.valor_total) : '—'}
+                        </td>
+                        <td style={{ padding: '10px 14px', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                          {(() => {
+                            const tot = parseFloat(r.valor_total) || 0
+                            const pago = parseFloat(r.valor_pago) || 0
+                            const st = r.status_pagamento || 'em_aberto'
+                            const cfg = {
+                              pago:      { l: '✅ Pago',     bg: '#f0faf0', fg: 'var(--ok)' },
+                              parcial:   { l: '◐ Parcial',   bg: '#fff8f0', fg: 'var(--warning)' },
+                              agendado:  { l: '📅 Agendado', bg: '#eef4ff', fg: '#1a6fb5' },
+                              em_aberto: { l: '○ Em aberto', bg: 'var(--gray-100)', fg: 'var(--gray-500)' },
+                            }[st] || {}
+                            return (
+                              <button onClick={() => setPagando(r)} disabled={!tot}
+                                title={tot ? 'Gerenciar pagamento' : 'Recebimento sem valor'}
+                                style={{ border: 'none', borderRadius: 12, padding: '4px 10px',
+                                  fontSize: 11, fontWeight: 700, cursor: tot ? 'pointer' : 'not-allowed',
+                                  background: cfg.bg, color: cfg.fg, opacity: tot ? 1 : .4 }}>
+                                {cfg.l}
+                                {st === 'parcial' && (
+                                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400 }}>
+                                    falta {fmtR(tot - pago)}
+                                  </span>
+                                )}
+                                {st === 'agendado' && r.data_agendada && (
+                                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400 }}>
+                                    {new Date(r.data_agendada + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                                  </span>
+                                )}
+                              </button>
+                            )
+                          })()}
                         </td>
                         <td style={{ padding: '10px 14px' }}>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -617,6 +800,14 @@ export default function Compras({ tipo = 'rotulo' }) {
           onNovoFornecedor={f => setFornecedores(p => [...p, f])}
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); load() }}
+        />
+      )}
+
+      {pagando && (
+        <ModalPagamento
+          rec={pagando}
+          onClose={() => setPagando(null)}
+          onSaved={() => { setPagando(null); load() }}
         />
       )}
 
