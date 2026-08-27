@@ -101,7 +101,6 @@ function gerarPDFCompletoHistorico(plan, itens) {
 
     autoTable(doc, {
       startY,
-      head: [[{ content: `${cat}  —  ${fmt(totalCat)} un`, colSpan: 4 }]],
       body: grupo.map(i => [
         i.embalagens?.nome || '?',
         { content: i.quantidade_bling > 0 ? fmt(i.quantidade_bling) : '—', styles: { halign:'center' } },
