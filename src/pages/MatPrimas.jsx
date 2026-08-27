@@ -1968,7 +1968,8 @@ function HistoricoConsumo() {
           )}
 
           {/* Lançamentos detalhados */}
-          {visao === 'insumo' && <div className="card">
+          {visao === 'insumo' && (
+          <div className="card">
             <div style={{padding:'10px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:700,fontSize:13}}>
               Lançamentos detalhados
             </div>
@@ -2019,7 +2020,8 @@ function HistoricoConsumo() {
                 </tbody>
               </table>
             )}
-          </div>}
+          </div>
+          )}
         </>
       )}
     </div>
@@ -2347,7 +2349,7 @@ function ConferenciaMP() {
                 </tbody>
               </table>
             )}
-          </div>}
+          </div>
         </>
       )}
     </div>
