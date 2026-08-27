@@ -124,7 +124,7 @@ function EditarQtd({ r, embs, onSaved }) {
   const [erro, setErro] = useState('')
 
   const trocouProduto = embId !== r.embalagem_id
-  const lista = (embs || []).filter(e => e.tipo === 'rotulo' || e.visivel_producao)
+  const lista = Object.values(embs || {}).filter(e => e && e.ativo !== false && (e.tipo === 'rotulo' || e.visivel_producao))
   const cats = [...new Set(lista.map(e => e.categoria).filter(Boolean))].sort()
 
   async function salvar() {
@@ -281,7 +281,7 @@ export default function Log() {
   const [aba, setAba] = useState('log') // 'log' | 'pvr'
 
   useEffect(() => {
-    supabase.from('embalagens').select('id,nome,codigo,categoria').then(({ data }) => {
+    supabase.from('embalagens').select('id,nome,codigo,categoria,tipo,visivel_producao,ativo').then(({ data }) => {
       const m = {}
       ;(data || []).forEach(e => { m[e.id] = e })
       setEmbs(m)
