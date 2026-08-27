@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { editarProducao } from '../lib/producao'
+import { editarProducao, excluirProducao, adicionarProducao } from '../lib/producao'
 import { RefreshCw, AlertTriangle, Download, Pencil, Check, X } from 'lucide-react'
 
 function getMesGrid(ano, mes) {
@@ -111,6 +111,138 @@ function BlocoLote({ lote, embs, dataAtual, onSaved }) {
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+
+// ── Editar o lançamento inteiro de um dia ─────────────────────────────────────
+function EditarLote({ dia, itens, embs, onClose, onSaved }) {
+  const lista = Object.values(embs || {})
+    .filter(e => e && e.ativo !== false && (e.tipo === 'rotulo' || e.visivel_producao))
+  const cats = [...new Set(lista.map(e => e.categoria).filter(Boolean))].sort()
+
+  const [linhas, setLinhas] = useState(
+    itens.map(r => ({ id: r.id, embId: r.embalagem_id, qtd: String(r.quantidade),
+                      origEmb: r.embalagem_id, origQtd: r.quantidade, novo: false, removido: false }))
+  )
+  const [salvando, setSalvando] = useState(false)
+  const [progresso, setProgresso] = useState('')
+  const [erro, setErro] = useState('')
+
+  const setL = (id, k, v) => setLinhas(p => p.map(l => l.id === id ? { ...l, [k]: v } : l))
+  const addLinha = () => setLinhas(p => [...p, {
+    id: 'novo_' + Date.now(), embId: lista[0]?.id || '', qtd: '', novo: true, removido: false }])
+
+  const alteradas = linhas.filter(l =>
+    l.removido || l.novo || l.embId !== l.origEmb || parseInt(l.qtd) !== l.origQtd)
+
+  async function salvar() {
+    setSalvando(true); setErro('')
+    try {
+      let n = 0
+      for (const l of linhas) {
+        n++
+        setProgresso(`${n}/${linhas.length}`)
+        if (l.removido && !l.novo) {
+          await excluirProducao(l.id)
+        } else if (l.novo && !l.removido) {
+          const q = parseInt(l.qtd) || 0
+          if (q > 0 && l.embId) {
+            await adicionarProducao({ embalagemId: l.embId, quantidade: q, dataProducao: dia })
+          }
+        } else if (!l.removido && (l.embId !== l.origEmb || parseInt(l.qtd) !== l.origQtd)) {
+          await editarProducao(l.id, { novoEmbalagemId: l.embId, novaQuantidade: parseInt(l.qtd) || 0 })
+        }
+      }
+      setSalvando(false)
+      onSaved()
+    } catch (e) {
+      setErro(e.message || String(e)); setSalvando(false); setProgresso('')
+    }
+  }
+
+  const totalFinal = linhas.filter(l => !l.removido).reduce((s, l) => s + (parseInt(l.qtd) || 0), 0)
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !salvando && onClose()}>
+      <div className="modal" style={{ maxWidth: 760, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">✏️ Editar lançamento do dia</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+              {new Date(dia + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={salvando}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ padding: '8px 12px', background: 'var(--gray-50)', borderRadius: 8,
+            marginBottom: 12, fontSize: 12, color: 'var(--gray-600)' }}>
+            Trocar o produto ou a quantidade ajusta o estoque de embalagem e de matéria-prima
+            automaticamente, nos dois sentidos.
+          </div>
+
+          {linhas.map(l => (
+            <div key={l.id} style={{
+              display: 'grid', gridTemplateColumns: '1fr 90px 36px', gap: 6,
+              alignItems: 'center', marginBottom: 6, padding: '6px 8px', borderRadius: 6,
+              background: l.removido ? '#fff0f0' : l.novo ? '#f0faf0' : 'transparent',
+              opacity: l.removido ? .55 : 1,
+            }}>
+              <select className="form-input" value={l.embId} disabled={l.removido}
+                onChange={e => setL(l.id, 'embId', e.target.value)}
+                style={{ fontSize: 13, textDecoration: l.removido ? 'line-through' : 'none' }}>
+                {cats.map(cat => (
+                  <optgroup key={cat} label={cat}>
+                    {lista.filter(e => e.categoria === cat)
+                      .sort((a, b) => a.nome.localeCompare(b.nome))
+                      .map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <input type="number" min={0} className="form-input" value={l.qtd} disabled={l.removido}
+                onChange={e => setL(l.id, 'qtd', e.target.value)}
+                style={{ fontSize: 13, textAlign: 'right' }} />
+              <button className="btn btn-ghost btn-sm"
+                onClick={() => l.novo
+                  ? setLinhas(p => p.filter(x => x.id !== l.id))
+                  : setL(l.id, 'removido', !l.removido)}
+                title={l.removido ? 'Desfazer remoção' : 'Remover'}
+                style={{ color: l.removido ? 'var(--gray-500)' : 'var(--danger)', padding: '4px 6px' }}>
+                {l.removido ? '↺' : '✕'}
+              </button>
+            </div>
+          ))}
+
+          <button className="btn btn-ghost btn-sm" onClick={addLinha} style={{ marginTop: 4 }}>
+            + Adicionar item esquecido
+          </button>
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--gray-200)',
+            display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+            <span style={{ color: 'var(--gray-500)' }}>
+              {alteradas.length > 0
+                ? `${alteradas.length} alteração(ões) pendente(s)`
+                : 'Nenhuma alteração'}
+            </span>
+            <span style={{ fontWeight: 800, color: 'var(--purple)' }}>{fmt(totalFinal)} un no total</span>
+          </div>
+
+          {erro && (
+            <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff0f0',
+              border: '1px solid var(--danger)', borderRadius: 6, fontSize: 12, color: 'var(--danger)' }}>{erro}</div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose} disabled={salvando}>Cancelar</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={salvando || !alteradas.length}>
+            {salvando
+              ? <><RefreshCw size={14} className="spin" /> Aplicando {progresso}...</>
+              : <><Check size={14} /> Salvar alterações</>}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -274,6 +406,7 @@ export default function Log() {
   const [dados, setDados] = useState({})
   const [loading, setLoading] = useState(true)
   const [diaSel, setDiaSel] = useState(null)
+  const [editarLote, setEditarLote] = useState(false)
   const [detalhe, setDetalhe] = useState([])
   const [loadingDetalhe, setLoadingDetalhe] = useState(false)
   const [embs, setEmbs] = useState({})
@@ -541,10 +674,25 @@ export default function Log() {
                 <span style={{ fontWeight: 800, fontSize: 15 }}>
                   {new Date(diaSel + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
                 </span>
-                <button className="btn btn-ghost btn-sm" onClick={() => verDetalhe(diaSel)} title="Recarregar">
-                  <RefreshCw size={12}/>
-                </button>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {detalhe.length > 0 && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditarLote(true)}>
+                      <Pencil size={12}/> Editar lançamento
+                    </button>
+                  )}
+                  <button className="btn btn-ghost btn-sm" onClick={() => verDetalhe(diaSel)} title="Recarregar">
+                    <RefreshCw size={12}/>
+                  </button>
+                </div>
               </div>
+
+              {editarLote && (
+                <EditarLote
+                  dia={diaSel} itens={detalhe} embs={embs}
+                  onClose={() => setEditarLote(false)}
+                  onSaved={() => { setEditarLote(false); verDetalhe(diaSel) }}
+                />
+              )}
               {loadingDetalhe ? (
                 <div className="loading"><RefreshCw size={14} className="spin" /></div>
               ) : (
