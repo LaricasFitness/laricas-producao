@@ -157,3 +157,69 @@ export async function editarProducao(rowId, { novoEmbalagemId, novaQuantidade })
     revertidoPorFicha,
   }
 }
+
+// Exclui um registro de produção, revertendo embalagem e matéria-prima
+export async function excluirProducao(rowId) {
+  const { data: row } = await supabase
+    .from('producao_diaria')
+    .select('id, embalagem_id, quantidade, embalagens(codigo, nome)')
+    .eq('id', rowId).single()
+  if (!row) throw new Error('Registro não encontrado.')
+
+  const qtd = parseFloat(row.quantidade) || 0
+
+  // Reverte MP: usa débitos gravados; se não houver, recalcula pela ficha
+  const { data: consumos } = await supabase
+    .from('mp_consumos').select('materia_prima_id, quantidade')
+    .eq('producao_diaria_id', rowId)
+  if (consumos?.length) {
+    for (const c of consumos) await ajustarEstoqueMP(c.materia_prima_id, parseFloat(c.quantidade) || 0)
+    await supabase.from('mp_consumos').delete().eq('producao_diaria_id', rowId)
+  } else {
+    const consumo = await calcularConsumoMP(row.embalagens?.codigo, qtd)
+    for (const [mpId, g] of Object.entries(consumo)) {
+      if (g > 0) await ajustarEstoqueMP(mpId, g)
+    }
+  }
+
+  // Devolve a embalagem e remove o registro
+  await ajustarEstoqueEmb(row.embalagem_id, qtd)
+  await supabase.from('producao_diaria').delete().eq('id', rowId)
+
+  return { nome: row.embalagens?.nome, quantidade: qtd }
+}
+
+// Adiciona um item de produção a um dia já existente
+export async function adicionarProducao({ embalagemId, quantidade, dataProducao, registradoPor }) {
+  const qtd = parseFloat(quantidade) || 0
+  if (!embalagemId || qtd <= 0) throw new Error('Produto e quantidade são obrigatórios.')
+
+  const { data: emb } = await supabase
+    .from('embalagens').select('codigo, nome').eq('id', embalagemId).single()
+
+  const { data: novo, error } = await supabase.from('producao_diaria').insert({
+    embalagem_id: embalagemId,
+    quantidade: qtd,
+    data_producao: dataProducao,
+    registrado_por: registradoPor || 'Edição de lote',
+  }).select().single()
+  if (error) throw error
+
+  await ajustarEstoqueEmb(embalagemId, -qtd)
+
+  const consumo = await calcularConsumoMP(emb?.codigo, qtd)
+  const linhas = []
+  for (const [mpId, g] of Object.entries(consumo)) {
+    if (!(g > 0)) continue
+    await ajustarEstoqueMP(mpId, -g)
+    linhas.push({
+      materia_prima_id: mpId, quantidade: g, data_consumo: dataProducao,
+      origem: 'producao', sku_produto: emb?.codigo, quantidade_produzida: qtd,
+      producao_diaria_id: novo.id,
+      descricao: `${emb?.nome} (${qtd} un) — incluído na edição do lote`,
+    })
+  }
+  if (linhas.length) await supabase.from('mp_consumos').insert(linhas)
+
+  return { id: novo.id, nome: emb?.nome, quantidade: qtd }
+}
