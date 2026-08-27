@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { editarProducao } from '../lib/producao'
 import { RefreshCw, AlertTriangle, Download, Pencil, Check, X } from 'lucide-react'
 
 function getMesGrid(ano, mes) {
@@ -106,7 +107,7 @@ function BlocoLote({ lote, embs, dataAtual, onSaved }) {
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{emb?.nome || '—'}</span>
                 <span style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace', marginLeft: 6 }}>{emb?.codigo}</span>
               </div>
-              <EditarQtd r={r} onSaved={(id, qtd) => onSaved([id], dataAtual, qtd)} />
+              <EditarQtd r={r} embs={embs} onSaved={(id, qtd) => onSaved([id], dataAtual, qtd)} />
             </div>
           )
         })}
@@ -115,41 +116,93 @@ function BlocoLote({ lote, embs, dataAtual, onSaved }) {
   )
 }
 
-function EditarQtd({ r, onSaved }) {
-  const [editando, setEditando] = useState(false)
-  const [draft, setDraft] = useState(r.quantidade)
+function EditarQtd({ r, embs, onSaved }) {
+  const [aberto, setAberto] = useState(false)
+  const [qtd, setQtd] = useState(r.quantidade)
+  const [embId, setEmbId] = useState(r.embalagem_id)
   const [saving, setSaving] = useState(false)
+  const [erro, setErro] = useState('')
+
+  const trocouProduto = embId !== r.embalagem_id
+  const lista = (embs || []).filter(e => e.tipo === 'rotulo' || e.visivel_producao)
+  const cats = [...new Set(lista.map(e => e.categoria).filter(Boolean))].sort()
 
   async function salvar() {
-    const qtd = parseInt(draft) || 0
-    setSaving(true)
-    await supabase.from('producao_diaria').update({ quantidade: qtd }).eq('id', r.id)
-    setSaving(false)
-    setEditando(false)
-    onSaved(r.id, qtd)
+    setSaving(true); setErro('')
+    try {
+      await editarProducao(r.id, { novoEmbalagemId: embId, novaQuantidade: parseInt(qtd) || 0 })
+      setSaving(false); setAberto(false)
+      onSaved(r.id, parseInt(qtd) || 0, embId)
+    } catch (e) {
+      setErro(e.message || String(e)); setSaving(false)
+    }
   }
 
-  if (editando) return (
-    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-      <input type="number" min={0} value={draft} onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => { if (e.key==='Enter') salvar(); if (e.key==='Escape') setEditando(false) }}
-        autoFocus style={{ width: 64, padding: '3px 6px', fontSize: 13, fontWeight: 700, border: '2px solid var(--purple)', borderRadius: 6, outline: 'none', textAlign: 'right' }} />
-      <button onClick={salvar} disabled={saving} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--ok)' }}>
-        {saving ? '...' : <Check size={14}/>}
-      </button>
-      <button onClick={() => setEditando(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--danger)' }}>
-        <X size={14}/>
-      </button>
-    </div>
-  )
-
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>{fmt(r.quantidade)}</span>
-      <button onClick={() => { setDraft(r.quantidade); setEditando(true) }}
-        style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-300)', opacity: .6, padding: 2 }}
-        title="Editar quantidade"><Pencil size={12}/></button>
-    </div>
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>{fmt(r.quantidade)}</span>
+        <button onClick={() => { setQtd(r.quantidade); setEmbId(r.embalagem_id); setAberto(true) }}
+          style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-300)', opacity:.6, padding:2 }}
+          title="Editar registro"><Pencil size={12}/></button>
+      </div>
+
+      {aberto && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setAberto(false)}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">✏️ Editar registro de produção</div>
+                <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
+                  {new Date(r.data_producao + 'T12:00:00').toLocaleDateString('pt-BR')}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setAberto(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Produto</label>
+                <select className="form-input" value={embId} onChange={e => setEmbId(e.target.value)}>
+                  {cats.map(cat => (
+                    <optgroup key={cat} label={cat}>
+                      {lista.filter(e => e.categoria === cat)
+                        .sort((a,b) => a.nome.localeCompare(b.nome))
+                        .map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Quantidade</label>
+                <input type="number" min={0} className="form-input" value={qtd}
+                  onChange={e => setQtd(e.target.value)} style={{ width: 140, textAlign: 'right' }} />
+              </div>
+
+              <div style={{ padding: '10px 14px', background: trocouProduto ? '#fff8f0' : 'var(--gray-50)',
+                border: `1px solid ${trocouProduto ? 'var(--warning)' : 'var(--gray-200)'}`,
+                borderRadius: 8, fontSize: 12, color: 'var(--gray-600)', lineHeight: 1.5 }}>
+                {trocouProduto && <div style={{ fontWeight: 700, color: 'var(--warning)', marginBottom: 4 }}>
+                  ⚠️ Troca de produto
+                </div>}
+                Ao salvar, o sistema devolve ao estoque a matéria-prima e a embalagem do registro
+                atual e debita novamente conforme a ficha técnica do produto escolhido.
+              </div>
+
+              {erro && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff0f0',
+                  border: '1px solid var(--danger)', borderRadius: 6, fontSize: 12, color: 'var(--danger)' }}>{erro}</div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={() => setAberto(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={salvar} disabled={saving}>
+                {saving ? 'Recalculando...' : 'Salvar e recalcular estoque'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
