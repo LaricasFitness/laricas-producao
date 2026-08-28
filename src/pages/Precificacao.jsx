@@ -1172,6 +1172,64 @@ function SimularProduto({ data, incluirOverhead }) {
   const [precoManual, setPrecoManual] = useState('')
   const [modalSalvar, setModalSalvar] = useState(false)
   const [salvo, setSalvo] = useState('')
+  const [rascunhos, setRascunhos] = useState([])
+  const [rascunhoId, setRascunhoId] = useState(null)
+  const [verRascunhos, setVerRascunhos] = useState(false)
+  const [salvandoR, setSalvandoR] = useState(false)
+
+  async function carregarRascunhos() {
+    const { data } = await supabase.from('produto_simulacoes')
+      .select('*').order('atualizado_em', { ascending: false })
+    setRascunhos(data || [])
+  }
+  useEffect(() => { carregarRascunhos() }, [])
+
+  async function salvarRascunho() {
+    if (!nome.trim()) { alert('Dê um nome ao rascunho antes de salvar.'); return }
+    setSalvandoR(true)
+    const payload = {
+      nome: nome.trim(),
+      composicao: linhas.filter(l => l.prepId && l.gramas).map(l => ({ prepId: l.prepId, gramas: l.gramas })),
+      categoria_emb: catEmb || null,
+      custo_rotulo: parseFloat(custoRotulo) || 0,
+      markup, preco_manual: precoManual ? parseFloat(precoManual) : null,
+      atualizado_em: new Date().toISOString(),
+    }
+    if (rascunhoId) {
+      await supabase.from('produto_simulacoes').update(payload).eq('id', rascunhoId)
+    } else {
+      const { data } = await supabase.from('produto_simulacoes').insert(payload).select().single()
+      if (data) setRascunhoId(data.id)
+    }
+    await carregarRascunhos()
+    setSalvandoR(false)
+  }
+
+  function abrirRascunho(r) {
+    setNome(r.nome || '')
+    setLinhas((r.composicao || []).map((x, i) => ({ id: Date.now() + i, prepId: x.prepId, gramas: String(x.gramas) }))
+      .concat((r.composicao || []).length ? [] : [{ id: Date.now(), prepId: '', gramas: '' }]))
+    setCatEmb(r.categoria_emb || '')
+    setCustoRotulo(r.custo_rotulo ? String(r.custo_rotulo) : '')
+    setMarkup(parseFloat(r.markup) || 3)
+    setPrecoManual(r.preco_manual ? String(r.preco_manual) : '')
+    setRascunhoId(r.id)
+    setVerRascunhos(false)
+    setSalvo('')
+  }
+
+  async function excluirRascunho(r) {
+    if (!window.confirm(`Excluir o rascunho "${r.nome}"?`)) return
+    await supabase.from('produto_simulacoes').delete().eq('id', r.id)
+    if (rascunhoId === r.id) setRascunhoId(null)
+    await carregarRascunhos()
+  }
+
+  function novoRascunho() {
+    setNome(''); setLinhas([{ id: Date.now(), prepId: '', gramas: '' }])
+    setCatEmb(''); setCustoRotulo(''); setMarkup(3); setPrecoManual('')
+    setRascunhoId(null); setSalvo(''); setVerRascunhos(false)
+  }
 
   const preps = Object.values(data.prepMap || {}).sort((a, b) =>
     (a.tipo || '').localeCompare(b.tipo || '') || (a.nome || '').localeCompare(b.nome || ''))
@@ -1217,12 +1275,61 @@ function SimularProduto({ data, incluirOverhead }) {
         </div>
         <div style={{ flex: 1 }} />
         <input className="form-input" placeholder="Nome do produto"
-          value={nome} onChange={e => setNome(e.target.value)} style={{ width: 240, fontSize: 13 }} />
+          value={nome} onChange={e => setNome(e.target.value)} style={{ width: 220, fontSize: 13 }} />
+        <button className="btn btn-ghost btn-sm" onClick={() => setVerRascunhos(v => !v)}>
+          📁 Rascunhos{rascunhos.length ? ` (${rascunhos.length})` : ''}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={salvarRascunho}
+          disabled={salvandoR || !nome.trim()}
+          style={{ borderColor: 'var(--purple)', color: 'var(--purple)' }}>
+          {salvandoR ? <RefreshCw size={13} className="spin" />
+            : rascunhoId ? '💾 Atualizar rascunho' : '💾 Salvar rascunho'}
+        </button>
         <button className="btn btn-primary btn-sm" disabled={!podeSalvar}
           onClick={() => setModalSalvar(true)}>
-          <Save size={13} /> Salvar como produto
+          <Save size={13} /> Criar produto
         </button>
       </div>
+
+      {verRascunhos && (
+        <div className="card">
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--gray-200)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>📁 Rascunhos salvos</span>
+            <button className="btn btn-ghost btn-sm" onClick={novoRascunho}>+ Nova simulação</button>
+          </div>
+          {rascunhos.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>
+              Nenhum rascunho salvo. Dê um nome à simulação e clique em "Salvar rascunho".
+            </div>
+          ) : rascunhos.map((r, i) => (
+            <div key={r.id} style={{ padding: '10px 16px', borderTop: '1px solid var(--gray-100)',
+              display: 'flex', alignItems: 'center', gap: 10,
+              background: r.id === rascunhoId ? 'var(--purple-pale)' : i % 2 ? '#fafafa' : '#fff' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{r.nome}</div>
+                <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+                  {(r.composicao || []).length} preparações
+                  {r.categoria_emb ? ` · ${r.categoria_emb}` : ''}
+                  {' · '}{new Date(r.atualizado_em).toLocaleDateString('pt-BR')}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => abrirRascunho(r)}>Abrir</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => excluirRascunho(r)}
+                style={{ color: 'var(--danger)' }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rascunhoId && !verRascunhos && (
+        <div style={{ padding: '8px 14px', background: 'var(--purple-pale)', borderRadius: 8,
+          fontSize: 12, color: 'var(--purple)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          📁 Editando o rascunho <strong>{nome}</strong>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-ghost btn-sm" onClick={novoRascunho}>Começar do zero</button>
+        </div>
+      )}
 
       {salvo && (
         <div style={{ padding: '10px 16px', background: '#f0faf0', border: '1px solid var(--ok)',
