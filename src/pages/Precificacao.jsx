@@ -207,7 +207,8 @@ function usePrecificacao() {
           const qtdIng = parseFloat(ing.quantidade)||0
           const bruto = parseFloat(prep.rendimento_estimado)||1
           const perda = parseFloat(prep.perda_percentual)||0
-          const rendLiq = bruto*(1-perda/100)
+          // Mesma regra do custo: real já é líquido, estimado leva a perda
+          const rendLiq = rendReal ? rendReal : bruto*(1-perda/100)
           const qtdPorUnidade = (qtdIng/rendLiq)*qtdCrua
 
           if (ing.sub_preparacao_id) {
