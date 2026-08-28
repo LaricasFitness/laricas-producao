@@ -1412,7 +1412,10 @@ function CustoPreparacoes() {
       const ings = (comps||[]).filter(c => c.preparacao_id === prep.id)
       const rendBruto = ings.reduce((s,i) => s + (parseFloat(i.quantidade)||0), 0)
       const perda = parseFloat(prep.perda_percentual)||0
-      const rendLiq = rendBruto * (1 - perda/100)
+      // Rendimento real é medido líquido; só o estimado leva a perda de processo
+      const rendReal = parseFloat(prep.rendimento_real_medio)||null
+      const rendLiq = rendReal ? rendReal : rendBruto * (1 - perda/100)
+      const usaReal = !!rendReal
 
       let custoReceita = 0
       let semPreco = 0
@@ -1442,7 +1445,7 @@ function CustoPreparacoes() {
       }).sort((a,b) => b.custo - a.custo)
 
       const custoG = rendLiq > 0 ? custoReceita / rendLiq : 0
-      return { prep, ings: detalhes, rendBruto, rendLiq, custoReceita, custoG, semPreco }
+      return { prep, ings: detalhes, rendBruto, rendLiq, custoReceita, custoG, semPreco, usaReal }
     })
 
     setData(resultado)
@@ -1515,8 +1518,11 @@ function CustoPreparacoes() {
                     </div>
                     <div>
                       <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Rend. líquido</div>
-                      <div style={{fontWeight:600}}>
+                      <div style={{fontWeight:600, color: d.usaReal ? 'var(--ok)' : undefined}}>
                         {d.rendLiq > 0 ? `${Number(d.rendLiq).toLocaleString('pt-BR',{maximumFractionDigits:1})} ${d.prep.unidade_rendimento}` : '—'}
+                      </div>
+                      <div style={{fontSize:10, color: d.usaReal ? 'var(--ok)' : 'var(--gray-400)'}}>
+                        {d.usaReal ? '📊 real medido' : '📐 estimado'}
                       </div>
                     </div>
                     <div>
