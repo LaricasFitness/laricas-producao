@@ -2295,9 +2295,115 @@ function ConferenciaMP() {
             </div>
           )}
 
+          {/* Resumo diário: previsto × realizado e impacto no estoque */}
+          {historico.length > 0 && (() => {
+            const porDia = {}
+            for (const c of historico) {
+              const d = c.data_conferencia
+              if (!porDia[d]) porDia[d] = { data: d, itens: 0, divergentes: 0, sistema: 0, contado: 0, impacto: 0 }
+              const sis = parseFloat(c.estoque_sistema) || 0
+              const con = parseFloat(c.estoque_contado) || 0
+              const pu  = parseFloat(c.custo_unitario) || 0
+              porDia[d].itens++
+              if (Math.abs(con - sis) > 0.001) porDia[d].divergentes++
+              porDia[d].sistema += sis * pu
+              porDia[d].contado += con * pu
+              porDia[d].impacto += (con - sis) * pu
+            }
+            const dias = Object.values(porDia).sort((a, b) => b.data.localeCompare(a.data))
+            const totalImpacto = dias.reduce((s, d) => s + d.impacto, 0)
+
+            return (
+              <div className="card">
+                <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',
+                  display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:15}}>📊 Comparação por dia</div>
+                    <div style={{fontSize:11,color:'var(--gray-400)',marginTop:2}}>
+                      previsto pelo sistema × contado fisicamente, valorizado ao custo da MP
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>
+                      Impacto acumulado
+                    </div>
+                    <div style={{fontSize:20,fontWeight:800,
+                      color: Math.abs(totalImpacto) < 0.01 ? 'var(--gray-400)'
+                        : totalImpacto < 0 ? 'var(--danger)' : 'var(--ok)'}}>
+                      {totalImpacto >= 0 ? '+' : '−'}{fmtR(Math.abs(totalImpacto))}
+                    </div>
+                  </div>
+                </div>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                  <thead>
+                    <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
+                      <th style={{padding:'8px 14px',textAlign:'left'}}>Data</th>
+                      <th style={{padding:'8px 10px',textAlign:'center'}}>Itens</th>
+                      <th style={{padding:'8px 10px',textAlign:'center'}}>Divergentes</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>Previsto (R$)</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>Realizado (R$)</th>
+                      <th style={{padding:'8px 10px',textAlign:'right'}}>Diferença</th>
+                      <th style={{padding:'8px 14px',textAlign:'right'}}>Impacto R$</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dias.map((d, i) => {
+                      const pct = d.sistema > 0 ? (d.impacto / d.sistema * 100) : 0
+                      const cor = Math.abs(pct) < 0.5 ? 'var(--gray-400)'
+                        : Math.abs(pct) > 5 ? 'var(--danger)'
+                        : d.impacto < 0 ? 'var(--warning)' : 'var(--ok)'
+                      return (
+                        <tr key={d.data} style={{borderTop:'1px solid var(--gray-100)',background:i%2?'#fafafa':'#fff'}}>
+                          <td style={{padding:'8px 14px',fontWeight:600}}>
+                            {new Date(d.data+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'})}
+                            <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                              {new Date(d.data+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long'})}
+                            </div>
+                          </td>
+                          <td style={{padding:'8px 10px',textAlign:'center',color:'var(--gray-600)'}}>{d.itens}</td>
+                          <td style={{padding:'8px 10px',textAlign:'center'}}>
+                            <span style={{fontSize:11,padding:'2px 8px',borderRadius:10,fontWeight:700,
+                              background: d.divergentes ? '#fff0f0' : '#f0faf0',
+                              color: d.divergentes ? 'var(--danger)' : 'var(--ok)'}}>
+                              {d.divergentes}
+                            </span>
+                          </td>
+                          <td style={{padding:'8px 10px',textAlign:'right',color:'var(--gray-600)'}}>{fmtR(d.sistema)}</td>
+                          <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700}}>{fmtR(d.contado)}</td>
+                          <td style={{padding:'8px 10px',textAlign:'right',fontWeight:800,color:cor}}>
+                            {pct >= 0 ? '+' : '−'}{fmt(Math.abs(pct),1)}%
+                          </td>
+                          <td style={{padding:'8px 14px',textAlign:'right',fontWeight:800,color:cor}}>
+                            {d.impacto >= 0 ? '+' : '−'}{fmtR(Math.abs(d.impacto))}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--purple)'}}>
+                      <td colSpan={6} style={{padding:'10px 14px',fontWeight:800,color:'#fff'}}>
+                        Impacto total no estoque
+                      </td>
+                      <td style={{padding:'10px 14px',textAlign:'right',fontWeight:800,
+                        color:'var(--gold)',fontSize:15}}>
+                        {totalImpacto >= 0 ? '+' : '−'}{fmtR(Math.abs(totalImpacto))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+                <div style={{padding:'10px 20px',fontSize:11,color:'var(--gray-500)',lineHeight:1.6}}>
+                  <strong>Negativo</strong> significa que havia menos MP do que o sistema previa — consumo não
+                  registrado, perda ou produção sem lançamento. <strong>Positivo</strong> indica compra não
+                  lançada, consumo debitado a mais ou erro de contagem.
+                </div>
+              </div>
+            )
+          })()}
+
           <div className="card">
             <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:800,fontSize:15}}>
-              📋 Histórico de Conferências de MP
+              📋 Lançamentos detalhados
             </div>
             {historico.length === 0 ? (
               <div style={{padding:40,textAlign:'center',color:'var(--gray-300)'}}>Nenhuma conferência registrada ainda.</div>
