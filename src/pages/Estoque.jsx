@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, FileSpreadsheet } from 'lucide-react'
+import { baixarXlsx } from '../lib/xlsx'
 
 function fmt(n, d = 2) { return Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }) }
 function fmtR(n) { return `R$ ${fmt(n, 2)}` }
@@ -24,6 +25,13 @@ function contagensAte(registros, campoData, campoItem, campoQtd, dataLimite) {
   return mapa
 }
 
+// Coage resultado de query para array — tolera tabela/coluna inexistente (404)
+function arr(x) {
+  if (Array.isArray(x)) return x
+  if (x && Array.isArray(x.data)) return x.data
+  return []
+}
+
 export default function ControleEstoque() {
   const [mes, setMes] = useState(new Date().toISOString().slice(0, 7))
   const [vista, setVista] = useState('real')
@@ -37,28 +45,34 @@ export default function ControleEstoque() {
     const ini = mes + '-01'
     const fim = new Date(mes.slice(0, 4), mes.slice(5, 7), 0).toISOString().slice(0, 10)
 
+    const q = (p) => p.then(r => r).catch(() => ({ data: [] }))
     const [
-      { data: mps }, { data: confMP }, { data: comprasMP },
-      { data: embs }, { data: confEmb }, { data: recItens },
-      { data: producao }, { data: prodComps }, { data: preps }, { data: prepComps },
-      { data: catEmbs },
+      rMps, rConfMP, rComprasMP,
+      rEmbs, rConfEmb, rRecItens,
+      rProducao, rProdComps, rPreps, rPrepComps,
+      rCatEmbs,
     ] = await Promise.all([
-      supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario').eq('ativo', true),
-      supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em'),
-      supabase.from('mp_compras').select('materia_prima_id,quantidade,custo_total,data_compra')
-        .gte('data_compra', ini).lte('data_compra', fim),
-      supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('ativo', true),
-      supabase.from('conferencia_estoque').select('embalagem_id,data_conferencia,estoque_contado,criado_em'),
-      supabase.from('recebimento_itens')
-        .select('embalagem_id,quantidade_recebida,valor_unitario,recebimentos(data_recebimento)'),
-      supabase.from('producao_diaria').select('embalagem_id,quantidade')
+      q(supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario').eq('ativo', true)),
+      q(supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em')),
+      q(supabase.from('mp_compras').select('materia_prima_id,quantidade,custo_total,data_compra')
+        .gte('data_compra', ini).lte('data_compra', fim)),
+      q(supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('ativo', true)),
+      q(supabase.from('conferencia_estoque').select('embalagem_id,data_conferencia,estoque_contado,criado_em')),
+      q(supabase.from('recebimento_itens')
+        .select('embalagem_id,quantidade_recebida,valor_unitario,recebimentos(data_recebimento)')),
+      q(supabase.from('producao_diaria').select('embalagem_id,quantidade')
         .gte('data_producao', ini).lte('data_producao', fim)
-        .not('registrado_por', 'ilike', '%(auto-embalagem)%'),
-      supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade'),
-      supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual'),
-      supabase.from('preparacao_composicao').select('preparacao_id,quantidade,materia_prima_id,sub_preparacao_id'),
-      supabase.from('categoria_embalagem').select('categoria,quantidade,embalagens(custo_unitario)'),
+        .not('registrado_por', 'ilike', '%(auto-embalagem)%')),
+      q(supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade')),
+      q(supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual')),
+      q(supabase.from('preparacao_composicao').select('preparacao_id,quantidade,materia_prima_id,sub_preparacao_id')),
+      q(supabase.from('categoria_embalagem').select('categoria,quantidade,embalagens(custo_unitario)')),
     ])
+
+    const mps = arr(rMps), confMP = arr(rConfMP), comprasMP = arr(rComprasMP)
+    const embs = arr(rEmbs), confEmb = arr(rConfEmb), recItens = arr(rRecItens)
+    const producao = arr(rProducao), prodComps = arr(rProdComps)
+    const preps = arr(rPreps), prepComps = arr(rPrepComps), catEmbs = arr(rCatEmbs)
 
     const mpMap = {}; for (const m of (mps || [])) mpMap[m.id] = m
     const embMap = {}; for (const e of (embs || [])) embMap[e.id] = e
@@ -282,8 +296,28 @@ export default function ControleEstoque() {
               </div>
 
               <div className="card">
-                <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--gray-200)', fontWeight: 700, fontSize: 13 }}>
-                  CMV por produto — {labelMes}
+                <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--gray-200)',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>CMV por produto — {labelMes}</span>
+                  <button className="btn btn-ghost btn-sm" onClick={() => baixarXlsx({
+                    nomeArquivo: `CMV_por_produto_${mes}`,
+                    aba: labelMes,
+                    colunas: [
+                      { header: 'Nome do produto', key: 'nome',      tipo: 'texto',  largura: 38 },
+                      { header: 'SKU',             key: 'sku',       tipo: 'texto',  largura: 24 },
+                      { header: 'Produzido',       key: 'produzido', tipo: 'numero', largura: 12 },
+                      { header: 'MP/un',           key: 'mp',        tipo: 'moeda4', largura: 12 },
+                      { header: 'Emb/un',          key: 'emb',       tipo: 'moeda4', largura: 12 },
+                      { header: 'CMV/un',          key: 'cmv',       tipo: 'moeda4', largura: 12 },
+                      { header: 'Total',           key: 'total',     tipo: 'moeda',  largura: 14 },
+                    ],
+                    linhas: dados.produzidos.map(p => ({
+                      nome: p.emb.nome, sku: p.emb.codigo, produzido: p.qtd,
+                      mp: p.mpUnit, emb: p.embUnit, cmv: p.cmvUnit, total: p.total,
+                    })),
+                  })} disabled={!dados.produzidos.length}>
+                    <FileSpreadsheet size={13} /> Exportar Excel
+                  </button>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
