@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, FileSpreadsheet } from 'lucide-react'
 import { baixarXlsx } from '../lib/xlsx'
@@ -35,6 +35,7 @@ function arr(x) {
 export default function ControleEstoque() {
   const [mes, setMes] = useState(new Date().toISOString().slice(0, 7))
   const [vista, setVista] = useState('real')
+  const [expandido, setExpandido] = useState(null)
   const [dados, setDados] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -160,12 +161,55 @@ export default function ControleEstoque() {
       prodPorSku[emb.codigo].qtd += p.quantidade
     }
 
+    // Consumo de MP de uma preparação, por grama de rendimento (recursivo)
+    const mpCache = {}
+    function mpPorG(prepId, vis = new Set()) {
+      if (mpCache[prepId]) return mpCache[prepId]
+      if (vis.has(prepId)) return {}
+      const v = new Set([...vis, prepId])
+      const prep = prepMap[prepId]; if (!prep) return {}
+      const ings = (prepComps || []).filter(x => x.preparacao_id === prepId)
+      const real = parseFloat(prep.rendimento_real_medio) || null
+      const rendLiq = real ? real
+        : (parseFloat(prep.rendimento_estimado) || 1) * (1 - (parseFloat(prep.perda_percentual) || 0) / 100)
+      const acc = {}
+      for (const ing of ings) {
+        const q = parseFloat(ing.quantidade) || 0
+        if (ing.sub_preparacao_id) {
+          const sub = mpPorG(ing.sub_preparacao_id, v)
+          for (const [mpId, g] of Object.entries(sub)) acc[mpId] = (acc[mpId] || 0) + g * q
+        } else if (ing.materia_prima_id) {
+          acc[ing.materia_prima_id] = (acc[ing.materia_prima_id] || 0) + q
+        }
+      }
+      const out = {}
+      if (rendLiq > 0) for (const [mpId, g] of Object.entries(acc)) out[mpId] = g / rendLiq
+      mpCache[prepId] = out
+      return out
+    }
+
     const produzidos = Object.values(prodPorSku).map(({ emb, qtd }) => {
       const comps = (prodComps || []).filter(c => c.sku_produto === emb.codigo)
       const mpUnit = comps.reduce((s, c) =>
         s + custoPrepPorG(c.preparacao_id) * (parseFloat(c.quantidade_por_unidade) || 0), 0)
       const embUnit = (parseFloat(emb.custo_unitario) || 0) + (custoEmbCat[emb.categoria] || 0)
-      return { emb, qtd, mpUnit, embUnit, cmvUnit: mpUnit + embUnit, total: (mpUnit + embUnit) * qtd }
+
+      // Consolida matéria-prima do produto acabado
+      const porMP = {}
+      for (const cp of comps) {
+        const gramas = parseFloat(cp.quantidade_por_unidade) || 0
+        const consumo = mpPorG(cp.preparacao_id)
+        for (const [mpId, gPorG] of Object.entries(consumo)) {
+          const g = gPorG * gramas
+          const mp = mpMap[mpId]
+          if (!porMP[mpId]) porMP[mpId] = { nome: mp?.nome || '?', unidade: mp?.unidade, qtd: 0, custo: 0 }
+          porMP[mpId].qtd += g
+          porMP[mpId].custo += g * (parseFloat(mp?.custo_unitario) || 0)
+        }
+      }
+      const mps = Object.values(porMP).filter(m => m.custo > 0).sort((a, b) => b.custo - a.custo)
+
+      return { emb, qtd, mpUnit, embUnit, cmvUnit: mpUnit + embUnit, total: (mpUnit + embUnit) * qtd, mps }
     }).sort((a, b) => b.total - a.total)
 
     const cmvMP = produzidos.reduce((s, p) => s + p.mpUnit * p.qtd, 0)
@@ -310,11 +354,18 @@ export default function ControleEstoque() {
                       { header: 'Emb/un',          key: 'emb',       tipo: 'moeda4', largura: 12 },
                       { header: 'CMV/un',          key: 'cmv',       tipo: 'moeda4', largura: 12 },
                       { header: 'Total',           key: 'total',     tipo: 'moeda',  largura: 14 },
+                      { header: 'MP principal',    key: 'mp1',       tipo: 'texto',  largura: 28 },
+                      { header: '% da MP',         key: 'mp1pct',    tipo: 'texto',  largura: 10 },
                     ],
-                    linhas: dados.produzidos.map(p => ({
-                      nome: p.emb.nome, sku: p.emb.codigo, produzido: p.qtd,
-                      mp: p.mpUnit, emb: p.embUnit, cmv: p.cmvUnit, total: p.total,
-                    })),
+                    linhas: dados.produzidos.map(p => {
+                      const top = (p.mps || [])[0]
+                      const pctTop = top && p.mpUnit > 0 ? `${fmt(top.custo / p.mpUnit * 100, 1)}%` : ''
+                      return {
+                        nome: p.emb.nome, sku: p.emb.codigo, produzido: p.qtd,
+                        mp: p.mpUnit, emb: p.embUnit, cmv: p.cmvUnit, total: p.total,
+                        mp1: top ? top.nome : '', mp1pct: pctTop,
+                      }
+                    }),
                   })} disabled={!dados.produzidos.length}>
                     <FileSpreadsheet size={13} /> Exportar Excel
                   </button>
@@ -331,10 +382,19 @@ export default function ControleEstoque() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dados.produzidos.map((p, i) => (
-                      <tr key={p.emb.codigo} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
+                    {dados.produzidos.map((p, i) => {
+                      const aberto = expandido === p.emb.codigo
+                      const temMP = (p.mps || []).length > 0
+                      return (
+                      <React.Fragment key={p.emb.codigo}>
+                      <tr onClick={() => temMP && setExpandido(aberto ? null : p.emb.codigo)}
+                        style={{ borderTop: '1px solid var(--gray-100)', background: aberto ? 'var(--purple-pale)' : i % 2 ? '#fafafa' : '#fff',
+                          cursor: temMP ? 'pointer' : 'default' }}>
                         <td style={{ padding: '7px 14px' }}>
-                          <div style={{ fontWeight: 600 }}>{p.emb.nome}</div>
+                          <div style={{ fontWeight: 600 }}>
+                            {temMP && <span style={{ color: 'var(--gray-400)', marginRight: 4 }}>{aberto ? '▾' : '▸'}</span>}
+                            {p.emb.nome}
+                          </div>
                           <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{p.emb.categoria}</div>
                         </td>
                         <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>{p.qtd.toLocaleString('pt-BR')}</td>
@@ -343,7 +403,43 @@ export default function ControleEstoque() {
                         <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--purple)' }}>{fmtR(p.cmvUnit)}</td>
                         <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 800 }}>{fmtR(p.total)}</td>
                       </tr>
-                    ))}
+                      {aberto && (
+                        <tr style={{ background: '#f8f5ff' }}>
+                          <td colSpan={6} style={{ padding: '0 14px 12px' }}>
+                            <div style={{ fontSize: 11, color: 'var(--gray-500)', padding: '8px 0 6px', fontWeight: 700 }}>
+                              🧂 Matéria-prima por unidade · total {fmtR(p.mpUnit)}
+                            </div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <tbody>
+                                {p.mps.map((m, mi) => {
+                                  const pctMP = p.mpUnit > 0 ? m.custo / p.mpUnit * 100 : 0
+                                  return (
+                                    <tr key={m.nome} style={{ borderTop: '1px solid var(--gray-100)', background: mi % 2 ? '#fff' : 'transparent' }}>
+                                      <td style={{ padding: '5px 10px', fontWeight: 600 }}>{m.nome}</td>
+                                      <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--gray-500)', width: 110 }}>
+                                        {fmt(m.qtd, 2)}{m.unidade}
+                                      </td>
+                                      <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--purple)', width: 90 }}>
+                                        {fmtR(m.custo)}
+                                      </td>
+                                      <td style={{ padding: '5px 10px', width: 150 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                                          <div style={{ width: 60, height: 6, background: 'var(--gray-100)', borderRadius: 3 }}>
+                                            <div style={{ height: '100%', width: `${Math.min(100, pctMP)}%`, background: 'var(--purple)', borderRadius: 3 }} />
+                                          </div>
+                                          <span style={{ fontSize: 11, fontWeight: 700, minWidth: 38, textAlign: 'right' }}>{fmt(pctMP, 1)}%</span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
+                    )})}
                   </tbody>
                   <tfoot>
                     <tr style={{ borderTop: '2px solid var(--gray-200)', background: 'var(--purple)' }}>
