@@ -369,6 +369,74 @@ function FichaCusto({ data, incluirOverhead }) {
                   <tr key={`${p.emb.codigo}-detail`} style={{background:'#f8f5ff'}}>
                     <td colSpan={6} style={{padding:'0 14px 14px'}}>
                       <div style={{display:'flex',flexDirection:'column',gap:8,paddingTop:12}}>
+                        {/* Consolidado de matéria-prima do produto acabado */}
+                        {(() => {
+                          const porMP = {}
+                          for (const d of p.detalhesPrep) {
+                            for (const ing of (d.ingredientes || [])) {
+                              if (ing.isSubPrep) continue
+                              const k = ing.mp || ing.nome
+                              if (!porMP[k]) porMP[k] = { nome: k, qtd: 0, unidade: ing.unidade, custo: 0, preps: new Set() }
+                              porMP[k].qtd += ing.qtd || 0
+                              porMP[k].custo += ing.custo || 0
+                              porMP[k].preps.add(d.nome)
+                            }
+                          }
+                          const lista = Object.values(porMP).filter(m => m.custo > 0).sort((a,b) => b.custo - a.custo)
+                          if (!lista.length) return null
+                          const totalMP = lista.reduce((s,m) => s + m.custo, 0)
+                          return (
+                            <div style={{border:'1.5px solid var(--purple)',borderRadius:8,overflow:'hidden'}}>
+                              <div style={{padding:'8px 14px',background:'var(--purple)',color:'#fff',
+                                display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                                <span style={{fontWeight:800,fontSize:13}}>🧂 Matéria-prima no produto acabado</span>
+                                <span style={{fontWeight:800,fontSize:13}}>{fmtR(totalMP)}</span>
+                              </div>
+                              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                                <thead>
+                                  <tr style={{background:'var(--gray-50)'}}>
+                                    <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Matéria-prima</th>
+                                    <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Qtd/un</th>
+                                    <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Custo</th>
+                                    <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--purple)',width:150}}>% do MP</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {lista.map((m,i) => {
+                                    const pctMP = totalMP > 0 ? m.custo/totalMP*100 : 0
+                                    return (
+                                      <tr key={m.nome} style={{borderTop:'1px solid var(--gray-100)',background:i%2?'#f8f5ff':'#fff'}}>
+                                        <td style={{padding:'6px 12px'}}>
+                                          <div style={{fontWeight:600}}>{m.nome}</div>
+                                          {m.preps.size > 1 && (
+                                            <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                                              em {[...m.preps].join(' + ')}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td style={{padding:'6px 10px',textAlign:'right',color:'var(--gray-500)'}}>
+                                          {fmt(m.qtd,2)}{m.unidade}
+                                        </td>
+                                        <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                                          {fmtR(m.custo)}
+                                        </td>
+                                        <td style={{padding:'6px 10px'}}>
+                                          <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
+                                            <div style={{width:60,height:6,background:'var(--gray-100)',borderRadius:3}}>
+                                              <div style={{height:'100%',width:`${Math.min(100,pctMP)}%`,background:'var(--purple)',borderRadius:3}}/>
+                                            </div>
+                                            <span style={{fontSize:11,fontWeight:700,minWidth:38,textAlign:'right'}}>{fmt(pctMP,1)}%</span>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )
+                        })()}
+
                         {p.detalhesPrep.map(d => (
                           <div key={d.prepId} style={{border:'1px solid var(--gray-200)',borderRadius:8,overflow:'hidden'}}>
                             <div style={{padding:'8px 14px',background:'var(--purple-pale)'}}>
