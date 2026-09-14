@@ -864,7 +864,16 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 
     const totalQtd = (compras30||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
     const totalCusto = (compras30||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
-    const novoCustoUnit = totalQtd > 0 ? totalCusto / totalQtd : 0
+    // Sem compra na janela de 30 dias, cai para a média de todo o histórico.
+    // Nunca zera o preço — zerar apagaria o custo da MP em todas as fichas.
+    let novoCustoUnit = totalQtd > 0 ? totalCusto / totalQtd : null
+    if (novoCustoUnit === null) {
+      const { data: todas } = await supabase.from('mp_compras')
+        .select('quantidade, custo_total').eq('materia_prima_id', compra.materia_prima_id)
+      const tQtd = (todas||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
+      const tCusto = (todas||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
+      novoCustoUnit = tQtd > 0 ? tCusto / tQtd : null
+    }
 
     // Estoque: reverte anterior e aplica novo
     const { data: mp } = await supabase.from('materias_primas')
@@ -872,11 +881,9 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
     const estoqueAtual = parseFloat(mp?.estoque_atual)||0
     const novoEstoque = Math.max(0, estoqueAtual - qtdAnterior + qtdNova)
 
-    await supabase.from('materias_primas').update({
-      estoque_atual: novoEstoque,
-      custo_unitario: novoCustoUnit,
-      atualizado_em: new Date().toISOString(),
-    }).eq('id', compra.materia_prima_id)
+    const updMP = { estoque_atual: novoEstoque, atualizado_em: new Date().toISOString() }
+    if (novoCustoUnit !== null && novoCustoUnit > 0) updMP.custo_unitario = novoCustoUnit
+    await supabase.from('materias_primas').update(updMP).eq('id', compra.materia_prima_id)
 
     setSaving(false)
     onSaved()
@@ -994,18 +1001,24 @@ function HistoricoCompras() {
 
     const totalQtd = (compras30||[]).reduce((s,r) => s + parseFloat(r.quantidade||0), 0)
     const totalCusto = (compras30||[]).reduce((s,r) => s + parseFloat(r.custo_total||0), 0)
-    const novoCusto = totalQtd > 0 ? totalCusto / totalQtd : 0
+    // Sem compra recente, usa a média de todo o histórico. Nunca zera.
+    let novoCusto = totalQtd > 0 ? totalCusto / totalQtd : null
+    if (novoCusto === null) {
+      const { data: todas } = await supabase.from('mp_compras')
+        .select('quantidade, custo_total').eq('materia_prima_id', c.materia_prima_id)
+      const tQtd = (todas||[]).reduce((s,r) => s + parseFloat(r.quantidade||0), 0)
+      const tCusto = (todas||[]).reduce((s,r) => s + parseFloat(r.custo_total||0), 0)
+      novoCusto = tQtd > 0 ? tCusto / tQtd : null
+    }
 
     // Reverte estoque
     const { data: mp } = await supabase.from('materias_primas').select('estoque_atual').eq('id', c.materia_prima_id).single()
     const estoqueAtual = parseFloat(mp?.estoque_atual)||0
     const novoEstoque = Math.max(0, estoqueAtual - parseFloat(c.quantidade))
 
-    await supabase.from('materias_primas').update({
-      estoque_atual: novoEstoque,
-      custo_unitario: novoCusto,
-      atualizado_em: new Date().toISOString(),
-    }).eq('id', c.materia_prima_id)
+    const updExc = { estoque_atual: novoEstoque, atualizado_em: new Date().toISOString() }
+    if (novoCusto !== null && novoCusto > 0) updExc.custo_unitario = novoCusto
+    await supabase.from('materias_primas').update(updExc).eq('id', c.materia_prima_id)
 
     load()
   }
