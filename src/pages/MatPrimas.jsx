@@ -57,6 +57,141 @@ async function ajustarEstoqueCompra(mpId, delta) {
     .eq('id', mpId)
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Conversão de unidade de compra → unidade base da MP.
+// A quantidade gravada é SEMPRE na unidade base (g, ml ou un).
+// ═══════════════════════════════════════════════════════════════
+const DIMENSAO = { g: 'massa', kg: 'massa', ml: 'volume', l: 'volume', un: 'contagem' }
+const FATOR = { g: 1, kg: 1000, ml: 1, l: 1000, un: 1 }
+const EMBALAGENS = ['caixa', 'pacote', 'fardo', 'saco', 'bandeja', 'frasco', 'lata', 'galão', 'unidade']
+const ROTULO_UN = { g: 'gramas (g)', kg: 'quilos (kg)', ml: 'mililitros (ml)', l: 'litros (L)', un: 'unidades (un)' }
+
+function unidadesDiretas(base) {
+  const dim = DIMENSAO[base] || 'contagem'
+  return Object.keys(DIMENSAO).filter(u => DIMENSAO[u] === dim)
+}
+
+// Converte o que foi digitado para a unidade base da MP
+function converterParaBase({ qtd, unidade, conteudo, unidadeConteudo }, base) {
+  const q = parseFloat(qtd) || 0
+  const fb = FATOR[base] || 1
+  if (DIMENSAO[unidade]) return q * (FATOR[unidade] || 1) / fb
+  const cont = parseFloat(conteudo) || 0
+  return q * cont * (FATOR[unidadeConteudo] || 1) / fb
+}
+
+function ehEmbalagem(unidade) { return !DIMENSAO[unidade] }
+
+// Traduz a unidade da NF-e (uCom) para uma opção do seletor
+function unidadeDaNF(uCom, base) {
+  const u = String(uCom || '').trim().toUpperCase()
+  const mapa = {
+    KG: 'kg', KGS: 'kg', G: 'g', GR: 'g', GRS: 'g', GRAMA: 'g',
+    L: 'l', LT: 'l', LTS: 'l', LITRO: 'l', ML: 'ml',
+    CX: 'caixa', CAIXA: 'caixa', PCT: 'pacote', PC: 'pacote', PACOTE: 'pacote',
+    FD: 'fardo', FARDO: 'fardo', SC: 'saco', SACO: 'saco', BD: 'bandeja',
+    FR: 'frasco', LATA: 'lata', LT_: 'lata', GL: 'galão', GALAO: 'galão',
+  }
+  const m = mapa[u]
+  if (m && DIMENSAO[m] && DIMENSAO[m] !== DIMENSAO[base]) return 'unidade'  // dimensão incompatível
+  if (m) return m
+  if (['UN', 'UND', 'UNID', 'UNIDADE'].includes(u)) return DIMENSAO[base] === 'contagem' ? 'un' : 'unidade'
+  return base
+}
+
+// Última forma de lançamento usada para a MP — vira o padrão da próxima
+async function ultimaEntradaMP(mpId) {
+  if (!mpId) return null
+  const { data } = await supabase.from('mp_compras')
+    .select('unidade_compra, conteudo_embalagem, unidade_conteudo')
+    .eq('materia_prima_id', mpId).not('unidade_compra', 'is', null)
+    .order('criado_em', { ascending: false }).limit(1)
+  return data?.[0] || null
+}
+
+// Campos extras a gravar em mp_compras
+function camposEntrada(e) {
+  return {
+    unidade_compra: e.unidade || null,
+    qtd_compra: parseFloat(e.qtd) || null,
+    conteudo_embalagem: ehEmbalagem(e.unidade) ? (parseFloat(e.conteudo) || null) : null,
+    unidade_conteudo: ehEmbalagem(e.unidade) ? (e.unidadeConteudo || null) : null,
+  }
+}
+
+// Descrição legível: "2 caixas × 12 L = 24.000 ml"
+function descreverEntrada(c, base) {
+  if (!c?.unidade_compra) return null
+  const q = parseFloat(c.qtd_compra) || 0
+  if (ehEmbalagem(c.unidade_compra)) {
+    return `${fmt(q, q % 1 ? 2 : 0)} ${c.unidade_compra}${q !== 1 ? 's' : ''} × ${fmt(c.conteudo_embalagem, 2)} ${c.unidade_conteudo}`
+  }
+  return c.unidade_compra === base ? null : `${fmt(q, 3)} ${c.unidade_compra}`
+}
+
+// Campo de quantidade com seletor de unidade
+function EntradaQuantidade({ base, valor, onChange, compacto }) {
+  const set = (k, v) => onChange({ ...valor, [k]: v })
+  const emb = ehEmbalagem(valor.unidade)
+  const baseQtd = converterParaBase(valor, base)
+  const diretas = unidadesDiretas(base)
+  const opcoesEmb = DIMENSAO[base] === 'contagem' ? EMBALAGENS.filter(e => e !== 'unidade') : EMBALAGENS
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+        <input type="number" className="form-input" min={0} step="any" placeholder="Quantidade"
+          value={valor.qtd} onChange={e => set('qtd', e.target.value)} style={{ fontSize: 13, textAlign: 'right' }} />
+        <select className="form-input" value={valor.unidade} style={{ fontSize: 13 }}
+          onChange={e => {
+            const u = e.target.value
+            onChange({ ...valor, unidade: u,
+              unidadeConteudo: ehEmbalagem(u) ? (valor.unidadeConteudo || base) : valor.unidadeConteudo })
+          }}>
+          <optgroup label="Peso / volume direto">
+            {diretas.map(u => <option key={u} value={u}>{ROTULO_UN[u]}</option>)}
+          </optgroup>
+          <optgroup label="Embalagem (informar conteúdo)">
+            {opcoesEmb.map(u => <option key={u} value={u}>{u}</option>)}
+          </optgroup>
+        </select>
+      </div>
+      {emb && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+          <span style={{ fontSize: 12, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>Cada {valor.unidade} tem</span>
+          <input type="number" className="form-input" min={0} step="any" placeholder="conteúdo"
+            value={valor.conteudo} onChange={e => set('conteudo', e.target.value)}
+            style={{ fontSize: 13, textAlign: 'right',
+              borderColor: !(parseFloat(valor.conteudo) > 0) ? 'var(--warning)' : undefined }} />
+          <select className="form-input" value={valor.unidadeConteudo || base} style={{ fontSize: 13 }}
+            onChange={e => set('unidadeConteudo', e.target.value)}>
+            {diretas.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+      )}
+      {parseFloat(valor.qtd) > 0 && (!emb || parseFloat(valor.conteudo) > 0) && (
+        <div style={{ fontSize: 11, color: 'var(--ok)', fontWeight: 700, marginTop: compacto ? 3 : 5 }}>
+          = {fmt(baseQtd, baseQtd % 1 ? 2 : 0)} {base} no estoque
+        </div>
+      )}
+      {emb && parseFloat(valor.qtd) > 0 && !(parseFloat(valor.conteudo) > 0) && (
+        <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, marginTop: 4 }}>
+          Informe quanto tem em cada {valor.unidade}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Entrada válida para salvar?
+function entradaValida(e, base) {
+  if (!(parseFloat(e?.qtd) > 0)) return false
+  if (ehEmbalagem(e.unidade) && !(parseFloat(e.conteudo) > 0)) return false
+  return converterParaBase(e, base) > 0
+}
+
+const entradaVazia = base => ({ qtd: '', unidade: base || 'g', conteudo: '', unidadeConteudo: base || 'g' })
+
 // Exclui uma compra revertendo estoque e recalculando o preço
 async function excluirCompraMP(compra) {
   await supabase.from('mp_compras').delete().eq('id', compra.id)
@@ -190,28 +325,41 @@ function ModalImportarXML({ onClose, onSaved }) {
         setErro('')
         // Pré-preenche vinculos com índice
         const v = {}
-        parsed.itens.forEach((_,i) => { v[i] = { mp_id:'', quantidade: parsed.itens[i].quantidade, unidade: parsed.itens[i].unidade } })
+        parsed.itens.forEach((_,i) => { v[i] = { mp_id:'', entrada: null, uNF: parsed.itens[i].unidade, qNF: parsed.itens[i].quantidade } })
         setVinculos(v)
       } catch { setErro('Erro ao processar XML. Verifique o arquivo.') }
     }
     reader.readAsText(file)
   }
 
+  async function vincularMP(idx, mpId) {
+    const mp = mps.find(m => m.id === mpId)
+    const base = mp?.unidade || 'g'
+    const v = vinculos[idx]
+    const unidade = mpId ? unidadeDaNF(v.uNF, base) : base
+    let entrada = { qtd: String(v.qNF ?? ''), unidade, conteudo: '', unidadeConteudo: base }
+    // Embalagem: tenta herdar o conteúdo da última compra dessa MP
+    if (mpId && ehEmbalagem(unidade)) {
+      const u = await ultimaEntradaMP(mpId)
+      if (u?.conteudo_embalagem) {
+        entrada.conteudo = String(u.conteudo_embalagem)
+        entrada.unidadeConteudo = u.unidade_conteudo || base
+      }
+    }
+    setVinculos(p => ({ ...p, [idx]: { ...p[idx], mp_id: mpId, entrada: mpId ? entrada : null } }))
+  }
+
+  const baseDe = mpId => mps.find(m => m.id === mpId)?.unidade || 'g'
+  const vinculoValido = v => v?.mp_id && v.entrada && entradaValida(v.entrada, baseDe(v.mp_id))
+
   async function salvar() {
     setSaving(true)
     try {
       for (const [idx, v] of Object.entries(vinculos)) {
-        if (!v.mp_id) continue
+        if (!vinculoValido(v)) continue
         const item = nf.itens[parseInt(idx)]
-        const qtd = parseFloat(v.quantidade) || item.quantidade
+        const qtd = converterParaBase(v.entrada, baseDe(v.mp_id))
         const custo = item.valor_total
-
-        // Busca MP atual
-        const { data: mp } = await supabase.from('materias_primas').select('estoque_atual,custo_unitario').eq('id',v.mp_id).single()
-        const estoqueAnt = parseFloat(mp?.estoque_atual)||0
-        const custoAnt = parseFloat(mp?.custo_unitario)||0
-        const novoEstoque = estoqueAnt + qtd
-        const novoCusto = novoEstoque > 0 ? (estoqueAnt*custoAnt + custo) / novoEstoque : custo/qtd
 
         await supabase.from('mp_compras').insert({
           materia_prima_id: v.mp_id,
@@ -221,19 +369,19 @@ function ModalImportarXML({ onClose, onSaved }) {
           fornecedor: nf.fornecedor || null,
           numero_nf: nf.numero || null,
           observacao: `${item.descricao} — importado via XML`,
+          ...camposEntrada(v.entrada),
         })
-        await supabase.from('materias_primas').update({
-          estoque_atual: novoEstoque,
-          custo_unitario: novoCusto,
-          atualizado_em: new Date().toISOString(),
-        }).eq('id', v.mp_id)
+        // Mesma regra de todos os outros lançamentos
+        await ajustarEstoqueCompra(v.mp_id, qtd)
+        await recalcularCustoMP(v.mp_id)
       }
       onSaved()
     } catch(e) { setErro('Erro ao salvar: ' + e.message) }
     setSaving(false)
   }
 
-  const itensVinculados = Object.values(vinculos).filter(v => v.mp_id).length
+  const itensVinculados = Object.values(vinculos).filter(vinculoValido).length
+  const itensIncompletos = Object.values(vinculos).filter(v => v.mp_id && !vinculoValido(v)).length
 
   return (
     <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
@@ -279,8 +427,9 @@ function ModalImportarXML({ onClose, onSaved }) {
 
               {nf.itens.map((item, idx) => (
                 <div key={idx} style={{
-                  border:'1px solid var(--gray-200)', borderRadius:8, padding:'12px 14px', marginBottom:10,
-                  background: vinculos[idx]?.mp_id ? '#f0faf0' : '#fff',
+                  border:`1px solid ${vinculos[idx]?.mp_id && !vinculoValido(vinculos[idx]) ? 'var(--warning)' : 'var(--gray-200)'}`,
+                  borderRadius:8, padding:'12px 14px', marginBottom:10,
+                  background: vinculoValido(vinculos[idx]) ? '#f0faf0' : vinculos[idx]?.mp_id ? '#fffbf0' : '#fff',
                 }}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
                     <div>
@@ -289,14 +438,11 @@ function ModalImportarXML({ onClose, onSaved }) {
                         {fmt(item.quantidade,3)} {item.unidade} · {fmtR(item.valor_unitario)}/un · Total: {fmtR(item.valor_total)}
                       </div>
                     </div>
-                    {vinculos[idx]?.mp_id && <span style={{color:'var(--ok)',fontSize:18}}>✓</span>}
+                    {vinculoValido(vinculos[idx]) && <span style={{color:'var(--ok)',fontSize:18}}>✓</span>}
                   </div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 120px 80px',gap:8,alignItems:'center'}}>
-                    <select className="form-input" value={vinculos[idx]?.mp_id||''} style={{fontSize:13}}
-                      onChange={e => {
-                        const mp = mps.find(m=>m.id===e.target.value)
-                        setVinculos(p=>({...p,[idx]:{...p[idx], mp_id:e.target.value, unidade: mp?.unidade||item.unidade}}))
-                      }}>
+                  <div>
+                    <select className="form-input" value={vinculos[idx]?.mp_id||''} style={{fontSize:13,marginBottom:8}}
+                      onChange={e => vincularMP(idx, e.target.value)}>
                       <option value="">— Ignorar este item —</option>
                       {['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros'].map(cat => {
                         const grupo = mps.filter(m=>m.categoria===cat)
@@ -304,20 +450,27 @@ function ModalImportarXML({ onClose, onSaved }) {
                         return <optgroup key={cat} label={cat}>{grupo.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}</optgroup>
                       })}
                     </select>
-                    <input type="number" className="form-input" placeholder="Qtd" style={{fontSize:13}}
-                      value={vinculos[idx]?.quantidade ?? item.quantidade}
-                      onChange={e=>setVinculos(p=>({...p,[idx]:{...p[idx],quantidade:e.target.value}}))}
-                    />
-                    <div style={{fontSize:12,color:'var(--gray-500)',textAlign:'center'}}>
-                      {vinculos[idx]?.unidade || item.unidade}
-                    </div>
+                    {vinculos[idx]?.mp_id && vinculos[idx]?.entrada && (
+                      <>
+                        <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:4}}>
+                          Na nota: <strong>{fmt(item.quantidade,3)} {item.unidade}</strong> — confirme como converter:
+                        </div>
+                        <EntradaQuantidade base={baseDe(vinculos[idx].mp_id)} valor={vinculos[idx].entrada} compacto
+                          onChange={en => setVinculos(p=>({...p,[idx]:{...p[idx], entrada: en}}))} />
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
 
-              {itensVinculados === 0 && (
+              {itensVinculados === 0 && itensIncompletos === 0 && (
                 <div style={{fontSize:12,color:'var(--warning)',fontStyle:'italic'}}>
                   ⚠️ Nenhum item vinculado ainda — vincule pelo menos um para salvar.
+                </div>
+              )}
+              {itensIncompletos > 0 && (
+                <div style={{fontSize:12,color:'var(--warning)',fontWeight:700}}>
+                  ⚠️ {itensIncompletos} item(ns) vinculado(s) sem conteúdo da embalagem — não serão salvos até completar.
                 </div>
               )}
             </>
@@ -430,18 +583,32 @@ function ModalMP({ mp, onClose, onSaved }) {
 
 // ── Modal compra ──────────────────────────────────────────────────────────────
 function ModalCompra({ mp, onClose, onSaved }) {
-  const [form, setForm] = useState({ quantidade:'', custo_total:'', data_compra: new Date().toISOString().slice(0,10), fornecedor: mp?.fornecedor||'', numero_nf:'', observacao:'' })
+  const [form, setForm] = useState({ custo_total:'', data_compra: new Date().toISOString().slice(0,10), fornecedor: mp?.fornecedor||'', numero_nf:'', observacao:'' })
+  const [entrada, setEntrada] = useState(entradaVazia(mp.unidade))
   const [saving, setSaving] = useState(false)
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
-  const custoUnit = form.quantidade && form.custo_total ? (parseFloat(form.custo_total)/parseFloat(form.quantidade)) : 0
+
+  // Usa a última forma de lançamento dessa MP como padrão
+  useEffect(() => {
+    ultimaEntradaMP(mp.id).then(u => {
+      if (u) setEntrada(e => ({ ...e, unidade: u.unidade_compra,
+        conteudo: u.conteudo_embalagem ? String(u.conteudo_embalagem) : '',
+        unidadeConteudo: u.unidade_conteudo || mp.unidade }))
+    })
+  }, [mp.id])
+
+  const qtdBase = converterParaBase(entrada, mp.unidade)
+  const custoTotal = parseFloat(form.custo_total) || 0
+  const custoUnit = qtdBase > 0 && custoTotal > 0 ? custoTotal / qtdBase : 0
+  const valido = entradaValida(entrada, mp.unidade) && custoTotal > 0
 
   async function salvar() {
-    if (!form.quantidade || !form.custo_total) return
+    if (!valido) return
     setSaving(true)
-    const qtd = parseFloat(form.quantidade)
-    const custo = parseFloat(form.custo_total)
+    const qtd = qtdBase
+    const custo = custoTotal
 
-    // Insere compra
+    // Insere compra — quantidade sempre na unidade base
     await supabase.from('mp_compras').insert({
       materia_prima_id: mp.id,
       quantidade: qtd,
@@ -450,6 +617,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
       fornecedor: form.fornecedor || null,
       numero_nf: form.numero_nf || null,
       observacao: form.observacao || null,
+      ...camposEntrada(entrada),
     })
 
     await ajustarEstoqueCompra(mp.id, qtd)
@@ -466,19 +634,20 @@ function ModalCompra({ mp, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">Quantidade ({mp.unidade}) *</label>
-              <input type="number" className="form-input" value={form.quantidade} onChange={e=>set('quantidade',e.target.value)} min={0} step={0.001} autoFocus />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Custo total (R$) *</label>
-              <input type="number" className="form-input" value={form.custo_total} onChange={e=>set('custo_total',e.target.value)} min={0} step={0.01} />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Quantidade comprada *</label>
+            <EntradaQuantidade base={mp.unidade} valor={entrada} onChange={setEntrada} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Custo total da compra (R$) *</label>
+            <input type="number" className="form-input" value={form.custo_total} onChange={e=>set('custo_total',e.target.value)} min={0} step={0.01} />
           </div>
           {custoUnit > 0 && (
             <div style={{padding:'8px 12px', background:'var(--purple-pale)', borderRadius:6, fontSize:13, marginBottom:12, color:'var(--purple)', fontWeight:700}}>
               Custo unitário: {fmtR(custoUnit)} / {mp.unidade}
+              {ehEmbalagem(entrada.unidade) && parseFloat(entrada.qtd) > 0 && (
+                <span style={{fontWeight:400, marginLeft:8}}>· {fmtR(custoTotal/parseFloat(entrada.qtd))} por {entrada.unidade}</span>
+              )}
             </div>
           )}
           <div className="form-grid-2">
@@ -498,7 +667,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={saving||!form.quantidade||!form.custo_total}>
+          <button className="btn btn-primary" onClick={salvar} disabled={saving||!valido}>
             {saving ? <RefreshCw size={14} className="spin"/> : <Save size={14}/>} Registrar
           </button>
         </div>
@@ -711,7 +880,7 @@ function DashMP() {
 
 // ── Modal compra avulsa (sem XML) ─────────────────────────────────────────────
 function ModalCompraAvulsa({ mps, onClose, onSaved }) {
-  const [itens, setItens] = useState([{ mp_id:'', quantidade:'', custo_total:'' }])
+  const [itens, setItens] = useState([{ mp_id:'', entrada: entradaVazia('g'), custo_total:'' }])
   const [form, setForm] = useState({
     data_compra: new Date().toISOString().slice(0,10),
     fornecedor: '',
@@ -721,19 +890,34 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
   const setItem = (idx,k,v) => setItens(p=>p.map((it,i)=>i===idx?{...it,[k]:v}:it))
-  const addItem = () => setItens(p=>[...p,{mp_id:'',quantidade:'',custo_total:''}])
+  const addItem = () => setItens(p=>[...p,{mp_id:'',entrada:entradaVazia('g'),custo_total:''}])
   const remItem = (idx) => setItens(p=>p.filter((_,i)=>i!==idx))
 
+  // Ao escolher a MP, ajusta a unidade base e sugere a última forma de lançamento
+  async function escolherMP(idx, mpId) {
+    const mp = mps.find(m=>m.id===mpId)
+    const base = mp?.unidade || 'g'
+    setItem(idx, 'mp_id', mpId)
+    setItem(idx, 'entrada', entradaVazia(base))
+    const u = await ultimaEntradaMP(mpId)
+    if (u) setItens(p=>p.map((it,i)=>i===idx && it.mp_id===mpId ? {...it, entrada:{
+      ...it.entrada, unidade:u.unidade_compra,
+      conteudo:u.conteudo_embalagem ? String(u.conteudo_embalagem) : '',
+      unidadeConteudo:u.unidade_conteudo || base }} : it))
+  }
+
+  const baseDe = it => mps.find(m=>m.id===it.mp_id)?.unidade || 'g'
+  const itemValido = it => it.mp_id && entradaValida(it.entrada, baseDe(it)) && parseFloat(it.custo_total) > 0
   const totalGeral = itens.reduce((s,it)=>s+(parseFloat(it.custo_total)||0),0)
 
   async function salvar() {
-    const validos = itens.filter(it=>it.mp_id&&it.quantidade&&it.custo_total)
+    const validos = itens.filter(itemValido)
     if (!validos.length) return
     setSaving(true)
     for (const it of validos) {
-      const qtd = parseFloat(it.quantidade)
+      const qtd = converterParaBase(it.entrada, baseDe(it))
       const custo = parseFloat(it.custo_total)
-      // Insere compra primeiro
+      // Insere compra — quantidade sempre na unidade base
       await supabase.from('mp_compras').insert({
         materia_prima_id: it.mp_id,
         quantidade: qtd,
@@ -742,6 +926,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         fornecedor: form.fornecedor||null,
         numero_nf: form.numero_nf||null,
         observacao: form.observacao||null,
+        ...camposEntrada(it.entrada),
       })
       await ajustarEstoqueCompra(it.mp_id, qtd)
       await recalcularCustoMP(it.mp_id)
@@ -784,12 +969,13 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
           <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>Itens da compra</div>
           {itens.map((it,idx)=>{
             const mp = mps.find(m=>m.id===it.mp_id)
-            const custoUnit = it.quantidade&&it.custo_total ? parseFloat(it.custo_total)/parseFloat(it.quantidade) : null
+            const qBase = mp ? converterParaBase(it.entrada, mp.unidade) : 0
+            const custoUnit = qBase>0 && parseFloat(it.custo_total)>0 ? parseFloat(it.custo_total)/qBase : null
             return (
               <div key={idx} style={{border:'1px solid var(--gray-200)',borderRadius:8,padding:'12px 14px',marginBottom:8}}>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 100px 110px auto',gap:8,alignItems:'start'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'start',marginBottom:8}}>
                   <div>
-                    <select className="form-input" value={it.mp_id} onChange={e=>setItem(idx,'mp_id',e.target.value)} style={{fontSize:13}}>
+                    <select className="form-input" value={it.mp_id} onChange={e=>escolherMP(idx,e.target.value)} style={{fontSize:13}}>
                       <option value="">Selecione o insumo...</option>
                       {CATEGORIAS.map(cat=>{
                         const grupo = mps.filter(m=>m.categoria===cat)
@@ -798,22 +984,26 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
                       })}
                     </select>
                   </div>
-                  <div>
-                    <input type="number" className="form-input" placeholder={`Qtd${mp?` (${mp.unidade})`:''}`}
-                      value={it.quantidade} onChange={e=>setItem(idx,'quantidade',e.target.value)}
-                      min={0} step={0.001} style={{fontSize:13}} />
-                  </div>
-                  <div>
-                    <input type="number" className="form-input" placeholder="Custo total R$"
-                      value={it.custo_total} onChange={e=>setItem(idx,'custo_total',e.target.value)}
-                      min={0} step={0.01} style={{fontSize:13}} />
-                  </div>
                   <button className="btn btn-ghost btn-sm" onClick={()=>remItem(idx)}
                     style={{color:'var(--danger)',marginTop:2}} disabled={itens.length===1}>✕</button>
                 </div>
+                {mp ? (
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 140px',gap:8,alignItems:'start'}}>
+                    <EntradaQuantidade base={mp.unidade} valor={it.entrada} compacto
+                      onChange={v=>setItem(idx,'entrada',v)} />
+                    <input type="number" className="form-input" placeholder="Custo total R$"
+                      value={it.custo_total} onChange={e=>setItem(idx,'custo_total',e.target.value)}
+                      min={0} step={0.01} style={{fontSize:13,textAlign:'right'}} />
+                  </div>
+                ) : (
+                  <div style={{fontSize:12,color:'var(--gray-400)'}}>Escolha o insumo para informar quantidade e custo</div>
+                )}
                 {custoUnit!==null && (
                   <div style={{fontSize:11,color:'var(--purple)',fontWeight:700,marginTop:4}}>
-                    → {fmtR(custoUnit)}/{mp?.unidade||'un'} por unidade
+                    → {fmtR(custoUnit)}/{mp?.unidade}
+                    {ehEmbalagem(it.entrada.unidade) && parseFloat(it.entrada.qtd)>0 && (
+                      <span style={{fontWeight:400}}> · {fmtR(parseFloat(it.custo_total)/parseFloat(it.entrada.qtd))} por {it.entrada.unidade}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -831,7 +1021,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn btn-primary" onClick={salvar}
-            disabled={saving||!itens.some(it=>it.mp_id&&it.quantidade&&it.custo_total)}>
+            disabled={saving||!itens.some(itemValido)}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Registrar compra</>}
           </button>
         </div>
@@ -842,9 +1032,16 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
 
 // ── Modal editar compra ───────────────────────────────────────────────────────
 function ModalEditarCompra({ compra, onClose, onSaved }) {
+  const baseOrig = compra.materias_primas?.unidade || 'g'
+  // Reabre a compra na mesma forma em que foi lançada; sem registro, usa a unidade base
+  const [entrada, setEntrada] = useState(compra.unidade_compra ? {
+    qtd: String(compra.qtd_compra ?? ''),
+    unidade: compra.unidade_compra,
+    conteudo: compra.conteudo_embalagem ? String(compra.conteudo_embalagem) : '',
+    unidadeConteudo: compra.unidade_conteudo || baseOrig,
+  } : { qtd: String(compra.quantidade), unidade: baseOrig, conteudo: '', unidadeConteudo: baseOrig })
   const [form, setForm] = useState({
     materia_prima_id: compra.materia_prima_id,
-    quantidade: String(compra.quantidade),
     custo_total: String(compra.custo_total),
     data_compra: compra.data_compra,
     fornecedor: compra.fornecedor || '',
@@ -864,19 +1061,31 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 
   const mpAntigo = compra.materia_prima_id
   const mpNovo = form.materia_prima_id
+
+  useEffect(() => {
+    const b = mpsLista.find(m => m.id === mpNovo)?.unidade
+    if (!b) return
+    setEntrada(e => {
+      const unidadeCompat = ehEmbalagem(e.unidade) || DIMENSAO[e.unidade] === DIMENSAO[b]
+      const contCompat = !ehEmbalagem(e.unidade) || DIMENSAO[e.unidadeConteudo] === DIMENSAO[b]
+      return unidadeCompat && contCompat ? e : entradaVazia(b)
+    })
+  }, [mpNovo, mpsLista])
   const trocouProduto = mpNovo !== mpAntigo
   const mpNovoInfo = mpsLista.find(m => m.id === mpNovo)
   const unidade = mpNovoInfo?.unidade || compra.materias_primas?.unidade
 
   const qtdAnterior = parseFloat(compra.quantidade)||0
-  const qtdNova = parseFloat(form.quantidade)||0
+  const baseNova = mpNovoInfo?.unidade || baseOrig
+  const qtdNova = converterParaBase(entrada, baseNova)
+  const entradaOk = entradaValida(entrada, baseNova)
   const custoNovo = parseFloat(form.custo_total)||0
   const custoUnit = qtdNova > 0 ? custoNovo/qtdNova : 0
   const custoUnitAntigo = qtdAnterior > 0 ? (parseFloat(compra.custo_total)||0)/qtdAnterior : 0
   const diffQtd = qtdNova - qtdAnterior
 
   async function salvar() {
-    if (!form.quantidade || !form.custo_total || !mpNovo) return
+    if (!entradaOk || !form.custo_total || !mpNovo) return
     setSaving(true); setErro('')
     try {
       // 1) Atualiza o lançamento primeiro — o recálculo de preço lê mp_compras
@@ -884,6 +1093,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
         materia_prima_id: mpNovo,
         quantidade: qtdNova,
         custo_total: custoNovo,
+        ...camposEntrada(entrada),
         data_compra: form.data_compra,
         fornecedor: form.fornecedor || null,
         numero_nf: form.numero_nf || null,
@@ -942,7 +1152,9 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
           {/* Resumo do lançamento original */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
             {[
-              ['Quantidade', `${fmt(qtdAnterior,1)} ${compra.materias_primas?.unidade||''}`],
+              ['Quantidade', descreverEntrada(compra, baseOrig)
+                ? `${descreverEntrada(compra, baseOrig)} = ${fmt(qtdAnterior,0)} ${baseOrig}`
+                : `${fmt(qtdAnterior,1)} ${baseOrig}`],
               ['Custo total', fmtR(parseFloat(compra.custo_total)||0)],
               ['Custo unitário', `${fmtR(custoUnitAntigo)}/${compra.materias_primas?.unidade||''}`],
             ].map(([l,v]) => (
@@ -984,17 +1196,14 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
             </div>
           )}
 
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">Quantidade ({unidade}) *</label>
-              <input type="number" className="form-input" value={form.quantidade}
-                onChange={e=>set('quantidade',e.target.value)} min={0} step={0.001}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Custo total (R$) *</label>
-              <input type="number" className="form-input" value={form.custo_total}
-                onChange={e=>set('custo_total',e.target.value)} min={0} step={0.01}/>
-            </div>
+          <div className="form-group">
+            <label className="form-label">Quantidade comprada *</label>
+            <EntradaQuantidade base={baseNova} valor={entrada} onChange={setEntrada} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Custo total (R$) *</label>
+            <input type="number" className="form-input" value={form.custo_total}
+              onChange={e=>set('custo_total',e.target.value)} min={0} step={0.01}/>
           </div>
           {custoUnit > 0 && (
             <div style={{padding:'8px 12px',background:'var(--purple-pale)',borderRadius:6,fontSize:13,marginBottom:12,color:'var(--purple)',fontWeight:700}}>
@@ -1038,7 +1247,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
             style={{color:'var(--danger)',marginRight:'auto'}}>Excluir compra</button>
           <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
           <button className="btn btn-primary" onClick={salvar}
-            disabled={saving||!form.quantidade||!form.custo_total||!form.materia_prima_id}>
+            disabled={saving||!entradaOk||!form.custo_total||!form.materia_prima_id}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Salvar alterações</>}
           </button>
         </div>
@@ -1125,7 +1334,14 @@ function HistoricoCompras() {
                       <div style={{fontSize:11,color:'var(--gray-400)'}}>{c.materias_primas?.categoria}</div>
                     </td>
                     <td style={{padding:'9px 10px',color:'var(--gray-500)',fontSize:12}}>{c.fornecedor||'—'}</td>
-                    <td style={{padding:'9px 10px',textAlign:'right'}}>{fmt(c.quantidade,1)} {c.materias_primas?.unidade}</td>
+                    <td style={{padding:'9px 10px',textAlign:'right'}}>
+                      {fmt(c.quantidade,1)} {c.materias_primas?.unidade}
+                      {descreverEntrada(c, c.materias_primas?.unidade) && (
+                        <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                          {descreverEntrada(c, c.materias_primas?.unidade)}
+                        </div>
+                      )}
+                    </td>
                     <td style={{padding:'9px 10px',textAlign:'right',color:'var(--gray-600)',fontSize:12}}>{fmtR(c.custo_unitario)}/{c.materias_primas?.unidade}</td>
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>{fmtR(c.custo_total)}</td>
                     <td style={{padding:'9px 10px',fontSize:12,color:'var(--gray-400)'}}>{c.numero_nf||'—'}</td>
