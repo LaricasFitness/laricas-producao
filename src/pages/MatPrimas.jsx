@@ -11,6 +11,59 @@ const UNIDADES = ['g','ml','kg','l','un']
 function fmt(n, dec=2) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:dec,maximumFractionDigits:dec}) }
 function fmtR(n) { return `R$ ${fmt(n,2)}` }
 
+// ═══════════════════════════════════════════════════════════════
+// Fonte única de verdade para os valores derivados de uma compra.
+// Toda inclusão, edição, troca de produto ou exclusão passa por aqui.
+// ═══════════════════════════════════════════════════════════════
+
+// Preço médio da MP: média ponderada dos últimos 30 dias; sem compra
+// na janela, média de todo o histórico. Nunca grava zero.
+async function recalcularCustoMP(mpId) {
+  if (!mpId) return null
+  const soma = rows => rows.reduce((a, r) => ({
+    q: a.q + (parseFloat(r.quantidade) || 0),
+    c: a.c + (parseFloat(r.custo_total) || 0),
+  }), { q: 0, c: 0 })
+
+  const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
+  const { data: rec } = await supabase.from('mp_compras')
+    .select('quantidade, custo_total').eq('materia_prima_id', mpId)
+    .gte('data_compra', desde30.toISOString().slice(0, 10))
+  let t = soma(rec || [])
+
+  if (t.q <= 0) {
+    const { data: todas } = await supabase.from('mp_compras')
+      .select('quantidade, custo_total').eq('materia_prima_id', mpId)
+    t = soma(todas || [])
+  }
+
+  const preco = t.q > 0 ? t.c / t.q : null
+  if (preco && preco > 0) {
+    await supabase.from('materias_primas')
+      .update({ custo_unitario: preco, atualizado_em: new Date().toISOString() })
+      .eq('id', mpId)
+  }
+  return preco
+}
+
+// Soma (ou subtrai) quantidade no estoque da MP
+async function ajustarEstoqueCompra(mpId, delta) {
+  if (!mpId || !delta) return
+  const { data: mp } = await supabase.from('materias_primas')
+    .select('estoque_atual').eq('id', mpId).single()
+  const novo = Math.max(0, (parseFloat(mp?.estoque_atual) || 0) + delta)
+  await supabase.from('materias_primas')
+    .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
+    .eq('id', mpId)
+}
+
+// Exclui uma compra revertendo estoque e recalculando o preço
+async function excluirCompraMP(compra) {
+  await supabase.from('mp_compras').delete().eq('id', compra.id)
+  await ajustarEstoqueCompra(compra.materia_prima_id, -(parseFloat(compra.quantidade) || 0))
+  await recalcularCustoMP(compra.materia_prima_id)
+}
+
 function gerarPDFSituacao(lista, filtrada, totalValor) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo' })
@@ -399,27 +452,8 @@ function ModalCompra({ mp, onClose, onSaved }) {
       observacao: form.observacao || null,
     })
 
-    // Recalcula preço médio dos últimos 30 dias (incluindo a compra recém inserida)
-    const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
-    const { data: compras30 } = await supabase
-      .from('mp_compras')
-      .select('quantidade, custo_total')
-      .eq('materia_prima_id', mp.id)
-      .gte('data_compra', desde30.toISOString().slice(0,10))
-    const totalQtd30 = (compras30||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
-    const totalCusto30 = (compras30||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
-    const novoCusto = totalQtd30 > 0 ? totalCusto30 / totalQtd30 : custo / qtd
-
-    // Atualiza estoque
-    const { data: atual } = await supabase.from('materias_primas').select('estoque_atual').eq('id', mp.id).single()
-    const estoqueAnt = parseFloat(atual?.estoque_atual)||0
-    const novoEstoque = estoqueAnt + qtd
-
-    await supabase.from('materias_primas').update({
-      estoque_atual: novoEstoque,
-      custo_unitario: novoCusto,
-      atualizado_em: new Date().toISOString(),
-    }).eq('id', mp.id)
+    await ajustarEstoqueCompra(mp.id, qtd)
+    await recalcularCustoMP(mp.id)
     setSaving(false)
     onSaved()
   }
@@ -696,8 +730,6 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
     const validos = itens.filter(it=>it.mp_id&&it.quantidade&&it.custo_total)
     if (!validos.length) return
     setSaving(true)
-    const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
-    const desde30str = desde30.toISOString().slice(0,10)
     for (const it of validos) {
       const qtd = parseFloat(it.quantidade)
       const custo = parseFloat(it.custo_total)
@@ -711,20 +743,8 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         numero_nf: form.numero_nf||null,
         observacao: form.observacao||null,
       })
-      // Recalcula preço médio últimos 30 dias
-      const { data: compras30 } = await supabase.from('mp_compras')
-        .select('quantidade, custo_total').eq('materia_prima_id', it.mp_id).gte('data_compra', desde30str)
-      const tot30Qtd = (compras30||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
-      const tot30Custo = (compras30||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
-      const novoCusto = tot30Qtd > 0 ? tot30Custo / tot30Qtd : custo / qtd
-      // Atualiza estoque
-      const { data: mp } = await supabase.from('materias_primas').select('estoque_atual').eq('id',it.mp_id).single()
-      const novoEstoque = (parseFloat(mp?.estoque_atual)||0) + qtd
-      await supabase.from('materias_primas').update({
-        estoque_atual: novoEstoque,
-        custo_unitario: novoCusto,
-        atualizado_em: new Date().toISOString(),
-      }).eq('id',it.mp_id)
+      await ajustarEstoqueCompra(it.mp_id, qtd)
+      await recalcularCustoMP(it.mp_id)
     }
     setSaving(false)
     onSaved()
@@ -823,6 +843,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
 // ── Modal editar compra ───────────────────────────────────────────────────────
 function ModalEditarCompra({ compra, onClose, onSaved }) {
   const [form, setForm] = useState({
+    materia_prima_id: compra.materia_prima_id,
     quantidade: String(compra.quantidade),
     custo_total: String(compra.custo_total),
     data_compra: compra.data_compra,
@@ -830,81 +851,144 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
     numero_nf: compra.numero_nf || '',
     observacao: compra.observacao || '',
   })
+  const [mpsLista, setMpsLista] = useState([])
   const [saving, setSaving] = useState(false)
+  const [erro, setErro] = useState('')
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
 
+  useEffect(() => {
+    supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario')
+      .eq('ativo', true).order('categoria').order('nome')
+      .then(({ data }) => setMpsLista(data || []))
+  }, [])
+
+  const mpAntigo = compra.materia_prima_id
+  const mpNovo = form.materia_prima_id
+  const trocouProduto = mpNovo !== mpAntigo
+  const mpNovoInfo = mpsLista.find(m => m.id === mpNovo)
+  const unidade = mpNovoInfo?.unidade || compra.materias_primas?.unidade
+
   const qtdAnterior = parseFloat(compra.quantidade)||0
-  const custoAnterior = parseFloat(compra.custo_total)||0
   const qtdNova = parseFloat(form.quantidade)||0
   const custoNovo = parseFloat(form.custo_total)||0
   const custoUnit = qtdNova > 0 ? custoNovo/qtdNova : 0
+  const custoUnitAntigo = qtdAnterior > 0 ? (parseFloat(compra.custo_total)||0)/qtdAnterior : 0
   const diffQtd = qtdNova - qtdAnterior
 
   async function salvar() {
-    if (!form.quantidade || !form.custo_total) return
-    setSaving(true)
+    if (!form.quantidade || !form.custo_total || !mpNovo) return
+    setSaving(true); setErro('')
+    try {
+      // 1) Atualiza o lançamento primeiro — o recálculo de preço lê mp_compras
+      const { error } = await supabase.from('mp_compras').update({
+        materia_prima_id: mpNovo,
+        quantidade: qtdNova,
+        custo_total: custoNovo,
+        data_compra: form.data_compra,
+        fornecedor: form.fornecedor || null,
+        numero_nf: form.numero_nf || null,
+        observacao: form.observacao || null,
+      }).eq('id', compra.id)
+      if (error) throw error
 
-    // Atualiza o registro da compra
-    await supabase.from('mp_compras').update({
-      quantidade: qtdNova,
-      custo_total: custoNovo,
-      data_compra: form.data_compra,
-      fornecedor: form.fornecedor || null,
-      numero_nf: form.numero_nf || null,
-      observacao: form.observacao || null,
-    }).eq('id', compra.id)
+      // 2) Estoque.
+      //    Mesma MP: aplica só a diferença, num passo. Dois passos quebram
+      //    quando parte da MP já foi consumida — o piso em zero do primeiro
+      //    passo descarta estoque e o segundo não o recupera.
+      //    Troca de MP: cada uma recebe seu próprio ajuste.
+      if (trocouProduto) {
+        await ajustarEstoqueCompra(mpAntigo, -qtdAnterior)
+        await ajustarEstoqueCompra(mpNovo, qtdNova)
+      } else {
+        await ajustarEstoqueCompra(mpAntigo, qtdNova - qtdAnterior)
+      }
 
-    // Recalcula preço médio ponderado dos últimos 30 dias
-    const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
-    const { data: compras30 } = await supabase
-      .from('mp_compras')
-      .select('quantidade, custo_total')
-      .eq('materia_prima_id', compra.materia_prima_id)
-      .gte('data_compra', desde30.toISOString().slice(0,10))
+      // 3) Preço médio das duas MPs afetadas
+      await recalcularCustoMP(mpAntigo)
+      if (trocouProduto) await recalcularCustoMP(mpNovo)
 
-    const totalQtd = (compras30||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
-    const totalCusto = (compras30||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
-    // Sem compra na janela de 30 dias, cai para a média de todo o histórico.
-    // Nunca zera o preço — zerar apagaria o custo da MP em todas as fichas.
-    let novoCustoUnit = totalQtd > 0 ? totalCusto / totalQtd : null
-    if (novoCustoUnit === null) {
-      const { data: todas } = await supabase.from('mp_compras')
-        .select('quantidade, custo_total').eq('materia_prima_id', compra.materia_prima_id)
-      const tQtd = (todas||[]).reduce((s,c) => s + parseFloat(c.quantidade||0), 0)
-      const tCusto = (todas||[]).reduce((s,c) => s + parseFloat(c.custo_total||0), 0)
-      novoCustoUnit = tQtd > 0 ? tCusto / tQtd : null
+      setSaving(false)
+      onSaved()
+    } catch (e) {
+      setErro('Erro ao salvar: ' + (e.message || e)); setSaving(false)
     }
+  }
 
-    // Estoque: reverte anterior e aplica novo
-    const { data: mp } = await supabase.from('materias_primas')
-      .select('estoque_atual').eq('id', compra.materia_prima_id).single()
-    const estoqueAtual = parseFloat(mp?.estoque_atual)||0
-    const novoEstoque = Math.max(0, estoqueAtual - qtdAnterior + qtdNova)
-
-    const updMP = { estoque_atual: novoEstoque, atualizado_em: new Date().toISOString() }
-    if (novoCustoUnit !== null && novoCustoUnit > 0) updMP.custo_unitario = novoCustoUnit
-    await supabase.from('materias_primas').update(updMP).eq('id', compra.materia_prima_id)
-
+  async function excluir() {
+    if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO estoque e o preço médio serão recalculados.`)) return
+    setSaving(true)
+    await excluirCompraMP(compra)
     setSaving(false)
     onSaved()
   }
 
+  const CATS_ORDEM = [...new Set(mpsLista.map(m => m.categoria).filter(Boolean))]
+
   return (
-    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal" style={{maxWidth:460}}>
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&!saving&&onClose()}>
+      <div className="modal" style={{maxWidth:520,maxHeight:'92vh',overflowY:'auto'}}>
         <div className="modal-header">
           <div>
-            <div className="modal-title">✏️ Editar Compra</div>
-            <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>{compra.materias_primas?.nome}</div>
+            <div className="modal-title">🧾 Compra de insumo</div>
+            <div style={{fontSize:12,color:'var(--gray-400)',marginTop:2}}>
+              {new Date(compra.data_compra+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'long',year:'numeric'})}
+              {compra.criado_em && ` · lançada em ${new Date(compra.criado_em).toLocaleDateString('pt-BR')}`}
+            </div>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={saving}>✕</button>
         </div>
         <div className="modal-body">
+
+          {/* Resumo do lançamento original */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
+            {[
+              ['Quantidade', `${fmt(qtdAnterior,1)} ${compra.materias_primas?.unidade||''}`],
+              ['Custo total', fmtR(parseFloat(compra.custo_total)||0)],
+              ['Custo unitário', `${fmtR(custoUnitAntigo)}/${compra.materias_primas?.unidade||''}`],
+            ].map(([l,v]) => (
+              <div key={l} style={{padding:'8px 10px',background:'var(--gray-50)',borderRadius:6}}>
+                <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>{l}</div>
+                <div style={{fontSize:13,fontWeight:800,marginTop:2}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Matéria-prima *</label>
+            <select className="form-input" value={form.materia_prima_id}
+              onChange={e=>set('materia_prima_id',e.target.value)}
+              style={{borderColor: trocouProduto ? 'var(--warning)' : undefined}}>
+              {CATS_ORDEM.map(cat => (
+                <optgroup key={cat} label={cat}>
+                  {mpsLista.filter(m=>m.categoria===cat).map(m =>
+                    <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
+                </optgroup>
+              ))}
+              {!mpsLista.some(m=>m.id===mpAntigo) && (
+                <option value={mpAntigo}>{compra.materias_primas?.nome} (inativa)</option>
+              )}
+            </select>
+          </div>
+
+          {trocouProduto && (
+            <div style={{padding:'10px 12px',background:'#fff8f0',border:'1px solid var(--warning)',
+              borderRadius:6,fontSize:12,color:'var(--gray-600)',marginBottom:12,lineHeight:1.6}}>
+              <div style={{fontWeight:800,color:'var(--warning)',marginBottom:2}}>Troca de produto</div>
+              <div>• <strong>{compra.materias_primas?.nome}</strong>: sai {fmt(qtdAnterior,1)} {compra.materias_primas?.unidade} do estoque e o preço médio é recalculado sem esta compra.</div>
+              <div>• <strong>{mpNovoInfo?.nome}</strong>: entra {fmt(qtdNova,1)} {unidade} no estoque e o preço médio passa a considerar esta compra.</div>
+              {mpNovoInfo && compra.materias_primas?.unidade && mpNovoInfo.unidade !== compra.materias_primas.unidade && (
+                <div style={{marginTop:4,color:'var(--danger)',fontWeight:700}}>
+                  ⚠️ As unidades são diferentes ({compra.materias_primas.unidade} → {mpNovoInfo.unidade}). Confira a quantidade.
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">Quantidade ({compra.materias_primas?.unidade}) *</label>
+              <label className="form-label">Quantidade ({unidade}) *</label>
               <input type="number" className="form-input" value={form.quantidade}
-                onChange={e=>set('quantidade',e.target.value)} min={0} step={0.001} autoFocus/>
+                onChange={e=>set('quantidade',e.target.value)} min={0} step={0.001}/>
             </div>
             <div className="form-group">
               <label className="form-label">Custo total (R$) *</label>
@@ -914,10 +998,10 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
           </div>
           {custoUnit > 0 && (
             <div style={{padding:'8px 12px',background:'var(--purple-pale)',borderRadius:6,fontSize:13,marginBottom:12,color:'var(--purple)',fontWeight:700}}>
-              Custo unitário: {fmtR(custoUnit)}/{compra.materias_primas?.unidade}
-              {diffQtd !== 0 && (
+              Custo unitário: {fmtR(custoUnit)}/{unidade}
+              {!trocouProduto && diffQtd !== 0 && (
                 <span style={{marginLeft:12,color:diffQtd>0?'var(--ok)':'var(--danger)',fontWeight:700}}>
-                  {diffQtd>0?'+':''}{fmt(diffQtd,1)} {compra.materias_primas?.unidade} no estoque
+                  {diffQtd>0?'+':''}{fmt(diffQtd,1)} {unidade} no estoque
                 </span>
               )}
             </div>
@@ -944,11 +1028,17 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
             <input className="form-input" value={form.observacao}
               onChange={e=>set('observacao',e.target.value)}/>
           </div>
+          {erro && (
+            <div style={{padding:'8px 12px',background:'#fff0f0',border:'1px solid var(--danger)',
+              borderRadius:6,fontSize:12,color:'var(--danger)'}}>{erro}</div>
+          )}
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-ghost btn-sm" onClick={excluir} disabled={saving}
+            style={{color:'var(--danger)',marginRight:'auto'}}>Excluir compra</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
           <button className="btn btn-primary" onClick={salvar}
-            disabled={saving||!form.quantidade||!form.custo_total}>
+            disabled={saving||!form.quantidade||!form.custo_total||!form.materia_prima_id}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Salvar alterações</>}
           </button>
         </div>
@@ -986,40 +1076,8 @@ function HistoricoCompras() {
   useEffect(()=>{ load() },[mes])
 
   async function excluirCompra(c) {
-    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO estoque será revertido automaticamente.`)) return
-
-    // Remove compra primeiro
-    await supabase.from('mp_compras').delete().eq('id', c.id)
-
-    // Recalcula preço médio dos últimos 30 dias com compras restantes
-    const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
-    const { data: compras30 } = await supabase
-      .from('mp_compras')
-      .select('quantidade, custo_total')
-      .eq('materia_prima_id', c.materia_prima_id)
-      .gte('data_compra', desde30.toISOString().slice(0,10))
-
-    const totalQtd = (compras30||[]).reduce((s,r) => s + parseFloat(r.quantidade||0), 0)
-    const totalCusto = (compras30||[]).reduce((s,r) => s + parseFloat(r.custo_total||0), 0)
-    // Sem compra recente, usa a média de todo o histórico. Nunca zera.
-    let novoCusto = totalQtd > 0 ? totalCusto / totalQtd : null
-    if (novoCusto === null) {
-      const { data: todas } = await supabase.from('mp_compras')
-        .select('quantidade, custo_total').eq('materia_prima_id', c.materia_prima_id)
-      const tQtd = (todas||[]).reduce((s,r) => s + parseFloat(r.quantidade||0), 0)
-      const tCusto = (todas||[]).reduce((s,r) => s + parseFloat(r.custo_total||0), 0)
-      novoCusto = tQtd > 0 ? tCusto / tQtd : null
-    }
-
-    // Reverte estoque
-    const { data: mp } = await supabase.from('materias_primas').select('estoque_atual').eq('id', c.materia_prima_id).single()
-    const estoqueAtual = parseFloat(mp?.estoque_atual)||0
-    const novoEstoque = Math.max(0, estoqueAtual - parseFloat(c.quantidade))
-
-    const updExc = { estoque_atual: novoEstoque, atualizado_em: new Date().toISOString() }
-    if (novoCusto !== null && novoCusto > 0) updExc.custo_unitario = novoCusto
-    await supabase.from('materias_primas').update(updExc).eq('id', c.materia_prima_id)
-
+    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO estoque e o preço médio serão recalculados.`)) return
+    await excluirCompraMP(c)
     load()
   }
 
@@ -1136,6 +1194,7 @@ function EvolucaoPrecos() {
   const [mpSel, setMpSel] = useState('todas')
   const [catFiltro, setCatFiltro] = useState('Todas')
   const [alertasOnly, setAlertasOnly] = useState(false)
+  const [compraSel, setCompraSel] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -1220,6 +1279,11 @@ function EvolucaoPrecos() {
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {compraSel && (
+        <ModalEditarCompra compra={compraSel}
+          onClose={() => setCompraSel(null)}
+          onSaved={() => { setCompraSel(null); load() }} />
+      )}
       {/* KPIs */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
         {[
@@ -1316,6 +1380,9 @@ function EvolucaoPrecos() {
                 <div style={{padding:'12px 20px'}}>
                   <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',marginBottom:10}}>
                     Histórico de compras ({hist.length} registros)
+                    <span style={{textTransform:'none',fontWeight:400,marginLeft:6,color:'var(--gray-300)'}}>
+                      · clique numa barra para ver detalhes e editar
+                    </span>
                   </div>
                   <div style={{display:'flex',gap:6,alignItems:'flex-end',overflowX:'auto',paddingBottom:4}}>
                     {hist.map((c,i) => {
@@ -1325,7 +1392,12 @@ function EvolucaoPrecos() {
                       const corBarra = f ? FAIXA[f].cor : 'var(--purple)'
                       const isUlt = i === hist.length-1
                       return (
-                        <div key={c.id} style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:52,flex:'0 0 52px'}}>
+                        <div key={c.id} onClick={() => setCompraSel(c)}
+                          title={`${new Date(c.data_compra+'T12:00:00').toLocaleDateString('pt-BR')} · ${fmt(c.quantidade,1)} ${mp.unidade} · ${fmtR(c.custo_total)}${c.fornecedor ? ' · ' + c.fornecedor : ''}\nClique para ver detalhes e editar`}
+                          style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:52,flex:'0 0 52px',
+                            cursor:'pointer',borderRadius:6,padding:'2px 0',transition:'background .15s'}}
+                          onMouseEnter={e => e.currentTarget.style.background = 'var(--purple-pale)'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                           <div style={{fontSize:9,color:'var(--gray-500)',marginBottom:2,fontWeight:isUlt?700:400}}>
                             {fmtR(custo)}
                           </div>
