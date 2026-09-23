@@ -190,6 +190,34 @@ function usePrecificacao() {
       calcCusto(prep.id, true, new Set(), custoPrepPorGReal)
     }
 
+    // Quanto de cada MP entra em 1g de uma preparação — resolve sub-preparações.
+    // Garante que a soma por matéria-prima feche com a soma por preparação.
+    const mpCache = {}
+    function mpPorG(prepId, vis = new Set()) {
+      if (mpCache[prepId]) return mpCache[prepId]
+      if (vis.has(prepId)) return {}
+      const v = new Set([...vis, prepId])
+      const prep = prepMap[prepId]; if (!prep) return {}
+      const ings = (prepComps||[]).filter(x => x.preparacao_id === prepId)
+      const real = parseFloat(prep.rendimento_real_medio) || null
+      const rendLiq = real ? real
+        : (parseFloat(prep.rendimento_estimado)||1) * (1 - (parseFloat(prep.perda_percentual)||0)/100)
+      const acc = {}
+      for (const ing of ings) {
+        const q = parseFloat(ing.quantidade) || 0
+        if (ing.sub_preparacao_id) {
+          const sub = mpPorG(ing.sub_preparacao_id, v)
+          for (const [mpId, g] of Object.entries(sub)) acc[mpId] = (acc[mpId]||0) + g * q
+        } else if (ing.materia_prima_id) {
+          acc[ing.materia_prima_id] = (acc[ing.materia_prima_id]||0) + q
+        }
+      }
+      const out = {}
+      if (rendLiq > 0) for (const [mpId, g] of Object.entries(acc)) out[mpId] = g / rendLiq
+      mpCache[prepId] = out
+      return out
+    }
+
     // Produto acabado = rótulo OU embalagem com ficha técnica (ex: latas)
     const skusComFicha = new Set((prodComps||[]).map(p => p.sku_produto))
     const embsProduto = (embs||[]).filter(e => e.tipo === 'rotulo' || skusComFicha.has(e.codigo))
@@ -252,6 +280,22 @@ function usePrecificacao() {
         }
       }).filter(Boolean)
 
+      // Matéria-prima consolidada do produto acabado (sub-preparações resolvidas)
+      const porMPProduto = {}
+      for (const comp of comps) {
+        const gramas = parseFloat(comp.quantidade_por_unidade) || 0
+        for (const [mpId, gPorG] of Object.entries(mpPorG(comp.preparacao_id))) {
+          const g = gPorG * gramas
+          const mp = mpMap[mpId]
+          if (!porMPProduto[mpId]) porMPProduto[mpId] = {
+            nome: mp?.nome || '?', unidade: mp?.unidade, mpId, qtd: 0, custo: 0, preps: new Set() }
+          porMPProduto[mpId].qtd += g
+          porMPProduto[mpId].custo += g * (parseFloat(mp?.custo_unitario)||0)
+          porMPProduto[mpId].preps.add(prepMap[comp.preparacao_id]?.nome)
+        }
+      }
+      const mpsProduto = Object.values(porMPProduto).filter(m => m.custo > 0).sort((a,b) => b.custo - a.custo)
+
       const custoRotulo = (parseFloat(emb.custo_unitario)||0) + custoEmbDe(emb)
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
       const custoPrepsReal = detalhesPrep.reduce((s,d) => s + d.custoNaUnidadeReal, 0)
@@ -259,7 +303,7 @@ function usePrecificacao() {
       const cmvTotalReal = custoPrepsReal + custoRotulo
       const temRendimentoReal = detalhesPrep.some(d => d.usandoReal)
 
-      return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, cmvTotalReal, temRendimentoReal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
+      return { emb, detalhesPrep, mpsProduto, custoPreps, custoPrepsReal, custoRotulo, cmvTotal, cmvTotalReal, temRendimentoReal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
       setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade, custoEmbPorCat, custoEmbPorSku, itensEmbPorSku })
@@ -384,25 +428,20 @@ function FichaCusto({ data, incluirOverhead }) {
                       <div style={{display:'flex',flexDirection:'column',gap:8,paddingTop:12}}>
                         {/* Consolidado de matéria-prima do produto acabado */}
                         {(() => {
-                          const porMP = {}
-                          for (const d of p.detalhesPrep) {
-                            for (const ing of (d.ingredientes || [])) {
-                              if (ing.isSubPrep) continue
-                              const k = ing.mp || ing.nome
-                              if (!porMP[k]) porMP[k] = { nome: k, qtd: 0, unidade: ing.unidade, custo: 0, preps: new Set() }
-                              porMP[k].qtd += ing.qtd || 0
-                              porMP[k].custo += ing.custo || 0
-                              porMP[k].preps.add(d.nome)
-                            }
-                          }
-                          const mpsLista = Object.values(porMP).filter(m => m.custo > 0)
+                          const mpsLista = p.mpsProduto || []
                           if (!mpsLista.length) return null
+                          const overheadUn = incluirOverhead
+                            ? (data.overheadPorUnidade||0) * (parseFloat(p.emb.equivalencia_overhead)||1) : 0
                           // Embalagem entra no ranking: a decisão de custo compara os dois
                           const lista = [
                             ...mpsLista.map(m => ({ ...m, tipo: 'mp' })),
                             ...(p.custoRotulo > 0
                               ? [{ nome: 'Embalagem (rótulo + filme/vidro)', qtd: null, unidade: '',
                                    custo: p.custoRotulo, preps: new Set(), tipo: 'emb' }]
+                              : []),
+                            ...(overheadUn > 0
+                              ? [{ nome: 'Overhead de produção', qtd: null, unidade: '',
+                                   custo: overheadUn, preps: new Set(), tipo: 'over' }]
                               : []),
                           ].sort((a,b) => b.custo - a.custo)
                           const totalCMV = lista.reduce((s,m) => s + m.custo, 0)
@@ -425,13 +464,13 @@ function FichaCusto({ data, incluirOverhead }) {
                                 <tbody>
                                   {lista.map((m,i) => {
                                     const pctCMV = totalCMV > 0 ? m.custo/totalCMV*100 : 0
-                                    const cor = m.tipo === 'emb' ? 'var(--gold)' : 'var(--purple)'
+                                    const cor = m.tipo === 'emb' ? 'var(--gold)' : m.tipo === 'over' ? 'var(--ok)' : 'var(--purple)'
                                     return (
                                       <tr key={m.nome} style={{borderTop:'1px solid var(--gray-100)',
-                                        background: m.tipo === 'emb' ? '#fffbf0' : i%2?'#f8f5ff':'#fff'}}>
+                                        background: m.tipo === 'emb' ? '#fffbf0' : m.tipo === 'over' ? '#f0faf0' : i%2?'#f8f5ff':'#fff'}}>
                                         <td style={{padding:'6px 12px'}}>
                                           <div style={{fontWeight:600}}>
-                                            {m.tipo === 'emb' ? '📦 ' : ''}{m.nome}
+                                            {m.tipo === 'emb' ? '📦 ' : m.tipo === 'over' ? '🏭 ' : ''}{m.nome}
                                           </div>
                                           {m.preps.size > 1 && (
                                             <div style={{fontSize:10,color:'var(--gray-400)'}}>
