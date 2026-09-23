@@ -32,6 +32,7 @@ function usePrecificacao() {
         { data: precosSalvos },
         overheadResult,
         { data: catEmbs },
+        { data: prodEmbs },
         volumeResult,
       ] = await Promise.all([
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('ativo',true).order('categoria').order('nome'),
@@ -43,6 +44,7 @@ function usePrecificacao() {
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),
         supabase.from('overhead_producao').select('valor_mensal').eq('ativo',true).then(r=>r).catch(()=>({data:[]})),
         supabase.from('categoria_embalagem').select('categoria, quantidade, embalagens(id, nome, custo_unitario)').then(r=>r).catch(()=>({data:[]})),
+        supabase.from('produto_embalagem').select('sku_produto, quantidade, embalagens(id, nome, custo_unitario)').then(r=>r).catch(()=>({data:[]})),
         // Volume: só registros reais de produção (não auto-embalagem)
         supabase.from('produto_composicao')
           .select('sku_produto')
@@ -81,13 +83,23 @@ function usePrecificacao() {
       const canaisDB = canaisResult?.data || []
 
       // Mapa de preços salvos: { sku: { canal_id: preco } }
-      // Mapa de custo de embalagem por categoria (filmes + outros via categoria_embalagem)
+      // Custo de embalagem: padrão da categoria e, quando existir, o do próprio produto
       const custoEmbPorCat = {}
       for (const ce of (catEmbs||[])) {
-        const cat = ce.categoria
         const custo = (parseFloat(ce.quantidade)||1) * (parseFloat(ce.embalagens?.custo_unitario)||0)
-        custoEmbPorCat[cat] = (custoEmbPorCat[cat]||0) + custo
+        custoEmbPorCat[ce.categoria] = (custoEmbPorCat[ce.categoria]||0) + custo
       }
+      const custoEmbPorSku = {}
+      const itensEmbPorSku = {}
+      for (const pe of (prodEmbs||[])) {
+        const custo = (parseFloat(pe.quantidade)||1) * (parseFloat(pe.embalagens?.custo_unitario)||0)
+        custoEmbPorSku[pe.sku_produto] = (custoEmbPorSku[pe.sku_produto]||0) + custo
+        ;(itensEmbPorSku[pe.sku_produto] = itensEmbPorSku[pe.sku_produto] || []).push({
+          nome: pe.embalagens?.nome, qtd: parseFloat(pe.quantidade)||1, custo,
+        })
+      }
+      // Vínculo do produto tem precedência sobre o da categoria
+      const custoEmbDe = emb => custoEmbPorSku[emb.codigo] ?? (custoEmbPorCat[emb.categoria] || 0)
 
       const precosMap = {}
       for (const p of (precosSalvos||[])) {
@@ -213,7 +225,7 @@ function usePrecificacao() {
 
           if (ing.sub_preparacao_id) {
             const subPrep = prepMap[ing.sub_preparacao_id]
-            const custoPorGSub = custoPrepPorG[ing.sub_preparacao_id] || 0
+            const custoPorGSub = custoPrepPorGReal[ing.sub_preparacao_id] || 0
             const custo = qtdPorUnidade * custoPorGSub
             return { nome: ing.ingrediente, mp: null, mpId: null, subPrep: subPrep?.nome, qtd: qtdPorUnidade, unidade: ing.unidade, custo, isSubPrep: true }
           }
@@ -228,7 +240,8 @@ function usePrecificacao() {
           tipo: prep.tipo,
           qtdCrua,
           unidade: comp.unidade,
-          custoPorG: custoPorGTeorico,
+          custoPorG: custoPorGReal,
+          custoPorGTeorico,
           custoNaUnidade,
           custoNaUnidadeReal,
           rendEstimado,
@@ -239,7 +252,7 @@ function usePrecificacao() {
         }
       }).filter(Boolean)
 
-      const custoRotulo = (parseFloat(emb.custo_unitario)||0) + (custoEmbPorCat[emb.categoria]||0)
+      const custoRotulo = (parseFloat(emb.custo_unitario)||0) + custoEmbDe(emb)
       const custoPreps = detalhesPrep.reduce((s,d) => s + d.custoNaUnidade, 0)
       const custoPrepsReal = detalhesPrep.reduce((s,d) => s + d.custoNaUnidadeReal, 0)
       const cmvTotal = custoPreps + custoRotulo
@@ -249,7 +262,7 @@ function usePrecificacao() {
       return { emb, detalhesPrep, custoPreps, custoRotulo, cmvTotal, cmvTotalReal, temRendimentoReal, precosCanal: precosMap[emb.codigo]||{}, semFicha: comps.length === 0 }
     })
 
-      setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade, custoEmbPorCat })
+      setData({ produtos, custoPrepPorG, custoPrepPorGReal, prepMap, mpMap, canais: canais.length ? canais : CANAIS_DEFAULT, totalOverhead, volumeMensal, overheadPorUnidade, custoEmbPorCat, custoEmbPorSku, itensEmbPorSku })
     } catch(err) {
       console.error('Erro ao carregar precificação:', err)
     }
@@ -382,32 +395,44 @@ function FichaCusto({ data, incluirOverhead }) {
                               porMP[k].preps.add(d.nome)
                             }
                           }
-                          const lista = Object.values(porMP).filter(m => m.custo > 0).sort((a,b) => b.custo - a.custo)
-                          if (!lista.length) return null
-                          const totalMP = lista.reduce((s,m) => s + m.custo, 0)
+                          const mpsLista = Object.values(porMP).filter(m => m.custo > 0)
+                          if (!mpsLista.length) return null
+                          // Embalagem entra no ranking: a decisão de custo compara os dois
+                          const lista = [
+                            ...mpsLista.map(m => ({ ...m, tipo: 'mp' })),
+                            ...(p.custoRotulo > 0
+                              ? [{ nome: 'Embalagem (rótulo + filme/vidro)', qtd: null, unidade: '',
+                                   custo: p.custoRotulo, preps: new Set(), tipo: 'emb' }]
+                              : []),
+                          ].sort((a,b) => b.custo - a.custo)
+                          const totalCMV = lista.reduce((s,m) => s + m.custo, 0)
                           return (
                             <div style={{border:'1.5px solid var(--purple)',borderRadius:8,overflow:'hidden'}}>
                               <div style={{padding:'8px 14px',background:'var(--purple)',color:'#fff',
                                 display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                                <span style={{fontWeight:800,fontSize:13}}>🧂 Matéria-prima no produto acabado</span>
-                                <span style={{fontWeight:800,fontSize:13}}>{fmtR(totalMP)}</span>
+                                <span style={{fontWeight:800,fontSize:13}}>💰 Composição do CMV por unidade</span>
+                                <span style={{fontWeight:800,fontSize:13}}>{fmtR(totalCMV)}</span>
                               </div>
                               <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                                 <thead>
                                   <tr style={{background:'var(--gray-50)'}}>
-                                    <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Matéria-prima</th>
+                                    <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Item</th>
                                     <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Qtd/un</th>
                                     <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Custo</th>
-                                    <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--purple)',width:150}}>% do MP</th>
+                                    <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--purple)',width:150}}>% do CMV</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {lista.map((m,i) => {
-                                    const pctMP = totalMP > 0 ? m.custo/totalMP*100 : 0
+                                    const pctCMV = totalCMV > 0 ? m.custo/totalCMV*100 : 0
+                                    const cor = m.tipo === 'emb' ? 'var(--gold)' : 'var(--purple)'
                                     return (
-                                      <tr key={m.nome} style={{borderTop:'1px solid var(--gray-100)',background:i%2?'#f8f5ff':'#fff'}}>
+                                      <tr key={m.nome} style={{borderTop:'1px solid var(--gray-100)',
+                                        background: m.tipo === 'emb' ? '#fffbf0' : i%2?'#f8f5ff':'#fff'}}>
                                         <td style={{padding:'6px 12px'}}>
-                                          <div style={{fontWeight:600}}>{m.nome}</div>
+                                          <div style={{fontWeight:600}}>
+                                            {m.tipo === 'emb' ? '📦 ' : ''}{m.nome}
+                                          </div>
                                           {m.preps.size > 1 && (
                                             <div style={{fontSize:10,color:'var(--gray-400)'}}>
                                               em {[...m.preps].join(' + ')}
@@ -415,17 +440,17 @@ function FichaCusto({ data, incluirOverhead }) {
                                           )}
                                         </td>
                                         <td style={{padding:'6px 10px',textAlign:'right',color:'var(--gray-500)'}}>
-                                          {fmt(m.qtd,2)}{m.unidade}
+                                          {m.qtd !== null ? `${fmt(m.qtd,2)}${m.unidade}` : '—'}
                                         </td>
-                                        <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                                        <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700,color:cor}}>
                                           {fmtR(m.custo)}
                                         </td>
                                         <td style={{padding:'6px 10px'}}>
                                           <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
                                             <div style={{width:60,height:6,background:'var(--gray-100)',borderRadius:3}}>
-                                              <div style={{height:'100%',width:`${Math.min(100,pctMP)}%`,background:'var(--purple)',borderRadius:3}}/>
+                                              <div style={{height:'100%',width:`${Math.min(100,pctCMV)}%`,background:cor,borderRadius:3}}/>
                                             </div>
-                                            <span style={{fontSize:11,fontWeight:700,minWidth:38,textAlign:'right'}}>{fmt(pctMP,1)}%</span>
+                                            <span style={{fontSize:11,fontWeight:700,minWidth:38,textAlign:'right'}}>{fmt(pctCMV,1)}%</span>
                                           </div>
                                         </td>
                                       </tr>
@@ -444,7 +469,7 @@ function FichaCusto({ data, incluirOverhead }) {
                                 <div style={{fontWeight:700,fontSize:13}}>{TIPO_ICON[d.tipo]} {d.nome}</div>
                                 <div style={{fontSize:13}}>
                                   <span style={{color:'var(--gray-500)'}}>{fmt(d.qtdCrua,1)}{d.unidade} × {fmtR(d.custoPorG)}/{d.unidade} = </span>
-                                  <span style={{fontWeight:800,color:'var(--purple)'}}>{fmtR(d.custoNaUnidade)}</span>
+                                  <span style={{fontWeight:800,color:d.usandoReal?'var(--ok)':'var(--purple)'}}>{fmtR(d.custoNaUnidadeReal)}</span>
                                 </div>
                               </div>
                               {/* Rendimento info */}
@@ -452,6 +477,7 @@ function FichaCusto({ data, incluirOverhead }) {
                                 <span style={{color:'var(--gray-500)'}}>
                                   📐 Teórico: <strong>{fmt(d.rendEstimado,1)} {d.unidadeRendimento}</strong>
                                   {' → '}<span style={{color:'var(--gray-600)'}}>{fmtR(d.custoNaUnidade)}</span>
+                                  {!d.usandoReal && <span style={{marginLeft:4,color:'var(--gray-400)'}}>(em uso)</span>}
                                 </span>
                                 {d.rendReal ? (
                                   <span style={{color: d.usandoReal ? 'var(--ok)' : 'var(--gray-500)'}}>
@@ -509,8 +535,11 @@ function FichaCusto({ data, incluirOverhead }) {
                             </div>
                             <div style={{fontSize:11,color:'var(--gray-400)',marginTop:4,display:'flex',gap:12}}>
                               <span>Rótulo: {fmtR(parseFloat(p.emb.custo_unitario)||0)}</span>
-                              {(data.custoEmbPorCat?.[p.emb.categoria]||0) > 0 && (
-                                <span>Filmes/outros: {fmtR(data.custoEmbPorCat[p.emb.categoria])}</span>
+                              {(data.itensEmbPorSku?.[p.emb.codigo] || []).map(it => (
+                                <span key={it.nome}>{it.nome} ×{fmt(it.qtd,0)}: {fmtR(it.custo)}</span>
+                              ))}
+                              {!data.itensEmbPorSku?.[p.emb.codigo] && (data.custoEmbPorCat?.[p.emb.categoria]||0) > 0 && (
+                                <span>Filmes/outros (categoria): {fmtR(data.custoEmbPorCat[p.emb.categoria])}</span>
                               )}
                             </div>
                           </div>
