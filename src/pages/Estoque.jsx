@@ -51,7 +51,7 @@ export default function ControleEstoque() {
       rMps, rConfMP, rComprasMP,
       rEmbs, rConfEmb, rRecItens,
       rProducao, rProdComps, rPreps, rPrepComps,
-      rCatEmbs,
+      rCatEmbs, rProdEmbs,
     ] = await Promise.all([
       q(supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario').eq('ativo', true)),
       q(supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em')),
@@ -68,12 +68,14 @@ export default function ControleEstoque() {
       q(supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual')),
       q(supabase.from('preparacao_composicao').select('preparacao_id,quantidade,materia_prima_id,sub_preparacao_id')),
       q(supabase.from('categoria_embalagem').select('categoria,quantidade,embalagens(custo_unitario)')),
+      q(supabase.from('produto_embalagem').select('sku_produto,quantidade,embalagens(custo_unitario)')),
     ])
 
     const mps = arr(rMps), confMP = arr(rConfMP), comprasMP = arr(rComprasMP)
     const embs = arr(rEmbs), confEmb = arr(rConfEmb), recItens = arr(rRecItens)
     const producao = arr(rProducao), prodComps = arr(rProdComps)
     const preps = arr(rPreps), prepComps = arr(rPrepComps), catEmbs = arr(rCatEmbs)
+    const prodEmbs = arr(rProdEmbs)
 
     const mpMap = {}; for (const m of (mps || [])) mpMap[m.id] = m
     const embMap = {}; for (const e of (embs || [])) embMap[e.id] = e
@@ -150,6 +152,12 @@ export default function ControleEstoque() {
       custoEmbCat[ce.categoria] = (custoEmbCat[ce.categoria] || 0)
         + (parseFloat(ce.quantidade) || 1) * (parseFloat(ce.embalagens?.custo_unitario) || 0)
     }
+    // Vínculo por produto tem precedência sobre o padrão da categoria
+    const custoEmbSku = {}
+    for (const pe of prodEmbs) {
+      custoEmbSku[pe.sku_produto] = (custoEmbSku[pe.sku_produto] || 0)
+        + (parseFloat(pe.quantidade) || 1) * (parseFloat(pe.embalagens?.custo_unitario) || 0)
+    }
 
     const skusComFicha = new Set((prodComps || []).map(p => p.sku_produto))
     const prodPorSku = {}
@@ -192,7 +200,8 @@ export default function ControleEstoque() {
       const comps = (prodComps || []).filter(c => c.sku_produto === emb.codigo)
       const mpUnit = comps.reduce((s, c) =>
         s + custoPrepPorG(c.preparacao_id) * (parseFloat(c.quantidade_por_unidade) || 0), 0)
-      const embUnit = (parseFloat(emb.custo_unitario) || 0) + (custoEmbCat[emb.categoria] || 0)
+      const embUnit = (parseFloat(emb.custo_unitario) || 0)
+        + (custoEmbSku[emb.codigo] ?? (custoEmbCat[emb.categoria] || 0))
 
       // Consolida matéria-prima do produto acabado
       const porMP = {}
@@ -354,12 +363,16 @@ export default function ControleEstoque() {
                       { header: 'Emb/un',          key: 'emb',       tipo: 'moeda4', largura: 12 },
                       { header: 'CMV/un',          key: 'cmv',       tipo: 'moeda4', largura: 12 },
                       { header: 'Total',           key: 'total',     tipo: 'moeda',  largura: 14 },
-                      { header: 'MP principal',    key: 'mp1',       tipo: 'texto',  largura: 28 },
-                      { header: '% da MP',         key: 'mp1pct',    tipo: 'texto',  largura: 10 },
+                      { header: 'Maior custo',     key: 'mp1',       tipo: 'texto',  largura: 30 },
+                      { header: '% do CMV',        key: 'mp1pct',    tipo: 'texto',  largura: 11 },
                     ],
                     linhas: dados.produzidos.map(p => {
-                      const top = (p.mps || [])[0]
-                      const pctTop = top && p.mpUnit > 0 ? `${fmt(top.custo / p.mpUnit * 100, 1)}%` : ''
+                      const itens = [
+                        ...(p.mps || []),
+                        { nome: 'Embalagem', custo: p.embUnit },
+                      ].sort((a, b) => b.custo - a.custo)
+                      const top = itens[0]
+                      const pctTop = top && p.cmvUnit > 0 ? `${fmt(top.custo / p.cmvUnit * 100, 1)}%` : ''
                       return {
                         nome: p.emb.nome, sku: p.emb.codigo, produzido: p.qtd,
                         mp: p.mpUnit, emb: p.embUnit, cmv: p.cmvUnit, total: p.total,
@@ -407,27 +420,35 @@ export default function ControleEstoque() {
                         <tr style={{ background: '#f8f5ff' }}>
                           <td colSpan={6} style={{ padding: '0 14px 12px' }}>
                             <div style={{ fontSize: 11, color: 'var(--gray-500)', padding: '8px 0 6px', fontWeight: 700 }}>
-                              🧂 Matéria-prima por unidade · total {fmtR(p.mpUnit)}
+                              💰 Composição do CMV por unidade · total {fmtR(p.cmvUnit)}
                             </div>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                               <tbody>
-                                {p.mps.map((m, mi) => {
-                                  const pctMP = p.mpUnit > 0 ? m.custo / p.mpUnit * 100 : 0
+                                {[
+                                  ...p.mps.map(m => ({ ...m, tipo: 'mp' })),
+                                  { nome: 'Embalagem (rótulo + filme/vidro)', qtd: null, unidade: '',
+                                    custo: p.embUnit, tipo: 'emb' },
+                                ].sort((a, b) => b.custo - a.custo).map((m, mi) => {
+                                  const pctCMV = p.cmvUnit > 0 ? m.custo / p.cmvUnit * 100 : 0
+                                  const cor = m.tipo === 'emb' ? 'var(--gold)' : 'var(--purple)'
                                   return (
-                                    <tr key={m.nome} style={{ borderTop: '1px solid var(--gray-100)', background: mi % 2 ? '#fff' : 'transparent' }}>
-                                      <td style={{ padding: '5px 10px', fontWeight: 600 }}>{m.nome}</td>
-                                      <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--gray-500)', width: 110 }}>
-                                        {fmt(m.qtd, 2)}{m.unidade}
+                                    <tr key={m.nome} style={{ borderTop: '1px solid var(--gray-100)',
+                                      background: m.tipo === 'emb' ? '#fffbf0' : mi % 2 ? '#fff' : 'transparent' }}>
+                                      <td style={{ padding: '5px 10px', fontWeight: 600 }}>
+                                        {m.tipo === 'emb' ? '📦 ' : ''}{m.nome}
                                       </td>
-                                      <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--purple)', width: 90 }}>
+                                      <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--gray-500)', width: 110 }}>
+                                        {m.qtd !== null ? `${fmt(m.qtd, 2)}${m.unidade}` : '—'}
+                                      </td>
+                                      <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: cor, width: 90 }}>
                                         {fmtR(m.custo)}
                                       </td>
                                       <td style={{ padding: '5px 10px', width: 150 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
                                           <div style={{ width: 60, height: 6, background: 'var(--gray-100)', borderRadius: 3 }}>
-                                            <div style={{ height: '100%', width: `${Math.min(100, pctMP)}%`, background: 'var(--purple)', borderRadius: 3 }} />
+                                            <div style={{ height: '100%', width: `${Math.min(100, pctCMV)}%`, background: cor, borderRadius: 3 }} />
                                           </div>
-                                          <span style={{ fontSize: 11, fontWeight: 700, minWidth: 38, textAlign: 'right' }}>{fmt(pctMP, 1)}%</span>
+                                          <span style={{ fontSize: 11, fontWeight: 700, minWidth: 38, textAlign: 'right' }}>{fmt(pctCMV, 1)}%</span>
                                         </div>
                                       </td>
                                     </tr>
