@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { carregarStatusCompleto, gerarNumeroPedido, statusCfg } from '../lib/data'
+import { carregarStatusCompleto, gerarNumeroPedido, statusCfg, recalcularCustoEmbalagem } from '../lib/data'
 import { FileText, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Plus } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -386,14 +386,12 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           .update({ quantidade_recebida: qtd, recebido_em: dataRec })
           .eq('id', item.id)
         if (qtd <= 0) continue
-        const valorUnit = parseFloat(valores[item.id])
-        const upd = {
+        await supabase.from('embalagens').update({
           estoque_atual: (item.embalagens?.estoque_atual || 0) + qtd,
           atualizado_em: new Date().toISOString(),
-        }
-        // Valor informado vira o novo custo da embalagem — alimenta o CMV
-        if (valorUnit > 0) upd.custo_unitario = valorUnit
-        await supabase.from('embalagens').update(upd).eq('id', item.embalagem_id)
+        }).eq('id', item.embalagem_id)
+        // Custo médio dos últimos 30 dias — alimenta o CMV
+        await recalcularCustoEmbalagem(item.embalagem_id)
       }
 
 
