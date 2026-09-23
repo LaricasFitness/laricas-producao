@@ -389,7 +389,7 @@ function FichaCusto({ data, incluirOverhead }) {
                     <div style={{fontSize:11,color:'var(--gray-400)',fontFamily:'monospace'}}>{p.emb.codigo}</div>
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'right',color:temCusto?'var(--gray-700)':'var(--gray-300)'}}>
-                    {temCusto ? fmtR(p.custoPreps) : '—'}
+                    {temCusto ? fmtR(p.custoPrepsReal) : '—'}
                   </td>
                   <td style={{padding:'10px 10px',textAlign:'right',color:p.custoRotulo>0?'var(--gray-700)':'var(--gray-300)'}}>
                     {p.custoRotulo>0 ? fmtR(p.custoRotulo) : '—'}
@@ -636,7 +636,7 @@ function Simulador({ data, reload, incluirOverhead }) {
   const canais = data.canais || CANAIS_DEFAULT
 
   const prod = data.produtos.find(p => p.emb.codigo === skuSel)
-  const cmv = cmvEfetivo(prod?.cmvTotal || 0, incluirOverhead, data.overheadPorUnidade, parseFloat(prod?.emb?.equivalencia_overhead)||1)
+  const cmv = cmvEfetivo(prod?.cmvTotalReal ?? prod?.cmvTotal ?? 0, incluirOverhead, data.overheadPorUnidade, parseFloat(prod?.emb?.equivalencia_overhead)||1)
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
   const precoComDesconto = precoBase * (1 - desconto/100)
   // Desconto máximo por canal: preço onde MC = 0
@@ -871,7 +871,7 @@ function RankingMargem({ data, reload, incluirOverhead }) {
   }
 
   const comCusto = data.produtos.filter(p=>p.cmvTotal>0).map(p => {
-    const cmvEf = cmvEfetivo(p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)
+    const cmvEf = cmvEfetivo(p.cmvTotalReal ?? p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)
     const preco = parseFloat(precoRef[p.emb.codigo]) || p.precosCanal?.[canalSel] || cmvEf*3
     const recLiq = preco*(1-canal.totalPct)-canal.totalFixo
     const mc = recLiq - cmvEf
