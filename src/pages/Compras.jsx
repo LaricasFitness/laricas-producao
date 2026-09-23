@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import { recalcularCustoEmbalagem } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
@@ -102,9 +103,9 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
         valor_unitario: parseFloat(it.valor_unitario) || null,
       })))
 
-      // Atualiza custo_unitario
-      for (const it of fil.filter(i => i.embalagem_id && i.valor_unitario)) {
-        await supabase.from('embalagens').update({ custo_unitario: parseFloat(it.valor_unitario) }).eq('id', it.embalagem_id)
+      // Recalcula o custo médio (30 dias) de cada embalagem recebida
+      for (const id of new Set(fil.filter(i => i.embalagem_id).map(i => i.embalagem_id))) {
+        await recalcularCustoEmbalagem(id)
       }
 
       if (pedidoId) await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
@@ -284,9 +285,9 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
         valor_unitario: parseFloat(it.valor_unitario) || null,
       })))
 
-      // Atualiza custo_unitario
-      for (const it of fil.filter(i => i.embalagem_id && i.valor_unitario)) {
-        await supabase.from('embalagens').update({ custo_unitario: parseFloat(it.valor_unitario) }).eq('id', it.embalagem_id)
+      // Recalcula o custo médio (30 dias) de cada embalagem recebida
+      for (const id of new Set(fil.filter(i => i.embalagem_id).map(i => i.embalagem_id))) {
+        await recalcularCustoEmbalagem(id)
       }
 
       onSaved()
