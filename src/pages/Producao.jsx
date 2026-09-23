@@ -240,17 +240,26 @@ export default function Producao() {
           dadosNovos: { fase1 },
         })
 
-        // Auto-desconta embalagens primárias por categoria
-        const { data: vinculos } = await supabase.from('categoria_embalagem').select('*')
-        if (vinculos?.length) {
-          // Agrupa produção por embalagem primária
+        // Auto-desconta embalagens primárias.
+        // Preferência: vínculo do próprio produto. Sem ele, o padrão da categoria.
+        const [{ data: vincProd }, { data: vinculos }] = await Promise.all([
+          supabase.from('produto_embalagem').select('*').then(r=>r).catch(()=>({data:[]})),
+          supabase.from('categoria_embalagem').select('*'),
+        ])
+        if (vincProd?.length || vinculos?.length) {
           const descontos = {}
           for (const r of fase1) {
             const emb = embalagens.find(x => x.id === r.embalagem_id)
             if (!emb) continue
-            const vinculo = vinculos.find(v => v.categoria === emb.categoria)
-            if (!vinculo?.embalagem_id) continue
-            descontos[vinculo.embalagem_id] = (descontos[vinculo.embalagem_id] || 0) + r.quantidade
+            // Todos os vínculos do produto — não só o primeiro
+            let links = (vincProd || []).filter(v => v.sku_produto === emb.codigo)
+            if (!links.length) links = (vinculos || []).filter(v => v.categoria === emb.categoria)
+            for (const v of links) {
+              if (!v.embalagem_id) continue
+              // Multiplica pela quantidade do vínculo (ex: lata leva 8 filmes)
+              const qtdPorUnidade = parseFloat(v.quantidade) || 1
+              descontos[v.embalagem_id] = (descontos[v.embalagem_id] || 0) + r.quantidade * qtdPorUnidade
+            }
           }
           // Insere em producao_diaria como desconto de embalagem primária
           const embDescontos = Object.entries(descontos).map(([embalagem_id, quantidade]) => ({
