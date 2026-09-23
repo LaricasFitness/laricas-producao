@@ -878,16 +878,27 @@ function AdminComposicaoProdutos() {
   const [composicoes, setComposicoes] = useState({}) // { sku: [{ id, prep, qtd, unidade }] }
   const [loading, setLoading] = useState(true)
   const [editandoSku, setEditandoSku] = useState(null)
+  const [embalagensProduto, setEmbalagensProduto] = useState({})
+  const [embDisponiveis, setEmbDisponiveis] = useState([])
   const [salvando, setSalvando] = useState(false)
   const [filtro, setFiltro] = useState('')
 
   async function load() {
     setLoading(true)
-    const [{ data: embsData }, { data: prepsData }, { data: compData }] = await Promise.all([
-      supabase.from('embalagens').select('id, nome, codigo, categoria, tipo, visivel_producao').eq('ativo', true).order('categoria').order('nome'),
+    const [{ data: embsData }, { data: prepsData }, { data: compData }, embVinc] = await Promise.all([
+      supabase.from('embalagens').select('id, nome, codigo, categoria, tipo, visivel_producao, custo_unitario').eq('ativo', true).order('categoria').order('nome'),
       supabase.from('preparacoes').select('id, codigo, nome, tipo').eq('ativo', true).order('tipo').order('nome'),
       supabase.from('produto_composicao').select('*, preparacoes(id, nome, codigo, tipo)'),
+      supabase.from('produto_embalagem').select('*, embalagens(id, nome, codigo, custo_unitario)').then(r=>r).catch(()=>({data:[]})),
     ])
+    const mapEmb = {}
+    for (const v of (embVinc?.data || [])) {
+      if (!mapEmb[v.sku_produto]) mapEmb[v.sku_produto] = []
+      mapEmb[v.sku_produto].push(v)
+    }
+    setEmbalagensProduto(mapEmb)
+    // Embalagens que podem ser vinculadas: filmes, vidros, caixas — não os rótulos
+    setEmbDisponiveis((embsData || []).filter(e => e.tipo === 'embalagem'))
     // Produto acabado = rótulo OU embalagem que já tem ficha OU marcada como visível na produção (ex: latas)
     const skusComFicha = new Set((compData || []).map(x => x.sku_produto))
     const embsProduto = (embsData || []).filter(e =>
@@ -905,9 +916,21 @@ function AdminComposicaoProdutos() {
   }
   useEffect(() => { load() }, [])
 
-  async function salvarComposicao(sku, itens) {
+  async function salvarComposicao(sku, itens, embItens) {
     setSalvando(true)
     try {
+      // Embalagens do produto — recria o conjunto
+      await supabase.from('produto_embalagem').delete().eq('sku_produto', sku)
+      const embValidos = (embItens || []).filter(i => i.embalagem_id && parseFloat(i.quantidade) > 0)
+      if (embValidos.length) {
+        await supabase.from('produto_embalagem').insert(
+          embValidos.map(i => ({
+            sku_produto: sku,
+            embalagem_id: i.embalagem_id,
+            quantidade: parseFloat(i.quantidade) || 1,
+          }))
+        )
+      }
       await supabase.from('produto_composicao').delete().eq('sku_produto', sku)
       if (itens.filter(i => i.preparacao_id).length) {
         await supabase.from('produto_composicao').insert(
@@ -943,8 +966,12 @@ function AdminComposicaoProdutos() {
         emb={emb}
         preps={preps}
         itensIniciais={itensAtuais}
+        embDisponiveis={embDisponiveis}
+        embIniciais={(embalagensProduto[editandoSku] || []).map(v => ({
+          embalagem_id: v.embalagem_id, quantidade: String(v.quantidade),
+        }))}
         onClose={() => setEditandoSku(null)}
-        onSalvar={(itens) => salvarComposicao(editandoSku, itens)}
+        onSalvar={(itens, embItens) => salvarComposicao(editandoSku, itens, embItens)}
         salvando={salvando}
       />
     )
@@ -1015,10 +1042,19 @@ function AdminComposicaoProdutos() {
   )
 }
 
-function ModalComposicaoProduto({ emb, preps, itensIniciais, onClose, onSalvar, salvando }) {
+function ModalComposicaoProduto({ emb, preps, itensIniciais, embDisponiveis = [], embIniciais = [], onClose, onSalvar, salvando }) {
   const [itens, setItens] = useState(
     itensIniciais.length > 0 ? itensIniciais : [{ preparacao_id:'', quantidade_por_unidade:'', unidade:'g', observacao:'' }]
   )
+  const [embItens, setEmbItens] = useState(embIniciais)
+  const addEmb = () => setEmbItens(p => [...p, { embalagem_id:'', quantidade:'1' }])
+  const remEmb = (idx) => setEmbItens(p => p.filter((_,n) => n !== idx))
+  const setEmb = (idx, k, v) => setEmbItens(p => p.map((i,n) => n===idx ? {...i,[k]:v} : i))
+  const custoRotulo = parseFloat(emb?.custo_unitario) || 0
+  const custoEmbExtra = embItens.reduce((s,i) => {
+    const e = embDisponiveis.find(x => x.id === i.embalagem_id)
+    return s + (parseFloat(i.quantidade)||0) * (parseFloat(e?.custo_unitario)||0)
+  }, 0)
   const addItem = () => setItens(p => [...p, { preparacao_id:'', quantidade_por_unidade:'', unidade:'g', observacao:'' }])
   const remItem = (idx) => setItens(p => p.filter((_,n) => n !== idx))
   const setItem = (idx, k, v) => setItens(p => p.map((i,n) => n===idx ? {...i,[k]:v} : i))
@@ -1068,10 +1104,60 @@ function ModalComposicaoProduto({ emb, preps, itensIniciais, onClose, onSalvar, 
             </div>
           ))}
           <button className="btn btn-ghost btn-sm" onClick={addItem}><Plus size={12}/> Adicionar preparação</button>
+
+          {/* ── Embalagem do produto ── */}
+          <div style={{ marginTop:18, paddingTop:14, borderTop:'2px solid var(--gray-200)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+              <div style={{ fontWeight:800, fontSize:13 }}>📦 Embalagem deste produto</div>
+              <div style={{ fontSize:12, fontWeight:800, color:'var(--purple)' }}>
+                {`R$ ${(custoRotulo + custoEmbExtra).toFixed(4)}`}
+              </div>
+            </div>
+            <div style={{ fontSize:11, color:'var(--gray-400)', marginBottom:10 }}>
+              Rótulo R$ {custoRotulo.toFixed(4)} (do cadastro da embalagem) + itens abaixo.
+              Estes itens são debitados do estoque a cada produção.
+            </div>
+
+            {embItens.length === 0 && (
+              <div style={{ fontSize:12, color:'var(--gray-400)', fontStyle:'italic', marginBottom:8 }}>
+                Sem embalagem própria — usa o padrão da categoria {emb?.categoria}.
+              </div>
+            )}
+
+            {embItens.map((it, idx) => {
+              const e = embDisponiveis.find(x => x.id === it.embalagem_id)
+              const sub = (parseFloat(it.quantidade)||0) * (parseFloat(e?.custo_unitario)||0)
+              return (
+                <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 80px 90px auto',
+                  gap:6, alignItems:'center', marginBottom:6 }}>
+                  <select className="form-input" value={it.embalagem_id} style={{ fontSize:13 }}
+                    onChange={ev => setEmb(idx,'embalagem_id', ev.target.value)}>
+                    <option value="">Selecione a embalagem...</option>
+                    {[...new Set(embDisponiveis.map(x => x.categoria).filter(Boolean))].map(cat => (
+                      <optgroup key={cat} label={cat}>
+                        {embDisponiveis.filter(x => x.categoria === cat).map(x => (
+                          <option key={x.id} value={x.id}>{x.nome} — R$ {Number(x.custo_unitario||0).toFixed(4)}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <input type="number" className="form-input" min={0} step={0.5} value={it.quantidade}
+                    onChange={ev => setEmb(idx,'quantidade', ev.target.value)}
+                    style={{ fontSize:13, textAlign:'right' }} title="Quantos por unidade produzida" />
+                  <div style={{ fontSize:12, fontWeight:700, color:'var(--purple)', textAlign:'right' }}>
+                    {sub > 0 ? `R$ ${sub.toFixed(4)}` : '—'}
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => remEmb(idx)}
+                    style={{ color:'var(--danger)' }}>✕</button>
+                </div>
+              )
+            })}
+            <button className="btn btn-ghost btn-sm" onClick={addEmb}><Plus size={12}/> Adicionar embalagem</button>
+          </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" disabled={salvando} onClick={() => onSalvar(itens)}>
+          <button className="btn btn-primary" disabled={salvando} onClick={() => onSalvar(itens, embItens)}>
             {salvando ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar</>}
           </button>
         </div>
