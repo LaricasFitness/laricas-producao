@@ -229,3 +229,40 @@ export function gerarNumeroPedido() {
   const d = new Date()
   return `GRF-${d.getFullYear().toString().slice(-2)}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(Math.floor(Math.random()*99)+1).padStart(2,'0')}`
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Preço médio de uma embalagem: média ponderada dos recebimentos
+// dos últimos 30 dias. Sem recebimento na janela, usa todo o
+// histórico. Nunca grava zero — zerar apagaria o custo em todas
+// as fichas que usam a embalagem.
+// Mesma regra aplicada à matéria-prima.
+// ═══════════════════════════════════════════════════════════════
+export async function recalcularCustoEmbalagem(embalagemId) {
+  if (!embalagemId) return null
+
+  const soma = rows => (rows || []).reduce((a, r) => {
+    const q = parseFloat(r.quantidade_recebida) || 0
+    const v = parseFloat(r.valor_unitario)
+    if (!(q > 0) || !(v > 0)) return a          // sem preço informado não entra na média
+    return { q: a.q + q, c: a.c + q * v }
+  }, { q: 0, c: 0 })
+
+  const { data: itens } = await supabase
+    .from('recebimento_itens')
+    .select('quantidade_recebida, valor_unitario, recebimentos(data_recebimento)')
+    .eq('embalagem_id', embalagemId)
+
+  const desde30 = new Date(); desde30.setDate(desde30.getDate() - 30)
+  const corte = desde30.toISOString().slice(0, 10)
+
+  let t = soma((itens || []).filter(r => (r.recebimentos?.data_recebimento || '') >= corte))
+  if (t.q <= 0) t = soma(itens)                 // nenhuma compra recente: todo o histórico
+
+  const preco = t.q > 0 ? t.c / t.q : null
+  if (preco && preco > 0) {
+    await supabase.from('embalagens')
+      .update({ custo_unitario: preco, atualizado_em: new Date().toISOString() })
+      .eq('id', embalagemId)
+  }
+  return preco
+}
