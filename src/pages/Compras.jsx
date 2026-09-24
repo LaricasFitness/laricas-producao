@@ -110,26 +110,13 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
 
       if (pedidoId) await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
 
-      // Conta a Pagar
-      if (totalGeral > 0) {
+      // Pagamento é controlado no próprio recebimento (coluna status_pagamento),
+      // com vencimento previsto a partir do prazo informado.
+      if (totalGeral > 0 && prazo > 0) {
         const venc = new Date(dataRec); venc.setDate(venc.getDate() + prazo)
-        const fornNome = fornecedores.find(f => f.id === fornecedorId)?.nome_fantasia || 'Fornecedor'
-        const { data: lanc } = await supabase.from('fin_lancamentos').insert({
-          tipo: 'despesa',
-          descricao: `Compra embalagens — ${fornNome}${nf ? ` NF ${nf}` : ''}`,
-          valor_total: totalGeral,
-          fornecedor_id: fornecedorId || null,
-          total_parcelas: 1,
-          observacao: obs || null,
-          criado_por: 'sistema',
-        }).select().single()
-        if (lanc) {
-          await supabase.from('fin_parcelas').insert({
-            lancamento_id: lanc.id, numero_parcela: 1, valor: totalGeral,
-            data_vencimento: venc.toISOString().slice(0, 10),
-            data_competencia: dataRec, status: 'em_aberto',
-          })
-        }
+        await supabase.from('recebimentos')
+          .update({ status_pagamento: 'agendado', data_agendada: venc.toISOString().slice(0,10) })
+          .eq('id', rec.id)
       }
 
       await registrarAcao({ acao: 'recebimento', descricao: `Recebimento de ${fil.length} item(s)${nf ? ` — NF ${nf}` : ''}`, tabela: 'recebimentos', registroId: rec.id, dadosNovos: { valor_total: totalGeral } })
@@ -511,7 +498,7 @@ function ModalPagamento({ rec, onClose, onSaved }) {
   )
 }
 
-export default function Compras({ tipo = 'rotulo' }) {
+export default function Compras() {
   const hoje = new Date()
   const mesIni = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-01`
   const [ini, setIni] = useState(mesIni)
