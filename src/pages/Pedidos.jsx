@@ -411,52 +411,12 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
       const temExtras = itensExtras.some(e => e.qtd > 0)
       const novoStatus = todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
 
-      // Integração financeira — cria ou atualiza Conta a Pagar
-      // Valor vem da soma (quantidade recebida × valor unitário) de cada item
-      const valor = totalGeral
-      if (gerarConta && valor > 0) {
-        // Busca fornecedor PressPlate
-        const { data: fornecedor } = await supabase
-          .from('fin_fornecedores').select('id').eq('nome_fantasia', 'PressPlate').maybeSingle()
-
-        // Vencimento = data recebimento + 30 dias
-        const venc = new Date(dataRec); venc.setDate(venc.getDate() + 30)
-        const vencStr = venc.toISOString().slice(0, 10)
-
-        if (pedido.fin_lancamento_id) {
-          // Atualiza lançamento existente
-          await supabase.from('fin_lancamentos').update({
-            valor_total: valor,
-            fornecedor_id: fornecedor?.id || null,
-          }).eq('id', pedido.fin_lancamento_id)
-          await supabase.from('fin_parcelas').update({
-            valor, data_vencimento: vencStr, data_competencia: dataRec,
-          }).eq('lancamento_id', pedido.fin_lancamento_id)
-        } else {
-          // Cria novo lançamento de Conta a Pagar
-          const { data: lanc } = await supabase.from('fin_lancamentos').insert({
-            tipo: 'despesa',
-            descricao: `Embalagens gráfica — Pedido ${pedido.numero}`,
-            valor_total: valor,
-            fornecedor_id: fornecedor?.id || null,
-            total_parcelas: 1,
-            criado_por: 'sistema',
-          }).select().single()
-
-          if (lanc) {
-            await supabase.from('fin_parcelas').insert({
-              lancamento_id: lanc.id,
-              numero_parcela: 1,
-              valor,
-              data_vencimento: vencStr,
-              data_competencia: dataRec,
-              status: 'em_aberto',
-            })
-            // Vincula pedido ao lançamento
-            await supabase.from('pedidos_grafica')
-              .update({ fin_lancamento_id: lanc.id }).eq('id', pedido.id)
-          }
-        }
+      // Pagamento controlado no próprio recebimento
+      if (gerarConta && totalGeral > 0) {
+        const venc = new Date(dataRec); venc.setDate(venc.getDate() + (parseInt(prazo) || 0))
+        await supabase.from('recebimentos')
+          .update({ status_pagamento: 'agendado', data_agendada: venc.toISOString().slice(0,10) })
+          .eq('id', rec.id)
       }
 
       await supabase.from('pedidos_grafica').update({ status: novoStatus }).eq('id', pedido.id)
@@ -496,7 +456,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
             padding:'10px 14px', background:'var(--gray-50)', borderRadius:8 }}>
             <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, fontWeight:600, cursor:'pointer' }}>
               <input type="checkbox" checked={gerarConta} onChange={e => setGerarConta(e.target.checked)} />
-              Gerar Conta a Pagar
+              Agendar pagamento
             </label>
             {gerarConta && (
               <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:13 }}>
