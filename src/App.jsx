@@ -14,7 +14,7 @@ const ALL_PAGES = [
   { id: 'producao',      label: 'Produção',      icon: '📋' },
   { id: 'logistica',     label: 'Logística',     icon: '🚚' },
   { id: 'insumos',       label: 'Insumos',       icon: '🧂' },
-  { id: 'precificacao',  label: 'Precificação',  icon: '💰' },
+  { id: 'precificacao',  label: 'Custos',  icon: '💰' },
   { id: 'financeiro',    label: 'Financeiro',    icon: '📈' },
   { id: 'admin',         label: 'Admin',         icon: '⚙️' },
 ]
