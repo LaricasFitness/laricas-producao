@@ -10,7 +10,7 @@ import { RefreshCw, Save, CheckCircle, Pencil } from 'lucide-react'
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
 
 // ── Conferência de Estoque ────────────────────────────────────────────────────
-function ConferenciaEstoque({ onSalvo }) {
+export function ConferenciaEstoque({ onSalvo }) {
   const [embs, setEmbs] = useState([])
   const [contagens, setContagens] = useState({}) // id → valor contado
   const [responsavel, setResponsavel] = useState('')
@@ -468,14 +468,10 @@ export default function Embalagens() {
       <div className="tabs" style={{ marginBottom: 0 }}>
         <button className={`tab${sub === 'situacao' ? ' active' : ''}`} onClick={irParaSituacao}>📊 Situação</button>
         <button className={`tab${sub === 'pedidos' ? ' active' : ''}`} onClick={() => setSub('pedidos')}>🛒 Pedidos</button>
-        <button className={`tab${sub === 'compras' ? ' active' : ''}`} onClick={() => setSub('compras')}>💰 Compras</button>
-        <button className={`tab${sub === 'conferencia' ? ' active' : ''}`} onClick={() => setSub('conferencia')}>🔍 Conferência</button>
         <button className={`tab${sub === 'acoes' ? ' active' : ''}`} onClick={() => setSub('acoes')}>🕓 Minhas ações</button>
       </div>
       {sub === 'situacao'    && <Dashboard key={`${tipo}-${refreshKey}`} tipo={tipo} onNovoPedido={() => { setSub('pedidos'); setNovoPedidoFlag(true) }} />}
       {sub === 'pedidos'     && <Pedidos tipo={tipo} abrirNovo={novoPedidoFlag} onNovoClosed={() => setNovoPedidoFlag(false)} />}
-      {sub === 'compras'     && <Compras tipo={tipo} />}
-      {sub === 'conferencia' && <ConferenciaEstoque onSalvo={irParaSituacao} />}
       {sub === 'acoes'       && <div className="card card-pad"><LogGeral /></div>}
     </>
   )
