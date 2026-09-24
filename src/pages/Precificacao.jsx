@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import ControleEstoque from './Estoque'
+import { CustoPreparacoes, OverheadMensal } from './MatPrimas'
 import { RefreshCw, ChevronDown, ChevronUp, Save } from 'lucide-react'
 
 const CANAIS_DEFAULT = [
@@ -1009,7 +1010,9 @@ export default function Precificacao() {
         <button className={`tab${aba==='ranking'?' active':''}`} onClick={()=>setAba('ranking')}>🏆 Ranking de Margem</button>
         <button className={`tab${aba==='evolucao'?' active':''}`} onClick={()=>setAba('evolucao')}>📈 Evolução do CMV</button>
         <button className={`tab${aba==='estoque'?' active':''}`} onClick={()=>setAba('estoque')}>📅 CMV do Mês</button>
-        <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>🧪 Criar Produto</button>
+        <button className={`tab${aba==='preparacoes'?' active':''}`} onClick={()=>setAba('preparacoes')}>🧪 Custo de Preparações</button>
+        <button className={`tab${aba==='overhead'?' active':''}`} onClick={()=>setAba('overhead')}>🏭 Overhead do Mês</button>
+        <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>➕ Criar Produto</button>
       </div>
 
       {loading ? (
@@ -1062,6 +1065,8 @@ export default function Precificacao() {
           {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
           {aba==='simular'   && <SimularProduto data={data} incluirOverhead={incluirOverhead} />}
           {aba==='estoque'   && <ControleEstoque />}
+          {aba==='preparacoes' && <CustoPreparacoes />}
+          {aba==='overhead'    && <OverheadMensal />}
         </>
       )}
     </>
