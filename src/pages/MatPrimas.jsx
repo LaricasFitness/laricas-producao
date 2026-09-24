@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { Plus, RefreshCw, Save, Pencil, Upload, FileText } from 'lucide-react'
-import ControleEstoque from './Estoque'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -1387,7 +1386,6 @@ export default function MatPrimas() {
         <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
         <button className={`tab${sub==='consumo'?' active':''}`} onClick={()=>setSub('consumo')}>📉 Consumo</button>
         <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
-        <button className={`tab${sub==='cmv_mensal'?' active':''}`} onClick={()=>setSub('cmv_mensal')}>📦 Estoque e CMV</button>
         <button className={`tab${sub==='conferencia'?' active':''}`} onClick={()=>setSub('conferencia')}>🔍 Conferência</button>
       </div>
       {sub==='situacao'   && <DashMP />}
@@ -1396,7 +1394,6 @@ export default function MatPrimas() {
       {sub==='custo_prep'  && <CustoPreparacoes />}
       {sub==='consumo'     && <HistoricoConsumo />}
       {sub==='overhead'    && <OverheadMensal />}
-      {sub==='cmv_mensal'  && <ControleEstoque />}
       {sub==='conferencia' && <ConferenciaMP />}
     </>
   )
