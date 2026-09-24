@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import ControleEstoque from './Estoque'
 import { RefreshCw, ChevronDown, ChevronUp, Save } from 'lucide-react'
 
 const CANAIS_DEFAULT = [
@@ -1004,10 +1005,11 @@ export default function Precificacao() {
     <>
       <div className="tabs" style={{marginBottom:0}}>
         <button className={`tab${aba==='ficha'?' active':''}`} onClick={()=>setAba('ficha')}>📊 Ficha de Custo</button>
-        <button className={`tab${aba==='simulador'?' active':''}`} onClick={()=>setAba('simulador')}>💡 Simulador</button>
+        <button className={`tab${aba==='simulador'?' active':''}`} onClick={()=>setAba('simulador')}>💡 Markup e Canais</button>
         <button className={`tab${aba==='ranking'?' active':''}`} onClick={()=>setAba('ranking')}>🏆 Ranking de Margem</button>
         <button className={`tab${aba==='evolucao'?' active':''}`} onClick={()=>setAba('evolucao')}>📈 Evolução do CMV</button>
-        <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>🧪 Simular Produto</button>
+        <button className={`tab${aba==='estoque'?' active':''}`} onClick={()=>setAba('estoque')}>📅 CMV do Mês</button>
+        <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>🧪 Criar Produto</button>
       </div>
 
       {loading ? (
@@ -1059,6 +1061,7 @@ export default function Precificacao() {
           {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
           {aba==='simular'   && <SimularProduto data={data} incluirOverhead={incluirOverhead} />}
+          {aba==='estoque'   && <ControleEstoque />}
         </>
       )}
     </>
