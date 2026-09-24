@@ -731,7 +731,7 @@ function ModalInventario({ mp, onClose, onSaved }) {
 }
 
 // ── Dashboard de situação ─────────────────────────────────────────────────────
-function DashMP() {
+export function DashMP() {
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null) // {tipo:'compra'|'inventario'|'editar'|'xml', mp}
@@ -1396,7 +1396,7 @@ export default function MatPrimas() {
 }
 
 // ── Evolução de Preços ────────────────────────────────────────────────────────
-function EvolucaoPrecos() {
+export function EvolucaoPrecos() {
   const [mps, setMps] = useState([])
   const [compras, setCompras] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1660,7 +1660,7 @@ function EvolucaoPrecos() {
 }
 
 // ── Custo de Preparações ──────────────────────────────────────────────────────
-function CustoPreparacoes() {
+export function CustoPreparacoes() {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [expandido, setExpandido] = useState(null)
@@ -1909,7 +1909,7 @@ function CustoPreparacoes() {
 }
 
 // ── Overhead Mensal ───────────────────────────────────────────────────────────
-function OverheadMensal() {
+export function OverheadMensal() {
   const [itens, setItens] = useState([])
   const [rotulos, setRotulos] = useState([])
   const [producao, setProducao] = useState([])
@@ -2097,7 +2097,7 @@ function OverheadMensal() {
 }
 
 // ── Histórico de Consumo ──────────────────────────────────────────────────────
-function HistoricoConsumo() {
+export function HistoricoConsumo() {
   const [consumos, setConsumos] = useState([])
   const [mps, setMps] = useState([])
   const [loading, setLoading] = useState(true)
