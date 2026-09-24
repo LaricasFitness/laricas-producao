@@ -4,9 +4,9 @@ import Login from './pages/Login'
 import Embalagens from './pages/Embalagens'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
-import Financeiro from './pages/Financeiro'
 import Admin from './pages/Admin'
 import MatPrimas from './pages/MatPrimas'
+import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 
 const ALL_PAGES = [
@@ -14,23 +14,24 @@ const ALL_PAGES = [
   { id: 'producao',      label: 'Produção',      icon: '📋' },
   { id: 'logistica',     label: 'Logística',     icon: '🚚' },
   { id: 'insumos',       label: 'Insumos',       icon: '🧂' },
+  { id: 'estoque',       label: 'Estoque',       icon: '📥' },
   { id: 'precificacao',  label: 'Custos',  icon: '💰' },
-  { id: 'financeiro',    label: 'Financeiro',    icon: '📈' },
   { id: 'admin',         label: 'Admin',         icon: '⚙️' },
 ]
 
 const PERM_MAP = {
   dashboard:'embalagens', pedidos:'embalagens', compras:'embalagens',
   analise:'producao', log:'producao', planejamento:'producao', historico:'producao',
+  estoque:'insumos',   // quem já tinha acesso a Insumos passa a ver Estoque
 }
 
 const TITLES = {
-  embalagens:  { title:'Embalagens',         sub:'Situação, pedidos à gráfica e compras' },
+  embalagens:  { title:'Embalagens',         sub:'Situação e pedidos à gráfica' },
   producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
   logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
-  insumos:       { title:'Insumos / MP',       sub:'Estoque, compras e preço médio de matérias-primas' },
-  precificacao:  { title:'Precificação',       sub:'Ficha de custo, simulador de markup e ranking de margem' },
-  financeiro:    { title:'Financeiro',         sub:'Contas a receber, a pagar, fluxo de caixa e DRE' },
+  insumos:       { title:'Insumos / MP',       sub:'Situação, preços e custo das preparações' },
+  estoque:       { title:'Estoque',            sub:'Conferência física e compras — matéria-prima e embalagens' },
+  precificacao:  { title:'Custos',             sub:'Ficha de custo, CMV do mês, markup e margem por canal' },
   admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
 }
 
@@ -93,8 +94,8 @@ export default function App() {
           {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
           {pageAtual==='insumos'       && <MatPrimas />}
+          {pageAtual==='estoque'       && <EstoqueHub />}
           {pageAtual==='precificacao'  && <Precificacao />}
-          {pageAtual==='financeiro'    && <Financeiro />}
           {pageAtual==='admin'      && <Admin />}
         </div>
       </div>
