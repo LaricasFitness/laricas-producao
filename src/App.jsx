@@ -1,36 +1,30 @@
 import { useState } from 'react'
 import './App.css'
 import Login from './pages/Login'
-import Embalagens from './pages/Embalagens'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
 import Admin from './pages/Admin'
-import MatPrimas from './pages/MatPrimas'
 import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 
 const ALL_PAGES = [
-  { id: 'embalagens',    label: 'Embalagens',    icon: '📦' },
   { id: 'producao',      label: 'Produção',      icon: '📋' },
   { id: 'logistica',     label: 'Logística',     icon: '🚚' },
-  { id: 'insumos',       label: 'Insumos',       icon: '🧂' },
   { id: 'estoque',       label: 'Estoque',       icon: '📥' },
   { id: 'precificacao',  label: 'Custos',  icon: '💰' },
   { id: 'admin',         label: 'Admin',         icon: '⚙️' },
 ]
 
 const PERM_MAP = {
-  dashboard:'embalagens', pedidos:'embalagens', compras:'embalagens',
+  dashboard:'estoque', pedidos:'estoque', compras:'estoque',
+  embalagens:'estoque', insumos:'estoque',
   analise:'producao', log:'producao', planejamento:'producao', historico:'producao',
-  estoque:'insumos',   // quem já tinha acesso a Insumos passa a ver Estoque
-}
+  }
 
 const TITLES = {
-  embalagens:  { title:'Embalagens',         sub:'Situação e pedidos à gráfica' },
   producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
   logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
-  insumos:       { title:'Insumos / MP',       sub:'Situação, preços e custo das preparações' },
-  estoque:       { title:'Estoque',            sub:'Conferência física e compras — matéria-prima e embalagens' },
+  estoque:       { title:'Estoque',            sub:'Situação, conferência, compras e pedidos — MP e embalagens' },
   precificacao:  { title:'Custos',             sub:'Ficha de custo, CMV do mês, markup e margem por canal' },
   admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
 }
@@ -45,10 +39,10 @@ export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
   })
-  const [page, setPage] = useState('embalagens')
+  const [page, setPage] = useState('estoque')
   const [csvLogistica, setCsvLogistica] = useState(null)
 
-  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('embalagens') }} />
+  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('estoque') }} />
 
   const abas = usuario.abas_permitidas || []
   const pages = ALL_PAGES.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
@@ -90,10 +84,8 @@ export default function App() {
           </div>
         </header>
         <div className="page">
-          {pageAtual==='embalagens' && <Embalagens />}
           {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
-          {pageAtual==='insumos'       && <MatPrimas />}
           {pageAtual==='estoque'       && <EstoqueHub />}
           {pageAtual==='precificacao'  && <Precificacao />}
           {pageAtual==='admin'      && <Admin />}
