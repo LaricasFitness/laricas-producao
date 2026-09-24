@@ -640,14 +640,20 @@ function Simulador({ data, reload, incluirOverhead }) {
   const precoBase = precoManual ? parseFloat(precoManual) : cmv * markup
   const precoComDesconto = precoBase * (1 - desconto/100)
   // Desconto máximo por canal: preço onde MC = 0
-  function descontoMaxCanal(canal) {
-    // recLiq = precoDesc * (1 - totalPct) - totalFixo = cmv
-    // precoDesc = (cmv + totalFixo) / (1 - totalPct)
-    // descMax = (precoBase - precoDesc) / precoBase
-    if (canal.totalPct >= 1) return 0
-    const precoMin = (cmv + canal.totalFixo) / (1 - canal.totalPct)
-    const dMax = precoBase > 0 ? Math.max(0, (precoBase - precoMin) / precoBase * 100) : 0
-    return dMax
+  // Preço em que a margem de contribuição zera:
+  //   preco * (1 - totalPct) - totalFixo = cmv
+  function precoMinimoCanal(canal) {
+    if (canal.totalPct >= 1) return Infinity
+    return (cmv + canal.totalFixo) / (1 - canal.totalPct)
+  }
+
+  // Desconto máximo sobre o preço EFETIVO daquele canal — não sobre o preço base.
+  // Usar o preço base dava um número que não correspondia ao card quando havia
+  // preço específico cadastrado para o canal.
+  function descontoMaxCanal(canal, preco) {
+    const precoMin = precoMinimoCanal(canal)
+    if (!isFinite(precoMin) || !(preco > 0)) return 0
+    return Math.max(0, (preco - precoMin) / preco * 100)
   }
 
   // Carrega preços salvos ao selecionar produto
@@ -765,6 +771,12 @@ function Simulador({ data, reload, incluirOverhead }) {
               <div style={{fontSize:13,opacity:.8,marginTop:4}}>
                 Markup {fmt(markup,1)}x{desconto>0?` · ${fmt(desconto,1)}% desc.`:''} · Margem s/ desc. {pct(cmv>0?(precoBase-cmv)/precoBase:0)}
               </div>
+              {!precoManual && (
+                <div style={{fontSize:11,opacity:.65,marginTop:6,lineHeight:1.4}}>
+                  Preço derivado do CMV pelo markup — muda junto com o custo.
+                  Para comparar cenários com o mesmo preço, informe um preço manual.
+                </div>
+              )}
             </div>
 
             {/* Faixas de markup */}
@@ -797,7 +809,8 @@ function Simulador({ data, reload, incluirOverhead }) {
                 const precoCanal = parseFloat(precosCanal[canal.id]) || precoBase
                 const precoEfetivo = precoCanal * (1 - desconto/100)
                 const { recLiq, mc, mgPct } = calcMC(canal, precoEfetivo)
-                const dMax = descontoMaxCanal(canal)
+                const precoMin = precoMinimoCanal(canal)
+                const dMax = descontoMaxCanal(canal, precoCanal)
                 const acimaDMax = desconto > 0 && desconto > dMax
                 const cor = mgPct >= 0.4 ? 'var(--ok)' : mgPct >= 0.2 ? 'var(--warning)' : 'var(--danger)'
                 const dedPct = (canal.totalPct*100).toFixed(1)
@@ -808,6 +821,8 @@ function Simulador({ data, reload, incluirOverhead }) {
                       <div>
                         <div style={{fontWeight:700,fontSize:13}}>{canal.label}</div>
                         <div style={{fontSize:10,color:'var(--gray-400)'}}>
+                          Preço mín: <strong style={{color:'var(--purple)'}}>{isFinite(precoMin)?fmtR(precoMin):'—'}</strong>
+                          {' · '}
                           Desc. máx: <strong style={{color:dMax>0?'var(--ok)':'var(--danger)'}}>{fmt(dMax,1)}%</strong>
                           {acimaDMax && <span style={{color:'var(--danger)',fontWeight:700,marginLeft:4}}>⚠️ MC negativa</span>}
                         </div>
