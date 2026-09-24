@@ -1256,7 +1256,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 }
 
 // ── Histórico de compras ──────────────────────────────────────────────────────
-function HistoricoCompras() {
+export function HistoricoCompras() {
   const [compras, setCompras] = useState([])
   const [mps, setMps] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1381,20 +1381,16 @@ export default function MatPrimas() {
     <>
       <div className="tabs" style={{marginBottom:0}}>
         <button className={`tab${sub==='situacao'?' active':''}`} onClick={()=>setSub('situacao')}>📊 Situação</button>
-        <button className={`tab${sub==='historico'?' active':''}`} onClick={()=>setSub('historico')}>📦 Compras</button>
         <button className={`tab${sub==='evolucao'?' active':''}`} onClick={()=>setSub('evolucao')}>📈 Evolução de Preços</button>
         <button className={`tab${sub==='custo_prep'?' active':''}`} onClick={()=>setSub('custo_prep')}>🧪 Custo de Preparações</button>
         <button className={`tab${sub==='consumo'?' active':''}`} onClick={()=>setSub('consumo')}>📉 Consumo</button>
         <button className={`tab${sub==='overhead'?' active':''}`} onClick={()=>setSub('overhead')}>🏭 Overhead Mensal</button>
-        <button className={`tab${sub==='conferencia'?' active':''}`} onClick={()=>setSub('conferencia')}>🔍 Conferência</button>
       </div>
       {sub==='situacao'   && <DashMP />}
-      {sub==='historico'  && <HistoricoCompras />}
       {sub==='evolucao'   && <EvolucaoPrecos />}
       {sub==='custo_prep'  && <CustoPreparacoes />}
       {sub==='consumo'     && <HistoricoConsumo />}
       {sub==='overhead'    && <OverheadMensal />}
-      {sub==='conferencia' && <ConferenciaMP />}
     </>
   )
 }
@@ -2334,7 +2330,7 @@ function HistoricoConsumo() {
 
 
 // ── Conferência de Matéria-Prima ──────────────────────────────────────────────
-function ConferenciaMP() {
+export function ConferenciaMP() {
   const [mps, setMps] = useState([])
   const [contagens, setContagens] = useState({})
   const [responsavel, setResponsavel] = useState('')
