@@ -3,14 +3,27 @@ import { supabase } from '../supabase'
 import { Plus, Pencil, RefreshCw, Save, Key } from 'lucide-react'
 
 const TODAS_ABAS = [
-  { id: 'embalagens',  label: '📦 Embalagens (Situação + Pedidos + Compras)' },
-  { id: 'producao',    label: '📋 Produção (Registro + Planejamento + Análise + Log + Histórico)' },
-  { id: 'logistica',   label: '🚚 Logística' },
-  { id: 'insumos',       label: '🧂 Insumos / Matérias-Primas' },
-  { id: 'precificacao',  label: '💰 Precificação' },
-  { id: 'financeiro',    label: '📈 Financeiro' },
-  { id: 'admin',       label: '⚙️ Admin' },
+  { id: 'producao',      label: '📋 Produção',  desc: 'Registro, planejamento, análise, log e histórico' },
+  { id: 'estoque',       label: '📥 Estoque',   desc: 'Situação, conferência, compras, preços, consumo e pedidos à gráfica' },
+  { id: 'precificacao',  label: '💰 Custos',    desc: 'Ficha de custo, CMV do mês, preparações, overhead, markup e margem' },
+  { id: 'logistica',     label: '🚚 Logística', desc: 'Roteiros por zona e CSVs' },
+  { id: 'admin',         label: '⚙️ Admin',     desc: 'Cadastros, configurações e acessos' },
 ]
+
+// Permissões antigas continuam valendo: quem tinha 'embalagens' ou 'insumos'
+// enxerga 'estoque'. Ao salvar, os ids legados são convertidos.
+const LEGADO = { embalagens:'estoque', insumos:'estoque', dashboard:'estoque',
+                 pedidos:'estoque', compras:'estoque', financeiro:null,
+                 analise:'producao', log:'producao', planejamento:'producao', historico:'producao' }
+
+function normalizarAbas(abas) {
+  const out = new Set()
+  for (const a of (abas || [])) {
+    const novo = a in LEGADO ? LEGADO[a] : a
+    if (novo) out.add(novo)
+  }
+  return [...out]
+}
 
 async function sha256(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
@@ -23,7 +36,7 @@ function ModalUsuario({ usuario, onClose, onSaved }) {
     nome: usuario?.nome || '',
     email: usuario?.email || '',
     perfil: usuario?.perfil || 'operador',
-    abas_permitidas: usuario?.abas_permitidas || ['producao'],
+    abas_permitidas: normalizarAbas(usuario?.abas_permitidas) || ['producao'],
     ativo: usuario?.ativo ?? true,
     senha: '',
     confirmar_senha: '',
@@ -138,7 +151,10 @@ function ModalUsuario({ usuario, onClose, onSaved }) {
                     onChange={() => toggleAba(aba.id)}
                     style={{ width: 16, height: 16, accentColor: 'var(--purple)', flexShrink: 0 }}
                   />
-                  <span style={{ fontSize: 13, fontWeight: 500 }}>{aba.label}</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{aba.label}</div>
+                    {aba.desc && <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{aba.desc}</div>}
+                  </div>
                 </label>
               ))}
             </div>
