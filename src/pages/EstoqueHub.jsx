@@ -1,49 +1,57 @@
 import { useState } from 'react'
-import { ConferenciaEstoque } from './Embalagens'
-import { ConferenciaMP, HistoricoCompras } from './MatPrimas'
+import Dashboard from './Dashboard'
+import Pedidos from './Pedidos'
 import Compras from './Compras'
+import { ConferenciaEstoque } from './Embalagens'
+import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsumo } from './MatPrimas'
 
-// Hub de estoque: reúne as operações que valem para matéria-prima e
-// embalagem, que antes viviam duplicadas em dois menus diferentes.
+// Hub de estoque: tudo que é "item em casa" — matéria-prima e embalagem
+// juntas, com alternador onde a operação vale para os dois.
+const ABAS = [
+  { id:'situacao',   label:'📊 Situação',   sub:'Estoque atual, mínimos e alertas',        duplo:true },
+  { id:'conferencia',label:'🔍 Conferência', sub:'Contagem física e impacto no estoque',   duplo:true },
+  { id:'compras',    label:'🛒 Compras',     sub:'Lançamento de compras, notas e recebimentos', duplo:true },
+  { id:'precos',     label:'📈 Preços',      sub:'Histórico e evolução do custo dos insumos',   duplo:false },
+  { id:'consumo',    label:'📉 Consumo',     sub:'Baixas de matéria-prima por produto e por dia', duplo:false },
+  { id:'pedidos',    label:'🏭 Pedidos à gráfica', sub:'Pedidos de rótulos e embalagens',  duplo:false },
+]
+
 export default function EstoqueHub() {
-  const [aba, setAba] = useState('conferencia')
+  const [aba, setAba] = useState('situacao')
   const [tipo, setTipo] = useState('mp')
-
-  const Alternador = () => (
-    <div style={{ display: 'flex', gap: 4 }}>
-      {[['mp', '🧂 Matéria-prima'], ['emb', '📦 Embalagens']].map(([k, l]) => (
-        <button key={k} onClick={() => setTipo(k)}
-          className={`btn btn-sm ${tipo === k ? 'btn-primary' : 'btn-ghost'}`}>{l}</button>
-      ))}
-    </div>
-  )
+  const cfg = ABAS.find(a => a.id === aba)
 
   return (
     <div className="page">
       <div className="tabs">
-        <button className={`tab${aba === 'conferencia' ? ' active' : ''}`}
-          onClick={() => setAba('conferencia')}>🔍 Conferência</button>
-        <button className={`tab${aba === 'compras' ? ' active' : ''}`}
-          onClick={() => setAba('compras')}>🛒 Compras</button>
+        {ABAS.map(a => (
+          <button key={a.id} className={`tab${aba === a.id ? ' active' : ''}`}
+            onClick={() => setAba(a.id)}>{a.label}</button>
+        ))}
       </div>
 
-      <div className="card card-pad" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div className="card card-pad" style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
         <div>
-          <div style={{ fontWeight: 800, fontSize: 14 }}>
-            {aba === 'conferencia' ? '🔍 Conferência de estoque' : '🛒 Compras e recebimentos'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 2 }}>
-            {aba === 'conferencia'
-              ? 'Contagem física, divergência e impacto no estoque'
-              : 'Lançamento de compras, notas e histórico de preços'}
-          </div>
+          <div style={{ fontWeight:800, fontSize:14 }}>{cfg?.label}</div>
+          <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>{cfg?.sub}</div>
         </div>
-        <div style={{ flex: 1 }} />
-        <Alternador />
+        <div style={{ flex:1 }} />
+        {cfg?.duplo && (
+          <div style={{ display:'flex', gap:4 }}>
+            {[['mp','🧂 Matéria-prima'],['emb','📦 Embalagens']].map(([k,l]) => (
+              <button key={k} onClick={() => setTipo(k)}
+                className={`btn btn-sm ${tipo === k ? 'btn-primary' : 'btn-ghost'}`}>{l}</button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {aba === 'conferencia' && (tipo === 'mp' ? <ConferenciaMP /> : <ConferenciaEstoque />)}
-      {aba === 'compras' && (tipo === 'mp' ? <HistoricoCompras /> : <Compras />)}
+      {aba === 'situacao'    && (tipo === 'mp' ? <DashMP />          : <Dashboard tipo="rotulo" />)}
+      {aba === 'conferencia' && (tipo === 'mp' ? <ConferenciaMP />   : <ConferenciaEstoque />)}
+      {aba === 'compras'     && (tipo === 'mp' ? <HistoricoCompras />: <Compras />)}
+      {aba === 'precos'      && <EvolucaoPrecos />}
+      {aba === 'consumo'     && <HistoricoConsumo />}
+      {aba === 'pedidos'     && <Pedidos tipo="rotulo" />}
     </div>
   )
 }
