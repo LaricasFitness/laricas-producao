@@ -612,7 +612,7 @@ const STATUS_LABEL = {
   recebido_parcial: { label: '⚠️ Recebido c/ diferença', cls: 'pill-danger' },
 }
 
-export default function Pedidos({ abrirNovo, onNovoClosed, tipo = 'rotulo' }) {
+export default function Pedidos({ abrirNovo, onNovoClosed }) {
   const [pedidos, setPedidos] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNovo, setShowNovo] = useState(false)
