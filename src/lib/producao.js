@@ -63,7 +63,10 @@ export async function calcularConsumoMP(sku, quantidade) {
 
 async function ajustarEstoqueMP(mpId, delta) {
   const { data: mp } = await supabase.from('materias_primas').select('estoque_atual').eq('id', mpId).single()
-  const novo = Math.max(0, (parseFloat(mp?.estoque_atual) || 0) + delta)
+  // Sem truncar em zero: estoque negativo é sinal de compra não lançada
+  // ou consumo a maior. Truncar apagaria o rombo e a próxima compra
+  // somaria a partir do zero, escondendo a diferença para sempre.
+  const novo = (parseFloat(mp?.estoque_atual) || 0) + delta
   await supabase.from('materias_primas')
     .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
     .eq('id', mpId)
@@ -71,7 +74,7 @@ async function ajustarEstoqueMP(mpId, delta) {
 
 async function ajustarEstoqueEmb(embId, delta) {
   const { data: e } = await supabase.from('embalagens').select('estoque_atual').eq('id', embId).single()
-  const novo = Math.max(0, (parseFloat(e?.estoque_atual) || 0) + delta)
+  const novo = (parseFloat(e?.estoque_atual) || 0) + delta
   await supabase.from('embalagens')
     .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
     .eq('id', embId)
