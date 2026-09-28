@@ -152,7 +152,7 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
     doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
     doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
     doc.text('Nenhum item de Correios encontrado nos planejamentos selecionados.', MARGIN, 40)
-    doc.save('Producao_Correios_historico.pdf')
+    doc.save('Producao_Envio_historico.pdf')
     return
   }
 
@@ -166,7 +166,7 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
     doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
     doc.text(`Reimpresso: ${agora}`, 130, 9)
     doc.setTextColor(82,46,100); doc.setFontSize(16); doc.setFont(undefined,'bold')
-    doc.text(`Produção Correios — ${headerDia(plan.data_producao)}`, MARGIN, 26)
+    doc.text(`Produção para Envio — ${headerDia(plan.data_producao)}`, MARGIN, 26)
 
     const body = []
     let totalDia = 0
@@ -194,13 +194,13 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
 
     const finalY = doc.lastAutoTable.finalY + 4
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
-    doc.text(`Total Correios: ${fmt(totalDia)} unidades`, MARGIN, Math.min(finalY, PAGE_H-10))
+    doc.text(`Total envio: ${fmt(totalDia)} unidades`, MARGIN, Math.min(finalY, PAGE_H-10))
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
-    doc.text('Laricas Fitness — Planejamento de Produção · Correios (reimpressão)', MARGIN, PAGE_H-5)
+    doc.text('Laricas Fitness — Planejamento de Produção · Envio (reimpressão)', MARGIN, PAGE_H-5)
   })
 
   const datas = planosComCorreio.map(p=>p.data_producao)
-  doc.save(`Producao_Correios_${datas[0]}.pdf`)
+  doc.save(`Producao_Envio_${datas[0]}.pdf`)
 }
 
 export default function HistoricoPlanejamento() {
@@ -336,7 +336,7 @@ export default function HistoricoPlanejamento() {
                     </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => baixarPDFCorreios(plan)}
                       style={{borderColor:'var(--warning)',color:'var(--warning)'}}>
-                      📮 PDF Correios
+                      📮 PDF Envio
                     </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => excluirPlano(plan)}
                       style={{ color:'var(--danger)' }} title="Excluir planejamento">
