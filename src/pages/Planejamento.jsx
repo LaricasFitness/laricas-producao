@@ -40,6 +40,21 @@ function parsearDataBr(dataBr) {
   return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
 }
 
+// Transportadoras que entram no PDF de envio (postagem, não delivery).
+// Casa por trecho do nome, então variações como "Correios PAC",
+// "JeT Express" ou "LATAM Cargo" são reconhecidas.
+const TRANSPORTADORAS_ENVIO = [
+  /correio/,        // Correios, Correios PAC, Correios SEDEX
+  /\bjet\b|j&t/,    // JeT, JeT Express, J&T — limite de palavra evita "projeto"
+  /latam/,          // Latam Cargo
+]
+
+function ehEnvio(transportadora) {
+  const t = String(transportadora || '').toLowerCase().trim()
+  if (!t) return false
+  return TRANSPORTADORAS_ENVIO.some(re => re.test(t))
+}
+
 function parsearCSV(texto) {
   const rows = parseCSVRobusto(texto)
   if (rows.length < 2) return []
@@ -429,7 +444,7 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
   )
 }
 
-// ── PDF Correio ───────────────────────────────────────────────────────────────
+// ── PDF Envio (Correios, JeT, Latam) ───────────────────────────────────────────────────────────────
 function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
@@ -446,12 +461,12 @@ function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
     // PDF vazio com aviso
     doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 14, 'F')
     doc.setTextColor(234, 183, 130); doc.setFontSize(9); doc.setFont(undefined, 'bold')
-    doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
+    doc.text('Laricas Fitness — Produção para ENVIO', MARGIN, 9)
     doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
-    doc.text('Nenhum pedido via Correios encontrado para os dias selecionados.', MARGIN, 40)
+    doc.text('Nenhum pedido de envio (Correios, JeT ou Latam) nos dias selecionados.', MARGIN, 40)
     doc.setFontSize(9)
-    doc.text('Verifique se o CSV contém a coluna "Transportadora" com o valor "Correios".', MARGIN, 50)
-    doc.save(`Producao_Correios.pdf`)
+    doc.text('Verifique se o CSV traz a coluna "Transportadora" preenchida.', MARGIN, 50)
+    doc.save(`Producao_Envio.pdf`)
     return
   }
 
@@ -467,7 +482,7 @@ function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
 
     // Título
     doc.setTextColor(82, 46, 100); doc.setFontSize(16); doc.setFont(undefined, 'bold')
-    doc.text(`Produção Correios — ${headerDia(data)}`, MARGIN, 26)
+    doc.text(`Produção para Envio — ${headerDia(data)}`, MARGIN, 26)
 
     // Monta body por categoria (mesmo padrão do PDF Produção)
     const correioNoDia = diasCorreio[data] || {}
@@ -516,13 +531,13 @@ function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
 
     const finalY = doc.lastAutoTable.finalY + 4
     doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
-    doc.text(`Total Correios: ${totalDia.toLocaleString('pt-BR')} unidades`, MARGIN, Math.min(finalY, PAGE_H - 10))
+    doc.text(`Total envio: ${totalDia.toLocaleString('pt-BR')} unidades`, MARGIN, Math.min(finalY, PAGE_H - 10))
 
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
-    doc.text('Laricas Fitness — Planejamento de Produção · Correios', MARGIN, PAGE_H - 5)
+    doc.text('Laricas Fitness — Planejamento de Produção · Envio', MARGIN, PAGE_H - 5)
   })
 
-  doc.save(`Producao_Correios_${datasAtivas[0]||'sem-data'}.pdf`)
+  doc.save(`Producao_Envio_${datasAtivas[0]||'sem-data'}.pdf`)
 }
 
 function gerarPDFPreparacoesDia(dia, linhas, observacao) {
@@ -910,8 +925,8 @@ export default function Planejamento({ onIrLogistica }) {
       for (const { sku, qtd, data, transportadora } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
         novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
-        // Identifica Correio por transportadora
-        if (transportadora && transportadora.toLowerCase().includes('correio')) {
+        // Identifica envio postal pela transportadora (Correios, JeT, Latam)
+        if (ehEnvio(transportadora)) {
           if (!novosCorreio[data]) novosCorreio[data] = {}
           novosCorreio[data][sku] = (novosCorreio[data][sku] || 0) + qtd
         }
@@ -1155,7 +1170,7 @@ export default function Planejamento({ onIrLogistica }) {
               {datasAtivas.length > 0 && (
                 <button className="btn btn-ghost" onClick={() => gerarPDFCorreio(datasAtivas, diasCorreio, embalagens)}
                   style={{borderColor:'var(--warning)',color:'var(--warning)'}}>
-                  📮 PDF Correios
+                  📮 PDF Envio
                 </button>
               )}
             </div>
