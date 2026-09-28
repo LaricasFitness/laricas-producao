@@ -50,7 +50,7 @@ async function ajustarEstoqueCompra(mpId, delta) {
   if (!mpId || !delta) return
   const { data: mp } = await supabase.from('materias_primas')
     .select('estoque_atual').eq('id', mpId).single()
-  const novo = Math.max(0, (parseFloat(mp?.estoque_atual) || 0) + delta)
+  const novo = (parseFloat(mp?.estoque_atual) || 0) + delta
   await supabase.from('materias_primas')
     .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
     .eq('id', mpId)
@@ -737,6 +737,8 @@ export function DashMP() {
   const [modal, setModal] = useState(null) // {tipo:'compra'|'inventario'|'editar'|'xml', mp}
   const [filtro, setFiltro] = useState('')
   const [catFiltro, setCatFiltro] = useState('Todas')
+  const [statusFiltro, setStatusFiltro] = useState('todos')
+  const [ordem, setOrdem] = useState('nome')
 
   async function load() {
     setLoading(true)
@@ -749,14 +751,32 @@ export function DashMP() {
   function afterSave() { setModal(null); load() }
 
   const cats = ['Todas', ...new Set((lista||[]).map(m=>m.categoria))]
+
+  const abaixoDoMinimo = m =>
+    parseFloat(m.estoque_minimo||0) > 0 &&
+    parseFloat(m.estoque_atual||0) <= parseFloat(m.estoque_minimo||0)
+  const negativo = m => parseFloat(m.estoque_atual||0) < 0
+
   const filtrada = lista.filter(m => {
     const matchCat = catFiltro==='Todas' || m.categoria===catFiltro
     const matchNome = !filtro || m.nome.toLowerCase().includes(filtro.toLowerCase())
-    return matchCat && matchNome
+    const matchStatus =
+      statusFiltro === 'todos'    ? true :
+      statusFiltro === 'abaixo'   ? abaixoDoMinimo(m) :
+      statusFiltro === 'negativo' ? negativo(m) :
+      statusFiltro === 'ok'       ? !abaixoDoMinimo(m) : true
+    return matchCat && matchNome && matchStatus
   })
 
-  const totalValor = lista.reduce((s,m) => s + (parseFloat(m.estoque_atual)||0)*(parseFloat(m.custo_unitario)||0), 0)
-  const semEstoque = lista.filter(m => parseFloat(m.estoque_atual||0) <= parseFloat(m.estoque_minimo||0) && m.estoque_minimo > 0).length
+  const valorDe = m => (parseFloat(m.estoque_atual)||0) * (parseFloat(m.custo_unitario)||0)
+  const totalValor = lista.reduce((s,m) => s + valorDe(m), 0)
+  const semEstoque = lista.filter(abaixoDoMinimo).length
+  const negativos  = lista.filter(negativo).length
+
+  // Ordena por valor para ver quem concentra o dinheiro
+  const ordenada = ordem === 'valor'
+    ? [...filtrada].sort((a,b) => valorDe(b) - valorDe(a))
+    : filtrada
 
   function statusMP(m) {
     const est = parseFloat(m.estoque_atual)||0
@@ -779,7 +799,7 @@ export function DashMP() {
         {[
           {label:'Total em estoque',valor:fmtR(totalValor),sub:`${lista.length} insumos cadastrados`,cor:'var(--purple)'},
           {label:'Abaixo do mínimo',valor:semEstoque,sub:'insumos com estoque crítico',cor:semEstoque>0?'var(--danger)':'var(--ok)'},
-          {label:'Insumos ativos',valor:lista.length,sub:'cadastrados no sistema',cor:'var(--gray-600)'},
+          {label:'Estoque negativo',valor:negativos,sub:negativos>0?'compra não lançada ou consumo a maior':'nenhum insumo negativo',cor:negativos>0?'var(--danger)':'var(--ok)'},
         ].map(k=>(
           <div key={k.label} className="card card-pad" style={{textAlign:'center'}}>
             <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',letterSpacing:'.04em'}}>{k.label}</div>
@@ -793,8 +813,18 @@ export function DashMP() {
       <div className="card">
         <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           <input className="form-input" placeholder="Filtrar por nome..." value={filtro} onChange={e=>setFiltro(e.target.value)} style={{width:200,fontSize:13}} />
-          <select className="form-input" value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{width:160,fontSize:13}}>
+          <select className="form-input" value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{width:150,fontSize:13}}>
             {cats.map(c=><option key={c}>{c}</option>)}
+          </select>
+          <select className="form-input" value={statusFiltro} onChange={e=>setStatusFiltro(e.target.value)} style={{width:180,fontSize:13}}>
+            <option value="todos">Todos os status</option>
+            <option value="abaixo">⚠️ Abaixo do mínimo ({semEstoque})</option>
+            <option value="negativo">🚨 Estoque negativo ({negativos})</option>
+            <option value="ok">✅ Acima do mínimo</option>
+          </select>
+          <select className="form-input" value={ordem} onChange={e=>setOrdem(e.target.value)} style={{width:160,fontSize:13}}>
+            <option value="nome">Ordem alfabética</option>
+            <option value="valor">Maior valor em estoque</option>
           </select>
           <div style={{flex:1}}/>
           <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
@@ -818,17 +848,18 @@ export function DashMP() {
                 <th style={{padding:'9px 10px',textAlign:'right'}}>Estoque atual</th>
                 <th style={{padding:'9px 10px',textAlign:'right'}}>Preço médio</th>
                 <th style={{padding:'9px 10px',textAlign:'right'}}>Valor em estoque</th>
+                <th style={{padding:'9px 10px',textAlign:'right'}}>% do total</th>
                 <th style={{padding:'9px 10px',textAlign:'center'}}>Status</th>
                 <th style={{padding:'9px 10px',textAlign:'center'}}>Ações</th>
               </tr>
             </thead>
             <tbody>
-              {filtrada.length===0 && (
-                <tr><td colSpan={7} style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
+              {ordenada.length===0 && (
+                <tr><td colSpan={8} style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
                   {lista.length===0 ? 'Nenhum insumo cadastrado ainda' : 'Nenhum resultado para o filtro'}
                 </td></tr>
               )}
-              {filtrada.map((m,i)=>{
+              {ordenada.map((m,i)=>{
                 const est = parseFloat(m.estoque_atual)||0
                 const custo = parseFloat(m.custo_unitario)||0
                 const valor = est*custo
@@ -842,12 +873,35 @@ export function DashMP() {
                     <td style={{padding:'9px 10px',fontSize:12,color:'var(--gray-500)'}}>{m.categoria}</td>
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color: est<=0?'var(--danger)':'var(--gray-700)'}}>
                       {fmt(est,1)} <span style={{fontSize:11,color:'var(--gray-400)'}}>{m.unidade}</span>
+                      {est < 0 && (
+                        <div style={{fontSize:10,color:'var(--danger)',fontWeight:700}}
+                          title="Saiu mais do que entrou. Falta lançar compra ou refazer o inventário.">
+                          ⚠️ negativo
+                        </div>
+                      )}
+                      {est >= 0 && parseFloat(m.estoque_minimo||0) > 0 && est <= parseFloat(m.estoque_minimo) && (
+                        <div style={{fontSize:10,color:'var(--warning)'}}>mín. {fmt(m.estoque_minimo,0)}</div>
+                      )}
                     </td>
                     <td style={{padding:'9px 10px',textAlign:'right',color:'var(--gray-600)'}}>
                       {custo>0 ? `${fmtR(custo)}/${m.unidade}` : '—'}
                     </td>
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
                       {valor>0 ? fmtR(valor) : '—'}
+                    </td>
+                    <td style={{padding:'9px 10px',width:140}}>
+                      {(() => {
+                        const p = totalValor > 0 ? valor / totalValor * 100 : 0
+                        if (!(p > 0)) return <span style={{color:'var(--gray-300)',fontSize:12}}>—</span>
+                        return (
+                          <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
+                            <div style={{width:56,height:6,background:'var(--gray-100)',borderRadius:3}}>
+                              <div style={{height:'100%',width:`${Math.min(100,p)}%`,background:'var(--purple)',borderRadius:3}}/>
+                            </div>
+                            <span style={{fontSize:11,fontWeight:700,minWidth:38,textAlign:'right'}}>{fmt(p,1)}%</span>
+                          </div>
+                        )
+                      })()}
                     </td>
                     <td style={{padding:'9px 10px',textAlign:'center',fontSize:16}}>{icon}</td>
                     <td style={{padding:'9px 10px',textAlign:'center'}}>
@@ -861,15 +915,33 @@ export function DashMP() {
                 )
               })}
             </tbody>
-            {filtrada.length>0 && (
-              <tfoot>
-                <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--gray-50)'}}>
-                  <td colSpan={4} style={{padding:'9px 14px',fontWeight:800}}>Total em estoque</td>
-                  <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>{fmtR(totalValor)}</td>
-                  <td colSpan={2}/>
-                </tr>
-              </tfoot>
-            )}
+            {ordenada.length>0 && (() => {
+              const valorFiltrado = ordenada.reduce((s,m)=>s+valorDe(m),0)
+              const parcial = ordenada.length !== lista.length
+              return (
+                <tfoot>
+                  <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--gray-50)'}}>
+                    <td colSpan={4} style={{padding:'9px 14px',fontWeight:800}}>
+                      {parcial ? `Selecionados (${ordenada.length} de ${lista.length})` : 'Total em estoque'}
+                    </td>
+                    <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>
+                      {fmtR(valorFiltrado)}
+                    </td>
+                    <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800}}>
+                      {totalValor>0 ? `${fmt(valorFiltrado/totalValor*100,1)}%` : '—'}
+                    </td>
+                    <td colSpan={2}/>
+                  </tr>
+                  {parcial && (
+                    <tr style={{background:'var(--gray-50)',fontSize:12,color:'var(--gray-500)'}}>
+                      <td colSpan={4} style={{padding:'6px 14px'}}>Total geral do estoque</td>
+                      <td style={{padding:'6px 10px',textAlign:'right',fontWeight:700}}>{fmtR(totalValor)}</td>
+                      <td colSpan={3}/>
+                    </tr>
+                  )}
+                </tfoot>
+              )
+            })()}
           </table>
         )}
       </div>
