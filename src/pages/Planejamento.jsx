@@ -43,16 +43,33 @@ function parsearDataBr(dataBr) {
 // Transportadoras que entram no PDF de envio (postagem, não delivery).
 // Casa por trecho do nome, então variações como "Correios PAC",
 // "JeT Express" ou "LATAM Cargo" são reconhecidas.
-const TRANSPORTADORAS_ENVIO = [
-  /correio/,        // Correios, Correios PAC, Correios SEDEX
-  /\bjet\b|j&t/,    // JeT, JeT Express, J&T — limite de palavra evita "projeto"
-  /latam/,          // Latam Cargo
+// Envio postal. Atenção: no CSV do Bling, JeT e Latam vêm com a coluna
+// Transportadora VAZIA — a identificação está só em Serviço, pelo código
+// do Mercado Envios. Por isso avaliamos as duas colunas.
+const PADROES_ENVIO = [
+  /correio/,                    // CORREIOS - SEDEX
+  /me_standard/,                // ME_Standard_33  → JeT
+  /me_[eé]f[aá]cil/,            // ME_éFácil_12    → Latam Cargo
+  /\bjet\b|j&t/,                // caso passe a vir nomeado
+  /latam/,
 ]
 
-function ehEnvio(transportadora) {
-  const t = String(transportadora || '').toLowerCase().trim()
+// Nome amigável para exibir no PDF
+const NOME_ENVIO = [
+  [/correio/,        'Correios'],
+  [/me_standard|\bjet\b|j&t/, 'JeT'],
+  [/me_[eé]f[aá]cil|latam/,    'Latam Cargo'],
+]
+
+function ehEnvio(transportadora, servico) {
+  const t = `${transportadora || ''} ${servico || ''}`.toLowerCase().trim()
   if (!t) return false
-  return TRANSPORTADORAS_ENVIO.some(re => re.test(t))
+  return PADROES_ENVIO.some(re => re.test(t))
+}
+
+function nomeEnvio(transportadora, servico) {
+  const t = `${transportadora || ''} ${servico || ''}`.toLowerCase()
+  return (NOME_ENVIO.find(([re]) => re.test(t)) || [null, 'Envio'])[1]
 }
 
 function parsearCSV(texto) {
@@ -75,7 +92,11 @@ function parsearCSV(texto) {
     const idxSku   = header.indexOf('SKU')
     const idxQtd   = header.indexOf('Quantidade')
     const idxData  = header.indexOf('Data Prevista')
-    const idxTrans = header.indexOf('Transportadora')
+    // Cabeçalho tolerante: ignora caixa, acento e espaços
+    const norm = s => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim()
+    const acharCol = (...nomes) => header.findIndex(h => nomes.includes(norm(h)))
+    const idxTrans = acharCol('transportadora')
+    const idxServ  = acharCol('servico', 'serviço')
     const idxNome  = header.indexOf('Produto') >= 0 ? header.indexOf('Produto')
       : header.indexOf('Descrição') >= 0 ? header.indexOf('Descrição')
       : header.indexOf('Nome') >= 0 ? header.indexOf('Nome') : -1
@@ -87,8 +108,9 @@ function parsearCSV(texto) {
       const dataIso = parsearDataBr(cols[idxData])
       const nome  = idxNome >= 0 ? (cols[idxNome]?.trim() || '') : ''
       const transportadora = idxTrans >= 0 ? (cols[idxTrans]?.trim() || '') : ''
+      const servico        = idxServ  >= 0 ? (cols[idxServ]?.trim()  || '') : ''
       if (!sku || qtd <= 0 || !dataIso) continue
-      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome, transportadora })
+      resultado.push({ sku, qtd: Math.round(qtd), data: dataIso, nome, transportadora, servico })
     }
   }
   return resultado
@@ -465,7 +487,9 @@ function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
     doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
     doc.text('Nenhum pedido de envio (Correios, JeT ou Latam) nos dias selecionados.', MARGIN, 40)
     doc.setFontSize(9)
-    doc.text('Verifique se o CSV traz a coluna "Transportadora" preenchida.', MARGIN, 50)
+    doc.setFontSize(8)
+    doc.text('Considera Correios, JeT (ME_Standard) e Latam Cargo (ME_éFácil),', MARGIN, 50)
+    doc.text('lendo as colunas "Transportadora" e "Serviço" do CSV.', MARGIN, 55)
     doc.save(`Producao_Envio.pdf`)
     return
   }
@@ -922,11 +946,11 @@ export default function Planejamento({ onIrLogistica }) {
       const parsed = parsearCSV(texto)
       const novosBling = {}
       const novosCorreio = {} // { data: { sku: qtd } } — só pedidos Correio
-      for (const { sku, qtd, data, transportadora } of parsed) {
+      for (const { sku, qtd, data, transportadora, servico } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
         novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
-        // Identifica envio postal pela transportadora (Correios, JeT, Latam)
-        if (ehEnvio(transportadora)) {
+        // Identifica envio postal por Transportadora OU Serviço
+        if (ehEnvio(transportadora, servico)) {
           if (!novosCorreio[data]) novosCorreio[data] = {}
           novosCorreio[data][sku] = (novosCorreio[data][sku] || 0) + qtd
         }
