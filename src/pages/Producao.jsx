@@ -397,7 +397,7 @@ export default function Producao() {
                   const atual = parseFloat(mp?.estoque_atual) || 0
                   await supabase
                     .from('materias_primas')
-                    .update({ estoque_atual: Math.max(0, atual - consumoG), atualizado_em: new Date().toISOString() })
+                    .update({ estoque_atual: atual - consumoG, atualizado_em: new Date().toISOString() })
                     .eq('id', mpId)
                 }
 
