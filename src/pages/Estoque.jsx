@@ -51,7 +51,7 @@ export default function ControleEstoque() {
       rMps, rConfMP, rComprasMP,
       rEmbs, rConfEmb, rRecItens,
       rProducao, rProdComps, rPreps, rPrepComps,
-      rCatEmbs, rProdEmbs,
+      rCatEmbs, rProdEmbs, rCfgPerda,
     ] = await Promise.all([
       q(supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario').eq('ativo', true)),
       q(supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em')),
@@ -69,6 +69,7 @@ export default function ControleEstoque() {
       q(supabase.from('preparacao_composicao').select('preparacao_id,quantidade,materia_prima_id,sub_preparacao_id')),
       q(supabase.from('categoria_embalagem').select('categoria,quantidade,embalagens(custo_unitario)')),
       q(supabase.from('produto_embalagem').select('sku_produto,quantidade,embalagens(custo_unitario)')),
+      q(supabase.from('configuracoes').select('chave,valor').eq('chave','perda_embalagem_pct')),
     ])
 
     const mps = arr(rMps), confMP = arr(rConfMP), comprasMP = arr(rComprasMP)
@@ -76,6 +77,7 @@ export default function ControleEstoque() {
     const producao = arr(rProducao), prodComps = arr(rProdComps)
     const preps = arr(rPreps), prepComps = arr(rPrepComps), catEmbs = arr(rCatEmbs)
     const prodEmbs = arr(rProdEmbs)
+    const perdaEmbPct = parseFloat(arr(rCfgPerda)[0]?.valor) || 2
 
     const mpMap = {}; for (const m of (mps || [])) mpMap[m.id] = m
     const embMap = {}; for (const e of (embs || [])) embMap[e.id] = e
@@ -221,11 +223,57 @@ export default function ControleEstoque() {
       return { emb, qtd, mpUnit, embUnit, cmvUnit: mpUnit + embUnit, total: (mpUnit + embUnit) * qtd, mps }
     }).sort((a, b) => b.total - a.total)
 
+    // ── Consumo de embalagem pela PRODUÇÃO ──
+    // Cada produto consome o próprio rótulo (1 por unidade) mais as
+    // embalagens vinculadas, multiplicadas pela quantidade do vínculo.
+    const embPorItem = {}
+    const addEmb = (id, qtd) => {
+      const e = embMap[id] || (embs || []).find(x => x.id === id)
+      if (!e) return
+      if (!embPorItem[id]) embPorItem[id] = {
+        id, nome: e.nome, codigo: e.codigo, categoria: e.categoria,
+        custo: parseFloat(e.custo_unitario) || 0, qtd: 0, valor: 0,
+      }
+      embPorItem[id].qtd += qtd
+      embPorItem[id].valor += qtd * embPorItem[id].custo
+    }
+    const embPorCodigo = {}
+    for (const e of (embs || [])) embPorCodigo[e.codigo] = e
+
+    for (const { emb, qtd } of Object.values(prodPorSku)) {
+      addEmb(emb.id, qtd)                                   // o rótulo do produto
+      const links = (prodEmbs || []).filter(pe => pe.sku_produto === emb.codigo)
+      if (links.length) {
+        for (const pe of links) addEmb(pe.embalagem_id, qtd * (parseFloat(pe.quantidade) || 1))
+      } else {
+        // sem vínculo próprio, cai no padrão da categoria
+        for (const ce of (catEmbs || []).filter(x => x.categoria === emb.categoria)) {
+          if (ce.embalagem_id) addEmb(ce.embalagem_id, qtd * (parseFloat(ce.quantidade) || 1))
+        }
+      }
+    }
+    // Perda de embalagem: a ficha não enxerga rótulo descolado nem filme
+    // rasgado, então aplica-se um percentual sobre o consumo teórico.
+    const fatorPerda = 1 + perdaEmbPct / 100
+    const consumoEmbProducao = Object.values(embPorItem)
+      .filter(x => x.qtd > 0)
+      .map(x => ({
+        ...x,
+        qtdComPerda: x.qtd * fatorPerda,
+        perda: x.valor * (perdaEmbPct / 100),
+        valorComPerda: x.valor * fatorPerda,
+      }))
+      .sort((a, b) => b.valorComPerda - a.valorComPerda)
+    const totalEmbTeorico  = consumoEmbProducao.reduce((s, x) => s + x.valor, 0)
+    const totalEmbPerda    = consumoEmbProducao.reduce((s, x) => s + x.perda, 0)
+    const totalEmbProducao = totalEmbTeorico + totalEmbPerda
+
     const cmvMP = produzidos.reduce((s, p) => s + p.mpUnit * p.qtd, 0)
     const cmvEmb = produzidos.reduce((s, p) => s + p.embUnit * p.qtd, 0)
     const unidades = produzidos.reduce((s, p) => s + p.qtd, 0)
 
-    setDados({ invMP, invEmb, produzidos, cmvMP, cmvEmb, unidades, ini, fim })
+    setDados({ invMP, invEmb, produzidos, cmvMP, cmvEmb, unidades, ini, fim,
+      consumoEmbProducao, totalEmbProducao, totalEmbTeorico, totalEmbPerda, perdaEmbPct })
     setLoading(false)
   }
 
@@ -257,7 +305,6 @@ export default function ControleEstoque() {
             <>
               {[
                 { titulo: '🧂 Matéria-prima', inv: dados.invMP, total: totalMP },
-                { titulo: '📦 Embalagens e rótulos', inv: dados.invEmb, total: totalEmb },
               ].map(({ titulo, inv, total }) => (
                 <div key={titulo} className="card">
                   <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
@@ -316,16 +363,126 @@ export default function ControleEstoque() {
                 </div>
               ))}
 
+              {/* ── Embalagem: consumo pela produção registrada ── */}
+              <div className="card">
+                <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 14 }}>📦 Embalagens e rótulos</div>
+                    <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>
+                      unidades produzidas × embalagem de cada produto · perda de {fmt(dados.perdaEmbPct,0)}%
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>
+                    {fmtR(dados.totalEmbProducao)}
+                  </div>
+                </div>
+
+                {dados.consumoEmbProducao.length === 0 ? (
+                  <div style={{ padding: 28, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>
+                    Nenhuma produção registrada no período.
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)' }}>
+                          <th style={{ padding: '8px 14px', textAlign: 'left' }}>Item</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'left' }}>Categoria</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Consumido</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Custo un.</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Valor</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>+ Perda</th>
+                          <th style={{ padding: '8px 14px', textAlign: 'right' }}>Total</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>% do total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dados.consumoEmbProducao.map((x, i) => {
+                          const p = dados.totalEmbProducao > 0 ? x.valorComPerda / dados.totalEmbProducao * 100 : 0
+                          return (
+                            <tr key={x.id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
+                              <td style={{ padding: '7px 14px', fontWeight: 600 }}>{x.nome}</td>
+                              <td style={{ padding: '7px 10px', color: 'var(--gray-400)', fontSize: 11 }}>{x.categoria}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
+                                {x.qtd.toLocaleString('pt-BR')} un
+                              </td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>
+                                {x.custo > 0 ? fmtR(x.custo) : <span style={{ color: 'var(--danger)' }}>sem custo</span>}
+                              </td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>
+                                {fmtR(x.valor)}
+                              </td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--warning)', fontSize: 11 }}>
+                                {x.perda > 0.005 ? `+${fmtR(x.perda)}` : '—'}
+                              </td>
+                              <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--purple)' }}>
+                                {fmtR(x.valorComPerda)}
+                              </td>
+                              <td style={{ padding: '7px 10px', width: 130 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                                  <div style={{ width: 50, height: 6, background: 'var(--gray-100)', borderRadius: 3 }}>
+                                    <div style={{ height: '100%', width: `${Math.min(100, p)}%`, background: 'var(--purple)', borderRadius: 3 }} />
+                                  </div>
+                                  <span style={{ fontSize: 11, fontWeight: 700, minWidth: 36, textAlign: 'right' }}>{fmt(p, 1)}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ borderTop: '2px solid var(--gray-200)', background: 'var(--gray-50)' }}>
+                          <td colSpan={4} style={{ padding: '9px 14px', fontWeight: 800 }}>
+                            Consumo teórico + perda de {fmt(dados.perdaEmbPct,0)}%
+                          </td>
+                          <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--gray-600)' }}>
+                            {fmtR(dados.totalEmbTeorico)}
+                          </td>
+                          <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--warning)' }}>
+                            +{fmtR(dados.totalEmbPerda)}
+                          </td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--purple)' }}>
+                            {fmtR(dados.totalEmbProducao)}
+                          </td>
+                          <td/>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+
+                {/* Inventário como referência — método diferente, serve de contraprova */}
+                {(dados.invEmb.temIni && dados.invEmb.temFim) && (
+                  <div style={{ padding: '10px 20px', borderTop: '1px solid var(--gray-200)',
+                    background: 'var(--gray-50)', fontSize: 12, color: 'var(--gray-600)',
+                    display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <span>
+                      Por inventário no mesmo período (inicial + entradas − final): <strong>{fmtR(totalEmb)}</strong>
+                    </span>
+                    {dados.totalEmbProducao > 0 && (
+                      <span style={{ fontWeight: 700,
+                        color: Math.abs(totalEmb - dados.totalEmbProducao) / dados.totalEmbProducao > 0.1
+                          ? 'var(--danger)' : 'var(--gray-500)' }}>
+                        diferença {totalEmb - dados.totalEmbProducao >= 0 ? '+' : '−'}
+                        {fmtR(Math.abs(totalEmb - dados.totalEmbProducao))}
+                        {' '}({fmt(Math.abs(totalEmb - dados.totalEmbProducao) / dados.totalEmbProducao * 100, 1)}%)
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {(dados.invMP.temIni && dados.invMP.temFim) && (
                 <div className="card card-pad" style={{ display: 'flex', justifyContent: 'space-between',
                   alignItems: 'center', background: 'var(--purple-pale)' }}>
                   <div>
                     <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--purple)' }}>Consumo real total — {labelMes}</div>
                     <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}>
-                      medido por inventário, sem depender de ficha técnica
+                      MP por inventário físico · embalagem por produção registrada
                     </div>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--purple)' }}>{fmtR(totalMP + totalEmb)}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--purple)' }}>{fmtR(totalMP + dados.totalEmbProducao)}</div>
                 </div>
               )}
             </>
@@ -480,6 +637,8 @@ export default function ControleEstoque() {
             const podeComparar = dados.invMP.temIni && dados.invMP.temFim
             const difMP = podeComparar ? totalMP - dados.cmvMP : null
             const difMPpct = podeComparar && dados.cmvMP > 0 ? (difMP / dados.cmvMP * 100) : null
+            // Embalagem agora usa produção dos dois lados — mesma base,
+            // então a comparação não valida nada e é mostrada como tal.
             const podeEmb = dados.invEmb.temIni && dados.invEmb.temFim
             const difEmb = podeEmb ? totalEmb - dados.cmvEmb : null
             const difEmbPct = podeEmb && dados.cmvEmb > 0 ? (difEmb / dados.cmvEmb * 100) : null
@@ -508,20 +667,39 @@ export default function ControleEstoque() {
                     <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Diferença</div>
                   </div>
                   <Linha label="Matéria-prima" real={totalMP} ficha={dados.cmvMP} dif={difMP} difPct={difMPpct} ok={podeComparar} />
-                  <Linha label="Embalagem" real={totalEmb} ficha={dados.cmvEmb} dif={difEmb} difPct={difEmbPct} ok={podeEmb} />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
+                    padding: '12px 16px', borderTop: '1px solid var(--gray-100)', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>Embalagem</div>
+                      <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+                        mesma base nos dois lados — produção × ficha
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(dados.totalEmbProducao)}</div>
+                    <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(dados.cmvEmb)}</div>
+                    <div style={{ textAlign: 'right', fontWeight: 700, color: 'var(--gray-300)' }}>—</div>
+                  </div>
+                  {podeEmb && (
+                    <div style={{ padding: '8px 16px', background: 'var(--gray-50)', fontSize: 11,
+                      color: 'var(--gray-500)', borderTop: '1px solid var(--gray-100)' }}>
+                      Contraprova por inventário de embalagem no período: <strong>{fmtR(totalEmb)}</strong>
+                      {' '}(diferença de {fmt(Math.abs(totalEmb - dados.totalEmbProducao) / (dados.totalEmbProducao||1) * 100, 1)}%
+                      {' '}contra a produção)
+                    </div>
+                  )}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
                     padding: '14px 16px', borderTop: '2px solid var(--gray-200)', background: 'var(--purple-pale)', alignItems: 'center' }}>
                     <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>Total</div>
                     <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
-                      {(podeComparar && podeEmb) ? fmtR(totalMP + totalEmb) : 'n/d'}
+                      {podeComparar ? fmtR(totalMP + dados.totalEmbProducao) : 'n/d'}
                     </div>
                     <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
                       {fmtR(dados.cmvMP + dados.cmvEmb)}
                     </div>
                     <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 15,
-                      color: (podeComparar && podeEmb) ? 'var(--purple)' : 'var(--gray-300)' }}>
-                      {(podeComparar && podeEmb)
-                        ? `${(totalMP + totalEmb - dados.cmvMP - dados.cmvEmb) >= 0 ? '+' : '−'}${fmtR(Math.abs(totalMP + totalEmb - dados.cmvMP - dados.cmvEmb))}`
+                      color: podeComparar ? 'var(--purple)' : 'var(--gray-300)' }}>
+                      {podeComparar
+                        ? `${(totalMP - dados.cmvMP) >= 0 ? '+' : '−'}${fmtR(Math.abs(totalMP - dados.cmvMP))}`
                         : '—'}
                     </div>
                   </div>
