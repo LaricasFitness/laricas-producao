@@ -2413,6 +2413,7 @@ export function ConferenciaMP() {
   const [catFiltro, setCatFiltro] = useState('todas')
   const [editando, setEditando] = useState(null)
   const [editQtd, setEditQtd] = useState('')
+  const [dataFiltro, setDataFiltro] = useState('todas')
 
   async function load() {
     setLoading(true)
@@ -2486,6 +2487,13 @@ export function ConferenciaMP() {
     setEditando(null); setEditQtd('')
     await load(); await loadHistorico()
   }
+
+  // Histórico: filtro por data e peso de cada insumo no valor contado
+  const datasConferencia = [...new Set(historico.map(h => h.data_conferencia))].sort().reverse()
+  const histFiltrado = dataFiltro === 'todas' ? historico
+    : historico.filter(h => h.data_conferencia === dataFiltro)
+  const valorContadoDe = h => (parseFloat(h.estoque_contado)||0) * (parseFloat(h.custo_unitario)||0)
+  const totalContado = histFiltrado.reduce((s,h) => s + valorContadoDe(h), 0)
 
   const cats = ['todas', ...new Set(mps.map(m => m.categoria).filter(Boolean))]
   const filtradas = mps.filter(m => catFiltro === 'todas' || m.categoria === catFiltro)
@@ -2767,12 +2775,33 @@ export function ConferenciaMP() {
             )
           })()}
 
-          <div className="card">
-            <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',fontWeight:800,fontSize:15}}>
-              📋 Lançamentos detalhados
+          <div className="card card-pad" style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+            <div>
+              <div style={{fontWeight:800,fontSize:14}}>📋 Lançamentos detalhados</div>
+              <div style={{fontSize:11,color:'var(--gray-400)',marginTop:2}}>
+                {histFiltrado.length} registro(s) · valor contado {fmtR(totalContado)}
+              </div>
             </div>
+            <div style={{flex:1}}/>
+            <select className="form-input" value={dataFiltro}
+              onChange={e=>setDataFiltro(e.target.value)} style={{width:210,fontSize:13}}>
+              <option value="todas">Todas as conferências</option>
+              {datasConferencia.map(d => (
+                <option key={d} value={d}>
+                  {new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                  {' · '}{historico.filter(h=>h.data_conferencia===d).length} itens
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="card">
             {historico.length === 0 ? (
               <div style={{padding:40,textAlign:'center',color:'var(--gray-300)'}}>Nenhuma conferência registrada ainda.</div>
+            ) : histFiltrado.length === 0 ? (
+              <div style={{padding:40,textAlign:'center',color:'var(--gray-300)'}}>
+                Nenhum lançamento nessa data.
+              </div>
             ) : (
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
@@ -2783,12 +2812,14 @@ export function ConferenciaMP() {
                     <th style={{padding:'9px 10px',textAlign:'right'}}>Contado</th>
                     <th style={{padding:'9px 10px',textAlign:'right'}}>Diferença</th>
                     <th style={{padding:'9px 10px',textAlign:'right'}}>Impacto R$</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>Valor contado</th>
+                    <th style={{padding:'9px 10px',textAlign:'right'}}>% do estoque</th>
                     <th style={{padding:'9px 14px',textAlign:'left'}}>Responsável</th>
                     <th style={{padding:'9px 10px',width:70}}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {historico.map((c,i) => {
+                  {histFiltrado.map((c,i) => {
                     const diff = parseFloat(c.estoque_contado) - parseFloat(c.estoque_sistema)
                     const impacto = diff * (parseFloat(c.custo_unitario)||0)
                     return (
@@ -2810,6 +2841,23 @@ export function ConferenciaMP() {
                           color:Math.abs(impacto)<0.01?'var(--gray-400)':impacto<0?'var(--danger)':'var(--ok)'}}>
                           {Math.abs(impacto)<0.01?'—':`${impacto>=0?'+':'−'}${fmtR(Math.abs(impacto))}`}
                         </td>
+                        <td style={{padding:'8px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                          {valorContadoDe(c)>0 ? fmtR(valorContadoDe(c)) : '—'}
+                        </td>
+                        <td style={{padding:'8px 10px',width:140}}>
+                          {(() => {
+                            const p = totalContado>0 ? valorContadoDe(c)/totalContado*100 : 0
+                            if (!(p>0)) return <span style={{color:'var(--gray-300)',fontSize:12}}>—</span>
+                            return (
+                              <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-end'}}>
+                                <div style={{width:54,height:6,background:'var(--gray-100)',borderRadius:3}}>
+                                  <div style={{height:'100%',width:`${Math.min(100,p)}%`,background:'var(--purple)',borderRadius:3}}/>
+                                </div>
+                                <span style={{fontSize:11,fontWeight:700,minWidth:36,textAlign:'right'}}>{fmt(p,1)}%</span>
+                              </div>
+                            )
+                          })()}
+                        </td>
                         <td style={{padding:'8px 14px',color:'var(--gray-500)'}}>{c.responsavel||'—'}</td>
                         <td style={{padding:'8px 10px',textAlign:'center'}}>
                           <div style={{display:'flex',gap:4,justifyContent:'center'}}>
@@ -2825,6 +2873,26 @@ export function ConferenciaMP() {
                     )
                   })}
                 </tbody>
+                <tfoot>
+                  <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--gray-50)'}}>
+                    <td colSpan={5} style={{padding:'10px 14px',fontWeight:800}}>
+                      {dataFiltro === 'todas'
+                        ? `Todas as conferências · ${histFiltrado.length} lançamentos`
+                        : `Conferência de ${new Date(dataFiltro+'T12:00:00').toLocaleDateString('pt-BR')} · ${histFiltrado.length} itens`}
+                    </td>
+                    <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,
+                      color: histFiltrado.reduce((s,h)=>s+(parseFloat(h.estoque_contado)-parseFloat(h.estoque_sistema))*(parseFloat(h.custo_unitario)||0),0) < 0 ? 'var(--danger)' : 'var(--ok)'}}>
+                      {(() => {
+                        const t = histFiltrado.reduce((s,h)=>s+(parseFloat(h.estoque_contado)-parseFloat(h.estoque_sistema))*(parseFloat(h.custo_unitario)||0),0)
+                        return `${t>=0?'+':'−'}${fmtR(Math.abs(t))}`
+                      })()}
+                    </td>
+                    <td style={{padding:'10px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>
+                      {fmtR(totalContado)}
+                    </td>
+                    <td colSpan={3}/>
+                  </tr>
+                </tfoot>
               </table>
             )}
           </div>
