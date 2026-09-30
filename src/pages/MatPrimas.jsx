@@ -2414,6 +2414,11 @@ export function ConferenciaMP() {
   const [editando, setEditando] = useState(null)
   const [editQtd, setEditQtd] = useState('')
   const [dataFiltro, setDataFiltro] = useState('todas')
+  const [ord, setOrd] = useState({ campo: 'data', dir: 'desc' })
+
+  // Clicar no mesmo campo inverte; em outro, começa decrescente
+  const ordenarPor = campo => setOrd(o =>
+    o.campo === campo ? { campo, dir: o.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'desc' })
 
   async function load() {
     setLoading(true)
@@ -2494,6 +2499,36 @@ export function ConferenciaMP() {
     : historico.filter(h => h.data_conferencia === dataFiltro)
   const valorContadoDe = h => (parseFloat(h.estoque_contado)||0) * (parseFloat(h.custo_unitario)||0)
   const totalContado = histFiltrado.reduce((s,h) => s + valorContadoDe(h), 0)
+
+  const CAMPOS_ORD = {
+    data:        h => h.data_conferencia,
+    nome:        h => (h.materias_primas?.nome || '').toLowerCase(),
+    sistema:     h => parseFloat(h.estoque_sistema)||0,
+    contado:     h => parseFloat(h.estoque_contado)||0,
+    diferenca:   h => (parseFloat(h.estoque_contado)||0) - (parseFloat(h.estoque_sistema)||0),
+    impacto:     h => ((parseFloat(h.estoque_contado)||0) - (parseFloat(h.estoque_sistema)||0)) * (parseFloat(h.custo_unitario)||0),
+    valor:       h => valorContadoDe(h),
+    responsavel: h => (h.responsavel || '').toLowerCase(),
+  }
+  const histOrdenado = [...histFiltrado].sort((a, b) => {
+    const f = CAMPOS_ORD[ord.campo] || CAMPOS_ORD.data
+    const va = f(a), vb = f(b)
+    const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb
+    return ord.dir === 'asc' ? cmp : -cmp
+  })
+
+  // Cabeçalho clicável com indicador de direção
+  const Th = ({ campo, children, alinha = 'left', largura }) => (
+    <th onClick={() => ordenarPor(campo)} title="Clique para ordenar"
+      style={{ padding: alinha === 'left' ? '9px 14px' : '9px 10px', textAlign: alinha,
+        width: largura, cursor: 'pointer', userSelect: 'none',
+        color: ord.campo === campo ? 'var(--purple)' : undefined }}>
+      {children}
+      <span style={{ marginLeft: 4, opacity: ord.campo === campo ? 1 : .25, fontSize: 10 }}>
+        {ord.campo === campo ? (ord.dir === 'asc' ? '↑' : '↓') : '↕'}
+      </span>
+    </th>
+  )
 
   const cats = ['todas', ...new Set(mps.map(m => m.categoria).filter(Boolean))]
   const filtradas = mps.filter(m => catFiltro === 'todas' || m.categoria === catFiltro)
@@ -2806,20 +2841,20 @@ export function ConferenciaMP() {
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{background:'var(--gray-50)',borderBottom:'1px solid var(--gray-200)'}}>
-                    <th style={{padding:'9px 14px',textAlign:'left'}}>Data</th>
-                    <th style={{padding:'9px 14px',textAlign:'left'}}>Matéria-prima</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>Sistema</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>Contado</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>Diferença</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>Impacto R$</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>Valor contado</th>
-                    <th style={{padding:'9px 10px',textAlign:'right'}}>% do estoque</th>
-                    <th style={{padding:'9px 14px',textAlign:'left'}}>Responsável</th>
+                    <Th campo="data">Data</Th>
+                    <Th campo="nome">Matéria-prima</Th>
+                    <Th campo="sistema"   alinha="right">Sistema</Th>
+                    <Th campo="contado"   alinha="right">Contado</Th>
+                    <Th campo="diferenca" alinha="right">Diferença</Th>
+                    <Th campo="impacto"   alinha="right">Impacto R$</Th>
+                    <Th campo="valor"     alinha="right">Valor contado</Th>
+                    <Th campo="valor"     alinha="right">% do estoque</Th>
+                    <Th campo="responsavel">Responsável</Th>
                     <th style={{padding:'9px 10px',width:70}}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {histFiltrado.map((c,i) => {
+                  {histOrdenado.map((c,i) => {
                     const diff = parseFloat(c.estoque_contado) - parseFloat(c.estoque_sistema)
                     const impacto = diff * (parseFloat(c.custo_unitario)||0)
                     return (
