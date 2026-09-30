@@ -505,7 +505,7 @@ export default function Analise() {
       // desperdício
       const { data: desp } = await supabase
         .from('producao_interna')
-        .select('item, observacao, data_producao, registrado_por')
+        .select('item, observacao, data_producao, registrado_por, quantidade, unidade, materia_prima_id, materias_primas(nome, unidade, custo_unitario)')
         .eq('fase', 'desperdicio')
         .gte('data_producao', ini).lte('data_producao', fim)
         .order('data_producao', { ascending: false })
@@ -956,6 +956,74 @@ export default function Analise() {
           </div>
 
           {/* Desperdício */}
+          {(() => {
+            const comMP = desperdicio.filter(d => d.materia_prima_id && d.quantidade > 0)
+            if (!comMP.length) return null
+            const custoDe = d => (parseFloat(d.quantidade)||0) * (parseFloat(d.materias_primas?.custo_unitario)||0)
+            const total = comMP.reduce((s,d) => s + custoDe(d), 0)
+            const porMP = {}
+            for (const d of comMP) {
+              const k = d.materias_primas?.nome || '?'
+              if (!porMP[k]) porMP[k] = { nome: k, unidade: d.materias_primas?.unidade, qtd: 0, valor: 0, ocorrencias: 0 }
+              porMP[k].qtd += parseFloat(d.quantidade)||0
+              porMP[k].valor += custoDe(d)
+              porMP[k].ocorrencias++
+            }
+            const ranking = Object.values(porMP).sort((a,b) => b.valor - a.valor)
+            return (
+              <div className="card">
+                <div style={{ padding:'12px 20px', background:'var(--danger)', color:'#fff',
+                  display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:800, fontSize:14 }}>⚠️ Desperdício de matéria-prima no período</div>
+                    <div style={{ fontSize:11, opacity:.8, marginTop:2 }}>
+                      {comMP.length} ocorrência(s) · {ranking.length} insumo(s)
+                    </div>
+                  </div>
+                  <div style={{ fontWeight:800, fontSize:20 }}>
+                    R$ {total.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}
+                  </div>
+                </div>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'var(--gray-50)', borderBottom:'1px solid var(--gray-200)' }}>
+                      <th style={{ padding:'8px 14px', textAlign:'left' }}>Insumo</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>Ocorrências</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>Quantidade</th>
+                      <th style={{ padding:'8px 14px', textAlign:'right' }}>Valor perdido</th>
+                      <th style={{ padding:'8px 10px', textAlign:'right' }}>% do total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ranking.map((r,i) => {
+                      const p = total > 0 ? r.valor/total*100 : 0
+                      return (
+                        <tr key={r.nome} style={{ borderTop:'1px solid var(--gray-100)', background:i%2?'#fafafa':'#fff' }}>
+                          <td style={{ padding:'7px 14px', fontWeight:600 }}>{r.nome}</td>
+                          <td style={{ padding:'7px 10px', textAlign:'right', color:'var(--gray-500)' }}>{r.ocorrencias}</td>
+                          <td style={{ padding:'7px 10px', textAlign:'right' }}>
+                            {r.qtd.toLocaleString('pt-BR',{maximumFractionDigits:1})} {r.unidade}
+                          </td>
+                          <td style={{ padding:'7px 14px', textAlign:'right', fontWeight:800, color:'var(--danger)' }}>
+                            R$ {r.valor.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}
+                          </td>
+                          <td style={{ padding:'7px 10px', width:130 }}>
+                            <div style={{ display:'flex', alignItems:'center', gap:6, justifyContent:'flex-end' }}>
+                              <div style={{ width:50, height:6, background:'var(--gray-100)', borderRadius:3 }}>
+                                <div style={{ height:'100%', width:`${Math.min(100,p)}%`, background:'var(--danger)', borderRadius:3 }}/>
+                              </div>
+                              <span style={{ fontSize:11, fontWeight:700, minWidth:36, textAlign:'right' }}>{p.toFixed(1)}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })()}
+
           <div className="card card-pad">
             <div className="card-title">⚠️ Desperdícios registrados no período</div>
             {desperdicio.length === 0 ? (
