@@ -1534,14 +1534,15 @@ function AdminSistema() {
 
           {/* Percentuais de desperdício */}
           <div style={{ border:'2px solid var(--warning)', borderRadius:10, padding:16, background:'#fffbf0' }}>
-            <div style={{ fontWeight:800, fontSize:14, marginBottom:4 }}>♻️ Percentuais de Desperdício</div>
+            <div style={{ fontWeight:800, fontSize:14, marginBottom:4 }}>♻️ Perda de Embalagem</div>
             <div style={{ fontSize:13, color:'var(--gray-500)', marginBottom:14 }}>
-              Aplicados no CMV Mensal como custo adicional sobre matéria-prima e embalagem.
+              Rótulo que descola, filme que rasga, lata amassada — perda que a ficha não enxerga.
+              Entra no Consumo Real de embalagem. A perda de matéria-prima não é estimada:
+              ela sai da diferença entre o inventário físico e a ficha.
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'220px', gap:16 }}>
               {[
-                { chave:'desperdicio_mp_pct', label:'Desperdício de matéria-prima', padrao:'5' },
-                { chave:'desperdicio_embalagem_pct', label:'Desperdício de embalagem', padrao:'3' },
+                { chave:'perda_embalagem_pct', label:'Perda de embalagem', padrao:'2' },
               ].map(c => (
                 <div key={c.chave}>
                   <label className="form-label">{c.label}</label>
@@ -1638,12 +1639,12 @@ export default function Admin() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Tabs */}
       <div className="tabs">
-        <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Embalagens</button>
+        <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Cadastro de Embalagens</button>
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
         <button className={`tab${tab === 'fichas_produtos' ? ' active' : ''}`} onClick={() => setTab('fichas_produtos')}>🧩 Composição e Embalagem</button>
         <button className={`tab${tab === 'canais' ? ' active' : ''}`} onClick={() => setTab('canais')}>🛒 Canais</button>
-        <button className={`tab${tab === 'overhead' ? ' active' : ''}`} onClick={() => setTab('overhead')}>🏭 Overhead</button>
+        <button className={`tab${tab === 'overhead' ? ' active' : ''}`} onClick={() => setTab('overhead')}>🏭 Custos Fixos</button>
         <button className={`tab${tab === 'sistema' ? ' active' : ''}`} onClick={() => setTab('sistema')}>🔧 Sistema</button>
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
