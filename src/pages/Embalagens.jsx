@@ -35,7 +35,7 @@ export function ConferenciaEstoque({ onSalvo }) {
 
   async function loadHistorico() {
     const { data } = await supabase.from('conferencia_estoque')
-      .select('*, embalagens(nome, codigo, categoria)')
+      .select('*, embalagens(nome, codigo, categoria, custo_unitario)')
       .order('criado_em', { ascending: false })
       .limit(100)
     setHistorico(data || [])
