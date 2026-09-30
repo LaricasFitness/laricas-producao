@@ -156,8 +156,8 @@ function Fase5({ vals, setVals }) {
 }
 
 // Fase 6 — Desperdício
-function Fase6({ itens, setItens }) {
-  function addItem() { setItens(prev => [...prev, { item: '', ocorrido: '' }]) }
+function Fase6({ itens, setItens, mps = [] }) {
+  function addItem() { setItens(prev => [...prev, { item: '', ocorrido: '', mp_id: '', quantidade: '' }]) }
   function upd(i, k, v) { setItens(prev => prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r)) }
   function rem(i) { setItens(prev => prev.filter((_, idx) => idx !== i)) }
 
@@ -167,6 +167,11 @@ function Fase6({ itens, setItens }) {
         Registre qualquer desperdício ocorrido hoje — produto, ingrediente, embalagem ou outro.
         Deixe em branco se não houve nada.
       </p>
+      <div style={{ padding: '10px 14px', background: 'var(--purple-pale)', borderRadius: 8,
+        fontSize: 12, color: 'var(--gray-600)', marginBottom: 14, lineHeight: 1.5 }}>
+        Ao vincular uma <strong>matéria-prima</strong> e informar a quantidade, o estoque é debitado
+        e o valor entra no consumo do mês. Sem vínculo, o registro fica só como histórico descritivo.
+      </div>
       {itens.map((r, i) => (
         <div key={i} style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)', borderRadius: 8, padding: 14, marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="form-grid-2">
@@ -179,6 +184,50 @@ function Fase6({ itens, setItens }) {
               <input className="form-input" placeholder="Ex: Queimou no forno" value={r.ocorrido} onChange={e => upd(i, 'ocorrido', e.target.value)} />
             </div>
           </div>
+
+          {/* Vínculo opcional com matéria-prima — este sim baixa o estoque */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', gap: 10, alignItems: 'start' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Matéria-prima (opcional — baixa do estoque)</label>
+              <select className="form-input" value={r.mp_id || ''} onChange={e => upd(i, 'mp_id', e.target.value)}>
+                <option value="">— Só registrar, sem baixar estoque —</option>
+                {[...new Set(mps.map(m => m.categoria).filter(Boolean))].map(cat => (
+                  <optgroup key={cat} label={cat}>
+                    {mps.filter(m => m.categoria === cat).map(m => (
+                      <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">
+                Quantidade{(() => { const m = mps.find(x => x.id === r.mp_id); return m ? ` (${m.unidade})` : '' })()}
+              </label>
+              <input type="number" className="form-input" min={0} step="any" placeholder="0"
+                value={r.quantidade || ''} disabled={!r.mp_id}
+                onChange={e => upd(i, 'quantidade', e.target.value)}
+                style={{ textAlign: 'right', opacity: r.mp_id ? 1 : .5 }} />
+            </div>
+          </div>
+          {(() => {
+            const m = mps.find(x => x.id === r.mp_id)
+            const q = parseFloat(r.quantidade) || 0
+            if (!m || !(q > 0)) return null
+            const custo = q * (parseFloat(m.custo_unitario) || 0)
+            const sobra = (parseFloat(m.estoque_atual) || 0) - q
+            return (
+              <div style={{ fontSize: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--danger)', fontWeight: 700 }}>
+                  Perda de R$ {custo.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span style={{ color: sobra < 0 ? 'var(--danger)' : 'var(--gray-500)' }}>
+                  estoque ficará em {sobra.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} {m.unidade}
+                  {sobra < 0 && ' ⚠️ negativo'}
+                </span>
+              </div>
+            )
+          })()}
           <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-end', color: 'var(--danger)' }} onClick={() => rem(i)}>
             🗑 Remover
           </button>
@@ -210,7 +259,14 @@ export default function Producao() {
   const [valsFase3, setValsFase3] = useState({})
   const [valsFase4, setValsFase4] = useState({})
   const [valsFase5, setValsFase5] = useState({})
-  const [desperdicio, setDesperdicio] = useState([{ item: '', ocorrido: '' }])
+  const [desperdicio, setDesperdicio] = useState([{ item: '', ocorrido: '', mp_id: '', quantidade: '' }])
+  const [mps, setMps] = useState([])
+
+  useEffect(() => {
+    supabase.from('materias_primas').select('id,nome,unidade,categoria,estoque_atual,custo_unitario')
+      .eq('ativo', true).order('categoria').order('nome')
+      .then(({ data }) => setMps(data || []))
+  }, [])
 
   useEffect(() => {
     carregarEmbalagens().then(d => { setEmbalagens(d); setLoading(false) })
@@ -431,11 +487,42 @@ export default function Producao() {
         .forEach(([item, quantidade]) => internos.push({ fase: 'cobertura', item: `Cobertura ${item}`, quantidade: parseFloat(quantidade), unidade: 'pacotes', data_producao: dataStr, registrado_por: registradoPor }))
 
       // Fase 6 — desperdício
-      desperdicio.filter(d => d.item.trim()).forEach(d =>
-        internos.push({ fase: 'desperdicio', item: d.item, observacao: d.ocorrido, quantidade: null, unidade: null, data_producao: dataStr, registrado_por: registradoPor })
-      )
+      desperdicio.filter(d => d.item.trim() || d.mp_id).forEach(d => {
+        const mp = mps.find(m => m.id === d.mp_id)
+        const q = parseFloat(d.quantidade) || 0
+        internos.push({
+          fase: 'desperdicio',
+          item: d.item.trim() || mp?.nome || '(sem descrição)',
+          observacao: d.ocorrido,
+          quantidade: mp && q > 0 ? q : null,
+          unidade: mp && q > 0 ? mp.unidade : null,
+          materia_prima_id: mp && q > 0 ? mp.id : null,
+          data_producao: dataStr,
+          registrado_por: registradoPor,
+        })
+      })
 
       if (internos.length > 0) await supabase.from('producao_interna').insert(internos)
+
+      // Desperdício com matéria-prima vinculada: baixa o estoque e
+      // entra no consumo do mês, igual ao consumo de produção.
+      const perdas = internos.filter(i => i.fase === 'desperdicio' && i.materia_prima_id && i.quantidade > 0)
+      for (const p of perdas) {
+        const { data: mpAtual } = await supabase.from('materias_primas')
+          .select('estoque_atual').eq('id', p.materia_prima_id).single()
+        await supabase.from('materias_primas').update({
+          estoque_atual: (parseFloat(mpAtual?.estoque_atual) || 0) - p.quantidade,
+          atualizado_em: new Date().toISOString(),
+        }).eq('id', p.materia_prima_id)
+
+        await supabase.from('mp_consumos').insert({
+          materia_prima_id: p.materia_prima_id,
+          quantidade: p.quantidade,
+          data_consumo: dataStr,
+          origem: 'desperdicio',
+          descricao: `Desperdício — ${p.item}${p.observacao ? ': ' + p.observacao : ''}`,
+        })
+      }
 
       setSaved(true)
     } catch (e) {
@@ -520,7 +607,7 @@ export default function Producao() {
       {step === 3 && <FaseRecheios vals={valsFase3} setVals={setValsFase3} label="recheio" itens={[...RECHEIOS, ...RECHEIOS_FASE3_EXTRA]} />}
       {step === 4 && <FaseRecheios vals={valsFase4} setVals={setValsFase4} label="recheio de potinho/potão" />}
       {step === 5 && <Fase5 vals={valsFase5} setVals={setValsFase5} />}
-      {step === 6 && <Fase6 itens={desperdicio} setItens={setDesperdicio} />}
+      {step === 6 && <Fase6 itens={desperdicio} setItens={setDesperdicio} mps={mps} />}
 
       <div className="btn-row">
         <button className="btn btn-ghost" onClick={() => setStep(s => s - 1)}>
