@@ -519,7 +519,10 @@ function AdminPreparacoes() {
     setSalvando(false)
   }
 
+  // Mesma regra do custo: real já é líquido (medido); estimado leva a perda
   const rendLiquido = (prep) => {
+    const real = parseFloat(prep.rendimento_real_medio) || null
+    if (real) return real.toFixed(1)
     const bruto = parseFloat(prep.rendimento_estimado) || 0
     const perda = parseFloat(prep.perda_percentual) || 0
     return ((bruto - bruto * perda / 100)).toFixed(1)
@@ -577,6 +580,9 @@ function AdminPreparacoes() {
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', fontWeight:800, color:'var(--purple)' }}>
                   {rendLiquido(p)} {p.unidade_rendimento}
+                  {parseFloat(p.rendimento_real_medio) > 0 && (
+                    <div style={{ fontSize:10, fontWeight:700, color:'var(--ok)' }}>real</div>
+                  )}
                 </td>
                 <td style={{ padding:'10px 10px', textAlign:'right', color:'var(--ok)' }}>
                   +{parseFloat(p.margem_seguranca || 0).toFixed(1)}%

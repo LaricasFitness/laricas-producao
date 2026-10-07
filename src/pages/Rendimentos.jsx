@@ -4,19 +4,24 @@ import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, Pencil } from 'lucide-re
 
 function fmt(n, d=2) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
 
-// Recalcula média dos últimos 10 e atualiza a preparação
+// Estimado é bruto (soma dos ingredientes); o real é líquido → comparar com estimado × (1 − perda%)
+function estimadoLiquido(prep) {
+  const est = parseFloat(prep.rendimento_estimado) || 0
+  const perda = parseFloat(prep.perda_percentual) || 0
+  return est * (1 - perda / 100)
+}
+
+// Recalcula a média ponderada dos últimos 10 (Σ rendimento_total ÷ Σ num_receitas) e atualiza a preparação
 async function recalcularMedia(preparacao_id) {
   const { data: hist } = await supabase
     .from('preparacao_rendimento')
-    .select('rendimento_por_receita')
+    .select('rendimento_total, num_receitas')
     .eq('preparacao_id', preparacao_id)
     .order('criado_em', { ascending: false })
     .limit(10)
-  if (!hist?.length) {
-    await supabase.from('preparacoes').update({ rendimento_real_medio: null }).eq('id', preparacao_id)
-    return
-  }
-  const media = hist.reduce((s,r) => s + parseFloat(r.rendimento_por_receita||0), 0) / hist.length
+  const somaTotal = (hist||[]).reduce((s,r) => s + (parseFloat(r.rendimento_total)||0), 0)
+  const somaRec = (hist||[]).reduce((s,r) => s + (parseFloat(r.num_receitas)||0), 0)
+  const media = somaRec > 0 ? somaTotal / somaRec : null
   await supabase.from('preparacoes').update({ rendimento_real_medio: media, atualizado_em: new Date().toISOString() }).eq('id', preparacao_id)
 }
 
@@ -35,7 +40,7 @@ function ModalRendimento({ prep, registro, onClose, onSaved }) {
 
   const rendPorReceita = form.num_receitas && form.rendimento_total
     ? parseFloat(form.rendimento_total) / parseFloat(form.num_receitas) : null
-  const rendEstimado = parseFloat(prep.rendimento_estimado) || 0
+  const rendEstimado = estimadoLiquido(prep)
   const variacao = rendPorReceita && rendEstimado
     ? ((rendPorReceita - rendEstimado) / rendEstimado) * 100 : null
 
@@ -77,12 +82,13 @@ function ModalRendimento({ prep, registro, onClose, onSaved }) {
             <div style={{fontWeight:700,color:'var(--purple)',marginBottom:4}}>Referência da ficha técnica</div>
             <div style={{display:'flex',gap:20}}>
               <div>
-                <div style={{fontSize:11,color:'var(--gray-400)'}}>Estimado por receita</div>
+                <div style={{fontSize:11,color:'var(--gray-400)'}}>Estimado líquido por receita</div>
                 <div style={{fontWeight:800}}>{fmt(rendEstimado,1)} {prep.unidade_rendimento}</div>
+                <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmt(prep.rendimento_estimado,1)} − {fmt(prep.perda_percentual,1)}% perda</div>
               </div>
               {prep.rendimento_real_medio && (
                 <div>
-                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Média real atual (últimos 10)</div>
+                  <div style={{fontSize:11,color:'var(--gray-400)'}}>Média real ponderada (últimos 10)</div>
                   <div style={{fontWeight:800,color:'var(--ok)'}}>{fmt(prep.rendimento_real_medio,1)} {prep.unidade_rendimento}</div>
                 </div>
               )}
@@ -118,7 +124,7 @@ function ModalRendimento({ prep, registro, onClose, onSaved }) {
                 </div>
                 {variacao !== null && (
                   <div style={{textAlign:'right'}}>
-                    <div style={{fontSize:11,color:'var(--gray-400)'}}>vs. estimado</div>
+                    <div style={{fontSize:11,color:'var(--gray-400)'}}>vs. estimado líq.</div>
                     <div style={{fontSize:16,fontWeight:800,
                       color: Math.abs(variacao)<=5?'var(--ok)':Math.abs(variacao)<=15?'var(--warning)':'var(--danger)'}}>
                       {variacao>0?'+':''}{fmt(variacao,1)}%
@@ -239,7 +245,7 @@ export default function Rendimentos() {
             {filtradas.map((p,i) => {
               const hist = historico[p.id] || []
               const exp = expandido === p.id
-              const rendEst = parseFloat(p.rendimento_estimado)||0
+              const rendEst = estimadoLiquido(p)
               const rendMedio = parseFloat(p.rendimento_real_medio)||0
               const variacao = rendMedio && rendEst ? ((rendMedio-rendEst)/rendEst*100) : null
 
@@ -258,11 +264,12 @@ export default function Rendimentos() {
                       <div style={{fontSize:11,color:'var(--gray-400)'}}>{p.tipo} · {hist.length} registros</div>
                     </div>
                     <div>
-                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Estimado</div>
+                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Estimado líq.</div>
                       <div style={{fontWeight:700}}>{fmt(rendEst,1)} {p.unidade_rendimento}</div>
+                      <div style={{fontSize:10,color:'var(--gray-400)'}}>{fmt(p.rendimento_estimado,1)} − {fmt(p.perda_percentual,1)}%</div>
                     </div>
                     <div>
-                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Média real</div>
+                      <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Média real (pond.)</div>
                       {rendMedio > 0
                         ? <div style={{fontWeight:800,color:'var(--ok)'}}>{fmt(rendMedio,1)} {p.unidade_rendimento}</div>
                         : <div style={{color:'var(--gray-300)',fontSize:12}}>sem dados</div>}
@@ -304,7 +311,7 @@ export default function Rendimentos() {
                             <th style={{padding:'6px 10px',textAlign:'center',fontWeight:600,color:'var(--gray-500)'}}>Receitas</th>
                             <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>Total rendido</th>
                             <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--purple)'}}>Por receita</th>
-                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>vs. estimado</th>
+                            <th style={{padding:'6px 10px',textAlign:'right',fontWeight:600,color:'var(--gray-500)'}}>vs. estimado líq.</th>
                             <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Responsável</th>
                             <th style={{padding:'6px 12px',textAlign:'left',fontWeight:600,color:'var(--gray-500)'}}>Obs.</th>
                             <th style={{padding:'6px 10px',width:60}}></th>
@@ -313,7 +320,7 @@ export default function Rendimentos() {
                         <tbody>
                           {hist.map((r,ri) => {
                             const rPorRec = parseFloat(r.rendimento_por_receita)||0
-                            const rendEst2 = parseFloat(p.rendimento_estimado)||0
+                            const rendEst2 = rendEst
                             const var2 = rendEst2>0 ? ((rPorRec-rendEst2)/rendEst2*100) : null
                             return (
                               <tr key={r.id} style={{borderTop:'1px solid var(--gray-100)',background:ri%2===0?'#fff':'#f8f5ff'}}>

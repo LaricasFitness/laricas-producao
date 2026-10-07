@@ -754,24 +754,28 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
       const rend  = parseFloat(prep.rendimento_estimado) || 0
       const perda = parseFloat(prep.perda_percentual) || 0
       const marg  = parseFloat(prep.margem_seguranca) || 0
-      const rendLiq = rend * (1 - perda / 100)
+      // Mesma regra do custo: real já é líquido (medido); estimado leva a perda
+      const rendReal = parseFloat(prep.rendimento_real_medio) || null
+      const usaReal = !!rendReal
+      const rendLiq = usaReal ? rendReal : rend * (1 - perda / 100)
       const chave = `${dia}__${id}`
       const estoque = parseFloat(estoques[chave]) || 0
       const isCobertura = prep.tipo === 'cobertura'
       const isMassa = prep.tipo === 'massa'
       // Massa: composição em 'g' (40g/PM, 40g/bolinho), rendimento em 'g' → total_g ÷ rendLiq
       // Recheio/creme: composição em 'g', rendimento em 'g' → total_g ÷ rendLiq
-      // Cobertura: composição em 'g', resultado em pacotes → total_g ÷ 1909,5
+      // Cobertura: composição em 'g', resultado em pacotes → total_g ÷ rendimento do pacote
+      //   (real médio por pacote quando registrado; senão estimado × (1 − perda%) do cadastro)
       const totalNecessario = total_g > 0 ? total_g : total_un
       const necessidadeComMargem = totalNecessario * (1 + marg / 100)
 
       let necessidadeLiq, receitasRaw, receitasArr, labelResultado
 
       if (isCobertura) {
-        const REND_PACOTE = 1909.5
+        const REND_PACOTE = rendLiq
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque * REND_PACOTE)
-        receitasRaw = necessidadeLiq / REND_PACOTE
-        receitasArr = Math.ceil(receitasRaw * 2) / 2
+        receitasRaw = REND_PACOTE > 0 ? necessidadeLiq / REND_PACOTE : null
+        receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
         labelResultado = 'pct'
       } else {
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
@@ -780,7 +784,7 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
         labelResultado = 'rec.'
       }
 
-      return { id, chave, prep, totalNecessario, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, rendLiq, isCobertura, isMassa, labelResultado }
+      return { id, chave, prep, totalNecessario, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, rendLiq, usaReal, isCobertura, isMassa, labelResultado }
     }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
   }
 
@@ -845,7 +849,9 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
                         <td style={{ padding:'8px 14px' }}>
                           <div style={{ fontWeight:700 }}>{TIPO_ICON[l.prep.tipo]} {l.prep.nome}</div>
                           <div style={{ fontSize:10, color:'var(--gray-400)' }}>
-                            {l.isCobertura ? 'pacote 2.010g · 5% perda → 1.909,5g/pct' : `${l.prep.perda_percentual}% perda · ${l.prep.margem_seguranca}% margem`}
+                            {l.isCobertura
+                              ? (l.usaReal ? `rendimento real ${fmtG(l.rendLiq)}/pct` : `pacote ${fmtG(parseFloat(l.prep.rendimento_estimado) || 0)} · ${parseFloat(l.prep.perda_percentual) || 0}% perda → ${fmtG(l.rendLiq)}/pct`)
+                              : `${l.usaReal ? `rendimento real ${fmtG(l.rendLiq)}` : `${l.prep.perda_percentual}% perda`} · ${l.prep.margem_seguranca}% margem`}
                           </div>
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:600 }}>
@@ -931,7 +937,7 @@ export default function Planejamento({ onIrLogistica }) {
     // Carrega fichas técnicas
     Promise.all([
       supabase.from('preparacoes').select('*').eq('ativo', true).order('tipo').order('nome'),
-      supabase.from('produto_composicao').select('*, preparacoes(id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual,margem_seguranca)'),
+      supabase.from('produto_composicao').select('*, preparacoes(id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual,margem_seguranca)'),
     ]).then(([{ data: preps }, { data: comps }]) => {
       setPreparacoesData({ preps: preps || [], composicoes: comps || [] })
     })
