@@ -5,10 +5,26 @@ import { registrarAcao } from '../lib/log'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
+// Ordem de exibição das categorias no planejamento.
+// Categorias que existirem no cadastro e não estiverem aqui entram no fim
+// automaticamente — ver catsOrdenadas abaixo.
 const ORDEM_CATS = [
-  'Pão de Mel 100g','Mini Pão de Mel 30g','Lata Mini 240g','Bolinho 100g',
-  'Potinho 60g','Potão 280g','Barra 180g','Bombom','Outros'
+  'Pão de Mel 100g','Pão de Mel 60g','Mini Pão de Mel 30g','Lata Mini 240g',
+  'Bolinho 100g','Potinho 60g','Potão 280g','Barra 180g','Bombom','Outros'
 ]
+
+// Ordena as categorias que realmente existem na fonte, pondo as que não
+// estão em ORDEM_CATS no fim. Evita que categoria nova suma da tela.
+// Aceita lista de embalagens ou objeto indexado por categoria.
+function catsDe(fonte) {
+  const cats = Array.isArray(fonte)
+    ? [...new Set(fonte.map(e => e?.categoria).filter(Boolean))]
+    : Object.keys(fonte || {})
+  return [
+    ...ORDEM_CATS.filter(x => cats.includes(x)),
+    ...cats.filter(x => !ORDEM_CATS.includes(x)).sort(),
+  ]
+}
 
 // ── Parser CSV robusto (respeita campos com aspas e quebras de linha) ─────────
 function parseCSVRobusto(texto) {
@@ -156,7 +172,7 @@ function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
 
   // Monta body
   const body = []
-  for (const cat of ORDEM_CATS) {
+  for (const cat of catsDe(itensDia)) {
     const itens = (itensDia[cat] || []).filter(i => i.total > 0)
     if (!itens.length) continue
     const totalCat = itens.reduce((s, i) => s + i.total, 0)
@@ -252,8 +268,13 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
     return porSku
   }
 
+  // Todas as categorias existentes no cadastro, na ordem preferida.
+  // As que não estão em ORDEM_CATS entram no fim, em ordem alfabética —
+  // assim uma categoria nova nunca some da tela por esquecimento.
+  const catsOrdenadas = catsDe(embalagens)
+
   // Categorias com dados (dia atual ou próximos dias)
-  const catsComDados = ORDEM_CATS.filter(cat => {
+  const catsComDados = catsOrdenadas.filter(cat => {
     const temAtual = embalagens.some(e => e.categoria === cat &&
       ((diasBling[diaAtual]?.[e.codigo] || 0) + (diasDelivery[diaAtual]?.[e.codigo] || 0) > 0))
     const temProximo = proximosDias.some(pd => embalagens.some(e => e.categoria === cat &&
@@ -263,7 +284,7 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
     return temAtual || temProximo || temExtra
   })
   const catsExtras = [...new Set(itensExtras
-    .filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 &&
+    .filter(x => !catsOrdenadas.includes(x.cat) && x.qtd > 0 &&
       (x.data === diaAtual || proximosDias.some(pd => pd.data === x.data)))
     .map(x => x.cat))]
   const todasCats = [...catsComDados, ...catsExtras]
@@ -376,12 +397,33 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
   doc.save('Producao_Completa_semana.pdf')
 }
 
+// Tenta adivinhar a categoria pelo nome do produto, comparando com o que já
+// existe no cadastro. Sem palpite confiável cai em 'Outros' — nunca numa
+// categoria real, que distorceria a tabela de planejamento.
+function inferirCategoria(nome, sku, embalagens = []) {
+  const txt = `${nome || ''} ${sku || ''}`.toLowerCase()
+  if (!txt.trim()) return 'Outros'
+
+  // 1) nome-base da categoria + gramatura (ex: "pão de mel" + "60g")
+  const existentes = [...new Set(embalagens.map(e => e.categoria).filter(Boolean))]
+  const porGramatura = existentes.find(cat => {
+    const g = cat.match(/(\d+)\s*g/i)
+    const base = cat.toLowerCase().replace(/\s*\d+\s*g.*/i, '').trim()
+    return base && txt.includes(base) && (!g || txt.includes(g[1] + 'g'))
+  })
+  // Sem gramatura compatível, não arrisca: 'Outros' é reversível,
+  // categoria errada distorce o planejamento e passa despercebida.
+  // (Comparar por palavra solta erra feio — "wafer de chocolate ao leite"
+  //  casava com "pão de mel de doce de leite" pela palavra "leite".)
+  return porGramatura || 'Outros'
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
-function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
+function ModalCadastrarProduto({ sugestao, embalagens = [], onClose, onSalvo }) {
   const [form, setForm] = useState({
     nome: sugestao.nome || '',
     codigo: sugestao.sku || '',
-    categoria: sugestao.cat || ORDEM_CATS[0],
+    categoria: sugestao.cat || inferirCategoria(sugestao.nome, sugestao.sku, embalagens),
     tipo: 'rotulo',
     visivel_producao: true,
     visivel_estoque: true,
@@ -441,7 +483,7 @@ function ModalCadastrarProduto({ sugestao, onClose, onSalvo }) {
           <div className="form-group">
             <label className="form-label">Categoria</label>
             <select className="form-input" value={form.categoria} onChange={e => set('categoria', e.target.value)}>
-              {ORDEM_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+              {[...new Set([...ORDEM_CATS, ...embalagens.map(e => e.categoria).filter(Boolean)])].map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div style={{ display: 'flex', gap: 16 }}>
@@ -513,7 +555,7 @@ function gerarPDFCorreio(datasAtivas, diasCorreio, embalagens) {
     const body = []
     let totalDia = 0
 
-    for (const cat of ORDEM_CATS) {
+    for (const cat of catsDe(embalagens)) {
       const itensCat = embalagens
         .filter(e => e.categoria === cat && (correioNoDia[e.codigo] || 0) > 0)
         .map(e => ({ nome: e.nome, sku: e.codigo, qtd: correioNoDia[e.codigo] || 0 }))
@@ -754,28 +796,24 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
       const rend  = parseFloat(prep.rendimento_estimado) || 0
       const perda = parseFloat(prep.perda_percentual) || 0
       const marg  = parseFloat(prep.margem_seguranca) || 0
-      // Mesma regra do custo: real já é líquido (medido); estimado leva a perda
-      const rendReal = parseFloat(prep.rendimento_real_medio) || null
-      const usaReal = !!rendReal
-      const rendLiq = usaReal ? rendReal : rend * (1 - perda / 100)
+      const rendLiq = rend * (1 - perda / 100)
       const chave = `${dia}__${id}`
       const estoque = parseFloat(estoques[chave]) || 0
       const isCobertura = prep.tipo === 'cobertura'
       const isMassa = prep.tipo === 'massa'
       // Massa: composição em 'g' (40g/PM, 40g/bolinho), rendimento em 'g' → total_g ÷ rendLiq
       // Recheio/creme: composição em 'g', rendimento em 'g' → total_g ÷ rendLiq
-      // Cobertura: composição em 'g', resultado em pacotes → total_g ÷ rendimento do pacote
-      //   (real médio por pacote quando registrado; senão estimado × (1 − perda%) do cadastro)
+      // Cobertura: composição em 'g', resultado em pacotes → total_g ÷ 1909,5
       const totalNecessario = total_g > 0 ? total_g : total_un
       const necessidadeComMargem = totalNecessario * (1 + marg / 100)
 
       let necessidadeLiq, receitasRaw, receitasArr, labelResultado
 
       if (isCobertura) {
-        const REND_PACOTE = rendLiq
+        const REND_PACOTE = 1909.5
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque * REND_PACOTE)
-        receitasRaw = REND_PACOTE > 0 ? necessidadeLiq / REND_PACOTE : null
-        receitasArr = receitasRaw !== null ? Math.ceil(receitasRaw * 2) / 2 : null
+        receitasRaw = necessidadeLiq / REND_PACOTE
+        receitasArr = Math.ceil(receitasRaw * 2) / 2
         labelResultado = 'pct'
       } else {
         necessidadeLiq = Math.max(0, necessidadeComMargem - estoque)
@@ -784,7 +822,7 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
         labelResultado = 'rec.'
       }
 
-      return { id, chave, prep, totalNecessario, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, rendLiq, usaReal, isCobertura, isMassa, labelResultado }
+      return { id, chave, prep, totalNecessario, necessidadeComMargem, necessidadeLiq, receitasRaw, receitasArr, rendLiq, isCobertura, isMassa, labelResultado }
     }).sort((a, b) => a.prep.tipo.localeCompare(b.prep.tipo) || a.prep.nome.localeCompare(b.prep.nome))
   }
 
@@ -849,9 +887,7 @@ function AbaPreparacoes({ itensDiaAtual, itensExtras, diasVisiveis, diasBling, d
                         <td style={{ padding:'8px 14px' }}>
                           <div style={{ fontWeight:700 }}>{TIPO_ICON[l.prep.tipo]} {l.prep.nome}</div>
                           <div style={{ fontSize:10, color:'var(--gray-400)' }}>
-                            {l.isCobertura
-                              ? (l.usaReal ? `rendimento real ${fmtG(l.rendLiq)}/pct` : `pacote ${fmtG(parseFloat(l.prep.rendimento_estimado) || 0)} · ${parseFloat(l.prep.perda_percentual) || 0}% perda → ${fmtG(l.rendLiq)}/pct`)
-                              : `${l.usaReal ? `rendimento real ${fmtG(l.rendLiq)}` : `${l.prep.perda_percentual}% perda`} · ${l.prep.margem_seguranca}% margem`}
+                            {l.isCobertura ? 'pacote 2.010g · 5% perda → 1.909,5g/pct' : `${l.prep.perda_percentual}% perda · ${l.prep.margem_seguranca}% margem`}
                           </div>
                         </td>
                         <td style={{ padding:'8px 10px', textAlign:'right', fontWeight:600 }}>
@@ -937,7 +973,7 @@ export default function Planejamento({ onIrLogistica }) {
     // Carrega fichas técnicas
     Promise.all([
       supabase.from('preparacoes').select('*').eq('ativo', true).order('tipo').order('nome'),
-      supabase.from('produto_composicao').select('*, preparacoes(id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual,margem_seguranca)'),
+      supabase.from('produto_composicao').select('*, preparacoes(id,nome,tipo,unidade_rendimento,rendimento_estimado,perda_percentual,margem_seguranca)'),
     ]).then(([{ data: preps }, { data: comps }]) => {
       setPreparacoesData({ preps: preps || [], composicoes: comps || [] })
     })
@@ -1082,7 +1118,7 @@ export default function Planejamento({ onIrLogistica }) {
         .insert({ data_producao: diaAtual }).select().single()
       if (error) throw error
       const itensParaSalvar = []
-      for (const cat of ORDEM_CATS) {
+      for (const cat of catsDe(itensDiaAtual)) {
         for (const item of (itensDiaAtual[cat] || []).filter(i => i.total > 0)) {
           const emb = embalagens.find(e => e.nome === item.nome)
           if (!emb) continue
@@ -1132,7 +1168,7 @@ export default function Planejamento({ onIrLogistica }) {
   // Monta dados do dia atual (CSV + extras manuais)
   const itensDiaAtual = {}
   if (diaAtual) {
-    for (const cat of ORDEM_CATS) {
+    for (const cat of catsDe(embalagens)) {
       const itens = embalagens.filter(e => e.categoria === cat).map(e => ({
         nome: e.nome, sku: e.codigo,
         bling: diasBling[diaAtual]?.[e.codigo] || 0,
@@ -1146,7 +1182,7 @@ export default function Planejamento({ onIrLogistica }) {
       if (todos.length) itensDiaAtual[cat] = todos
     }
     // Extras sem categoria reconhecida vão para "Outros"
-    const semCat = itensExtras.filter(x => !ORDEM_CATS.includes(x.cat) && x.qtd > 0 && x.data === diaAtual)
+    const semCat = itensExtras.filter(x => !catsDe(embalagens).includes(x.cat) && x.qtd > 0 && x.data === diaAtual)
     if (semCat.length) {
       itensDiaAtual['Outros'] = semCat.map(x => ({ nome: x.nome, sku: null, bling: 0, delivery: 0, total: x.qtd, extra: true, extraId: x.id }))
     }
@@ -1340,6 +1376,7 @@ export default function Planejamento({ onIrLogistica }) {
       {sugestoesCadastrando && (
         <ModalCadastrarProduto
           sugestao={sugestoesCadastrando}
+          embalagens={embalagens}
           onClose={() => setSugestoeCadastrando(null)}
           onSalvo={(s, embalagem) => {
             // Marca como cadastrado e adiciona ao embalagens local para reconhecimento imediato
@@ -1407,7 +1444,7 @@ export default function Planejamento({ onIrLogistica }) {
                 </tr>
               </thead>
               <tbody>
-                {ORDEM_CATS.map(cat => {
+                {catsDe(embalagens).map(cat => {
                   const itens = embalagens.filter(e => e.categoria === cat)
                   if (!itens.length) return null
                   return [
