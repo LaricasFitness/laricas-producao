@@ -266,3 +266,48 @@ export async function recalcularCustoEmbalagem(embalagemId) {
   }
   return preco
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Pedido à gráfica com entrega fracionada.
+// A fonte da verdade do que já chegou são os recebimentos vinculados
+// ao pedido (cada entrega = uma compra). pedido_itens.quantidade_recebida
+// é só o acumulado, recalculado daqui — nunca somado à mão.
+// Entregar a mais é aceito; o pedido fica parcial até todo item completar.
+// ═══════════════════════════════════════════════════════════════
+export async function recebidoPorPedido(pedidoId) {
+  const { data: recs } = await supabase.from('recebimentos')
+    .select('id, data_recebimento, numero_nf, valor_total')
+    .eq('pedido_id', pedidoId)
+    .order('data_recebimento')
+  const ids = (recs || []).map(r => r.id)
+  const porEmbalagem = {}
+  if (ids.length) {
+    const { data: itens } = await supabase.from('recebimento_itens')
+      .select('embalagem_id, quantidade_recebida')
+      .in('recebimento_id', ids)
+    for (const i of (itens || [])) {
+      if (!i.embalagem_id) continue
+      porEmbalagem[i.embalagem_id] = (porEmbalagem[i.embalagem_id] || 0) + (parseInt(i.quantidade_recebida) || 0)
+    }
+  }
+  return { entregas: recs || [], porEmbalagem }
+}
+
+export async function atualizarStatusPedido(pedidoId) {
+  if (!pedidoId) return null
+  const [{ porEmbalagem, entregas }, { data: itens }] = await Promise.all([
+    recebidoPorPedido(pedidoId),
+    supabase.from('pedido_itens').select('id, embalagem_id, quantidade_solicitada, quantidade_recebida').eq('pedido_id', pedidoId),
+  ])
+  for (const i of (itens || [])) {
+    const tot = entregas.length ? (porEmbalagem[i.embalagem_id] || 0) : null
+    if (tot !== i.quantidade_recebida) {
+      await supabase.from('pedido_itens').update({ quantidade_recebida: tot }).eq('id', i.id)
+    }
+  }
+  const completo = (itens || []).length > 0 &&
+    (itens || []).every(i => (porEmbalagem[i.embalagem_id] || 0) >= (i.quantidade_solicitada || 0))
+  const status = !entregas.length ? 'enviado' : completo ? 'recebido_total' : 'recebido_parcial'
+  await supabase.from('pedidos_grafica').update({ status }).eq('id', pedidoId)
+  return status
+}

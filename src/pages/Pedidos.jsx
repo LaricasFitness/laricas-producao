@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { carregarStatusCompleto, gerarNumeroPedido, statusCfg, recalcularCustoEmbalagem } from '../lib/data'
+import { carregarStatusCompleto, gerarNumeroPedido, statusCfg, recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { FileText, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Plus } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -303,6 +303,10 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   const [fornecedores, setFornecedores] = useState([])
   const [fornecedorId, setFornecedorId] = useState('')
   const [gerarConta, setGerarConta] = useState(true)
+  const [jaRecebido, setJaRecebido] = useState({})   // embalagem_id → total de entregas anteriores
+  const [entregas, setEntregas] = useState([])
+
+  const faltaDe = i => Math.max(0, (i.quantidade_solicitada || 0) - (jaRecebido[i.embalagem_id] || 0))
 
   useEffect(() => {
     Promise.all([
@@ -310,11 +314,15 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
         .eq('pedido_id', pedido.id),
       supabase.from('fin_fornecedores').select('id, nome_fantasia').order('nome_fantasia')
         .then(r => r).catch(() => ({ data: [] })),
-    ]).then(([{ data: d }, forn]) => {
+      recebidoPorPedido(pedido.id),
+    ]).then(([{ data: d }, forn, anteriores]) => {
       setItens(d || [])
+      setJaRecebido(anteriores.porEmbalagem)
+      setEntregas(anteriores.entregas)
       const pre = {}, preVal = {}
       ;(d || []).forEach(i => {
-        pre[i.id] = i.quantidade_recebida ?? i.quantidade_solicitada
+        // Sugere só o que ainda falta — o que já chegou está em outras compras
+        pre[i.id] = Math.max(0, (i.quantidade_solicitada || 0) - (anteriores.porEmbalagem[i.embalagem_id] || 0))
         // Pré-preenche com o último custo conhecido da embalagem
         if (i.embalagens?.custo_unitario) preVal[i.id] = String(i.embalagens.custo_unitario)
       })
@@ -350,9 +358,13 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
   }
 
   async function salvar() {
+    const recebidosValidos = itens.filter(i => (parseInt(recebidos[i.id]) || 0) > 0)
+    if (!recebidosValidos.length && !itensExtras.some(e => e.qtd > 0)) {
+      alert('Nenhuma quantidade informada nesta entrega.')
+      return
+    }
     setSaving(true)
     try {
-      const recebidosValidos = itens.filter(i => (parseInt(recebidos[i.id]) || 0) > 0)
       const totalGeral = recebidosValidos.reduce((s, i) =>
         s + (parseInt(recebidos[i.id]) || 0) * (parseFloat(valores[i.id]) || 0), 0)
 
@@ -363,7 +375,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
         numero_nf: nf || null,
         data_recebimento: dataRec,
         valor_total: totalGeral || null,
-        observacao: `Recebimento do pedido #${pedido.numero}`,
+        observacao: `Recebimento do pedido #${pedido.numero}${entregas.length ? ` (entrega ${entregas.length + 1})` : ''}`,
       }).select().single()
       if (recErr) throw recErr
 
@@ -379,13 +391,11 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
         )
       }
 
-      // 3) Atualiza pedido_itens, estoque e custo unitário
+      // 3) Estoque e custo unitário — só do que chegou nesta entrega
       for (const item of itens) {
         const qtd = parseInt(recebidos[item.id]) || 0
-        await supabase.from('pedido_itens')
-          .update({ quantidade_recebida: qtd, recebido_em: dataRec })
-          .eq('id', item.id)
         if (qtd <= 0) continue
+        await supabase.from('pedido_itens').update({ recebido_em: dataRec }).eq('id', item.id)
         await supabase.from('embalagens').update({
           estoque_atual: (item.embalagens?.estoque_atual || 0) + qtd,
           atualizado_em: new Date().toISOString(),
@@ -407,10 +417,6 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
         })
       }
 
-      const todosOk = itens.every(i => parseInt(recebidos[i.id]) === i.quantidade_solicitada)
-      const temExtras = itensExtras.some(e => e.qtd > 0)
-      const novoStatus = todosOk && !temExtras ? 'recebido_total' : 'recebido_parcial'
-
       // Pagamento controlado no próprio recebimento
       if (gerarConta && totalGeral > 0) {
         const venc = new Date(dataRec); venc.setDate(venc.getDate() + (parseInt(prazo) || 0))
@@ -419,7 +425,8 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           .eq('id', rec.id)
       }
 
-      await supabase.from('pedidos_grafica').update({ status: novoStatus }).eq('id', pedido.id)
+      // Acumulado por item e status (parcial até todo item completar) vêm das entregas
+      await atualizarStatusPedido(pedido.id)
       onSaved()
     } catch (e) { alert('Erro: ' + e.message) }
     setSaving(false)
@@ -477,32 +484,45 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
           </div>
           {loading ? <div className="loading"><RefreshCw size={16} className="spin" /></div> : (
             <>
+            {entregas.length > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 10, padding: '8px 12px', background: 'var(--purple-pale)', borderRadius: 8 }}>
+                <b style={{ color: 'var(--purple)' }}>Entrega {entregas.length + 1}</b> — já lançadas:{' '}
+                {entregas.map(e => `${new Date(e.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR')}${e.numero_nf ? ` (NF ${e.numero_nf})` : ''}`).join(' · ')}.
+                {' '}Informe só o que chegou agora.
+              </div>
+            )}
             <table className="tbl">
               <thead><tr>
                 <th>Embalagem</th>
                 <th style={{ width: 80, textAlign: 'right' }}>Pedido</th>
-                <th style={{ width: 110, textAlign: 'right' }}>Recebido</th>
+                <th style={{ width: 90, textAlign: 'right' }}>Já recebido</th>
+                <th style={{ width: 80, textAlign: 'right' }}>Falta</th>
+                <th style={{ width: 110, textAlign: 'right' }}>Chegou agora</th>
                 <th style={{ width: 120, textAlign: 'right' }}>Valor un. (R$)</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Subtotal</th>
               </tr></thead>
               <tbody>
                 {itens.map(item => {
                   const rec = parseInt(recebidos[item.id]) || 0
-                  const div = rec !== item.quantidade_solicitada
+                  const ja = jaRecebido[item.embalagem_id] || 0
+                  const falta = faltaDe(item)
+                  const div = rec !== falta
                   return (
-                    <tr key={item.id}>
+                    <tr key={item.id} style={{ opacity: falta === 0 && rec === 0 ? 0.5 : 1 }}>
                       <td>
                         <div style={{ fontWeight: 600 }}>{item.embalagens?.nome}</div>
                         <div style={{ fontSize: 11, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{item.embalagens?.codigo}</div>
                       </td>
                       <td style={{ fontWeight: 600, textAlign: 'right', color: 'var(--gray-500)' }}>{item.quantidade_solicitada.toLocaleString('pt-BR')}</td>
+                      <td style={{ textAlign: 'right', color: ja ? 'var(--ok)' : 'var(--gray-300)' }}>{ja ? ja.toLocaleString('pt-BR') : '—'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, color: falta ? 'var(--warning)' : 'var(--ok)' }}>{falta ? falta.toLocaleString('pt-BR') : '✓'}</td>
                       <td style={{ textAlign: 'right' }}>
                         <input type="number" min={0} className="qty-input"
                           style={{ width: 90, textAlign: 'right', borderColor: div ? 'var(--warning)' : undefined, background: div ? 'var(--warning-pale)' : undefined }}
                           value={recebidos[item.id] ?? ''}
                           onChange={e => setRecebidos(prev => ({ ...prev, [item.id]: e.target.value }))} />
                         {div && <div style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, marginTop: 3, textAlign: 'right' }}>
-                          {rec > item.quantidade_solicitada ? '+' : ''}{(rec - item.quantidade_solicitada).toLocaleString('pt-BR')} un
+                          {rec > falta ? `+${(rec - falta).toLocaleString('pt-BR')} a mais` : `fica faltando ${(falta - rec).toLocaleString('pt-BR')}`}
                         </div>}
                       </td>
                       <td style={{ textAlign: 'right' }}>
@@ -609,7 +629,7 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
 const STATUS_LABEL = {
   enviado: { label: 'Aguardando entrega', cls: 'pill-warning' },
   recebido_total: { label: '✅ Recebido OK', cls: 'pill-ok' },
-  recebido_parcial: { label: '⚠️ Recebido c/ diferença', cls: 'pill-danger' },
+  recebido_parcial: { label: '⏳ Parcial', cls: 'pill-danger' },
 }
 
 export default function Pedidos({ abrirNovo, onNovoClosed }) {
@@ -619,12 +639,25 @@ export default function Pedidos({ abrirNovo, onNovoClosed }) {
   const [conferindo, setConferindo] = useState(null)
   const [expandido, setExpandido] = useState(null)
   const [itensPedido, setItensPedido] = useState({})
+  const [entregasPedido, setEntregasPedido] = useState({})
+  const [faltaPedido, setFaltaPedido] = useState({})   // pedido_id → unidades ainda não entregues
 
   useEffect(() => { if (abrirNovo) setShowNovo(true) }, [abrirNovo])
 
   async function load() {
     setLoading(true)
+    setItensPedido({}); setEntregasPedido({}); setExpandido(null)
     const { data } = await supabase.from('pedidos_grafica').select('*').order('criado_em', { ascending: false })
+    const parciais = (data || []).filter(p => p.status === 'recebido_parcial').map(p => p.id)
+    const falta = {}
+    if (parciais.length) {
+      const { data: its } = await supabase.from('pedido_itens')
+        .select('pedido_id, quantidade_solicitada, quantidade_recebida').in('pedido_id', parciais)
+      for (const i of (its || [])) {
+        falta[i.pedido_id] = (falta[i.pedido_id] || 0) + Math.max(0, (i.quantidade_solicitada || 0) - (i.quantidade_recebida || 0))
+      }
+    }
+    setFaltaPedido(falta)
     setPedidos(data || [])
     setLoading(false)
   }
@@ -632,8 +665,12 @@ export default function Pedidos({ abrirNovo, onNovoClosed }) {
   async function toggleExpand(id) {
     if (expandido === id) { setExpandido(null); return }
     if (!itensPedido[id]) {
-      const { data } = await supabase.from('pedido_itens').select('*, embalagens(codigo, nome)').eq('pedido_id', id)
+      const [{ data }, { entregas }] = await Promise.all([
+        supabase.from('pedido_itens').select('*, embalagens(codigo, nome)').eq('pedido_id', id),
+        recebidoPorPedido(id),
+      ])
       setItensPedido(prev => ({ ...prev, [id]: data || [] }))
+      setEntregasPedido(prev => ({ ...prev, [id]: entregas }))
     }
     setExpandido(id)
   }
@@ -670,6 +707,7 @@ export default function Pedidos({ abrirNovo, onNovoClosed }) {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className={`pill ${STATUS_LABEL[p.status]?.cls || 'pill-gray'}`}>
                   {STATUS_LABEL[p.status]?.label || p.status}
+                  {p.status === 'recebido_parcial' && faltaPedido[p.id] > 0 && ` · faltam ${faltaPedido[p.id].toLocaleString('pt-BR')} un`}
                 </span>
                 {/* Gerar PDF novamente */}
                 <button className="btn btn-ghost btn-sm" title="Gerar PDF"
@@ -715,20 +753,38 @@ export default function Pedidos({ abrirNovo, onNovoClosed }) {
             {expandido === p.id && (
               <div style={{ background: 'var(--gray-50)', padding: '12px 16px', borderRadius: 8, marginBottom: 8 }}>
                 <table className="tbl" style={{ fontSize: 13 }}>
-                  <thead><tr><th>Código</th><th>Embalagem</th><th>Solicitado</th><th>Recebido</th></tr></thead>
+                  <thead><tr><th>Código</th><th>Embalagem</th><th>Solicitado</th><th>Recebido</th><th>Falta</th></tr></thead>
                   <tbody>
-                    {(itensPedido[p.id] || []).map(i => (
-                      <tr key={i.id}>
-                        <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{i.embalagens?.codigo}</td>
-                        <td>{i.embalagens?.nome}</td>
-                        <td>{i.quantidade_solicitada.toLocaleString('pt-BR')}</td>
-                        <td style={{ color: i.quantidade_recebida == null ? 'var(--gray-400)' : i.quantidade_recebida !== i.quantidade_solicitada ? 'var(--warning)' : 'var(--ok)', fontWeight: 600 }}>
-                          {i.quantidade_recebida != null ? i.quantidade_recebida.toLocaleString('pt-BR') : '—'}
-                        </td>
-                      </tr>
-                    ))}
+                    {(itensPedido[p.id] || []).map(i => {
+                      const falta = Math.max(0, i.quantidade_solicitada - (i.quantidade_recebida || 0))
+                      return (
+                        <tr key={i.id}>
+                          <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{i.embalagens?.codigo}</td>
+                          <td>{i.embalagens?.nome}</td>
+                          <td>{i.quantidade_solicitada.toLocaleString('pt-BR')}</td>
+                          <td style={{ color: i.quantidade_recebida == null ? 'var(--gray-400)' : falta > 0 ? 'var(--warning)' : 'var(--ok)', fontWeight: 600 }}>
+                            {i.quantidade_recebida != null ? i.quantidade_recebida.toLocaleString('pt-BR') : '—'}
+                          </td>
+                          <td style={{ color: falta > 0 ? 'var(--warning)' : 'var(--ok)', fontWeight: 700 }}>
+                            {falta > 0 ? falta.toLocaleString('pt-BR') : '✓'}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
+                {(entregasPedido[p.id] || []).length > 0 && (
+                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--gray-500)' }}>
+                    <b>Entregas:</b>{' '}
+                    {entregasPedido[p.id].map((e, n) => (
+                      <span key={e.id} style={{ marginRight: 12 }}>
+                        {n + 1}ª {new Date(e.data_recebimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                        {e.numero_nf ? ` · NF ${e.numero_nf}` : ''}
+                        {e.valor_total ? ` · R$ ${Number(e.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

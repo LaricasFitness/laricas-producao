@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { atualizarStatusPedido } from './data'
 
 function getUsuario() {
   try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
@@ -63,7 +64,10 @@ export async function reverterAcao(logEntry) {
         const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', item.embalagem_id).single()
         if (emb) await supabase.from('embalagens').update({ estoque_atual: Math.max(0, (emb.estoque_atual||0) - item.quantidade_recebida) }).eq('id', item.embalagem_id)
       }
+      const { data: rec } = await supabase.from('recebimentos').select('pedido_id').eq('id', registro_id).maybeSingle()
       await supabase.from('recebimentos').delete().eq('id', registro_id)
+      // Entrega desfeita: o pedido volta a mostrar o que falta
+      if (rec?.pedido_id) await atualizarStatusPedido(rec.pedido_id)
     }
 
     await supabase.from('log_acoes').update({ revertido: true, revertido_em: new Date().toISOString() }).eq('id', id)

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { recalcularCustoEmbalagem } from '../lib/data'
+import { recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
@@ -71,8 +71,15 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
 
   async function carregarItensPedido(pid) {
     if (!pid) { setItens([{ embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }]); return }
-    const { data } = await supabase.from('pedido_itens').select('embalagem_id, quantidade_solicitada').eq('pedido_id', pid)
-    setItens((data || []).map(i => ({ embalagem_id: i.embalagem_id, nome_livre: '', quantidade: i.quantidade_solicitada, valor_unitario: '' })))
+    const [{ data }, { porEmbalagem }] = await Promise.all([
+      supabase.from('pedido_itens').select('embalagem_id, quantidade_solicitada').eq('pedido_id', pid),
+      recebidoPorPedido(pid),
+    ])
+    // Sugere só o que ainda falta do pedido — entregas anteriores já são outras compras
+    const faltando = (data || [])
+      .map(i => ({ embalagem_id: i.embalagem_id, nome_livre: '', quantidade: Math.max(0, i.quantidade_solicitada - (porEmbalagem[i.embalagem_id] || 0)), valor_unitario: '' }))
+      .filter(i => i.quantidade > 0)
+    setItens(faltando.length ? faltando : [{ embalagem_id: '', nome_livre: '', quantidade: '', valor_unitario: '' }])
     // Auto-preenche PressPlate
     const press = fornecedores.find(f => f.nome_fantasia === 'PressPlate' || f.razao_social?.includes('PressPlate'))
     if (press) setFornecedorId(press.id)
@@ -108,7 +115,8 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
         await recalcularCustoEmbalagem(id)
       }
 
-      if (pedidoId) await supabase.from('pedidos_grafica').update({ status: 'recebido_total' }).eq('id', pedidoId)
+      // Parcial até todo item do pedido completar (somando todas as entregas)
+      if (pedidoId) await atualizarStatusPedido(pedidoId)
 
       // Pagamento é controlado no próprio recebimento (coluna status_pagamento),
       // com vencimento previsto a partir do prazo informado.
@@ -276,6 +284,7 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
       for (const id of new Set(fil.filter(i => i.embalagem_id).map(i => i.embalagem_id))) {
         await recalcularCustoEmbalagem(id)
       }
+      if (recebimento.pedido_id) await atualizarStatusPedido(recebimento.pedido_id)
 
       onSaved()
     } catch(e) { alert('Erro: ' + e.message) }
