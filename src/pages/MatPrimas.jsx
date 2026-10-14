@@ -45,8 +45,42 @@ async function recalcularCustoMP(mpId) {
   return preco
 }
 
-// Soma (ou subtrai) quantidade no estoque da MP
-async function ajustarEstoqueCompra(mpId, delta) {
+// Data da última contagem física da MP (conferencia_mp), ou null
+async function ultimaContagemMP(mpId) {
+  if (!mpId) return null
+  const { data } = await supabase.from('conferencia_mp')
+    .select('data_conferencia').eq('materia_prima_id', mpId)
+    .order('data_conferencia', { ascending: false }).limit(1)
+  return data?.[0]?.data_conferencia || null
+}
+
+// Quanto uma compra mexe no saldo: compra com data igual ou anterior à
+// última contagem já está refletida no número contado — somar (ou tirar,
+// ao excluir/editar) de novo distorceria o estoque.
+async function efeitoNoSaldo(mpId, qtd, dataCompra) {
+  const cont = await ultimaContagemMP(mpId)
+  return cont && dataCompra && dataCompra <= cont ? 0 : qtd
+}
+
+// Avisa se a mesma MP + NF + quantidade já foi lançada. true = pode seguir
+async function confirmarSemDuplicata(itens) {
+  const dup = []
+  for (const it of itens) {
+    if (!it.mp_id || !it.numero_nf) continue
+    const { data } = await supabase.from('mp_compras')
+      .select('id, data_compra, criado_em, materias_primas(nome)')
+      .eq('materia_prima_id', it.mp_id).eq('numero_nf', it.numero_nf).eq('quantidade', it.quantidade)
+      .limit(1)
+    if (data?.length) dup.push(`• ${data[0].materias_primas?.nome} — NF ${it.numero_nf}, lançada em ${new Date(data[0].criado_em).toLocaleDateString('pt-BR')}`)
+  }
+  if (!dup.length) return true
+  return window.confirm(`Estas compras já foram lançadas com a mesma NF e quantidade:\n\n${dup.join('\n')}\n\nLançar de novo mesmo assim?`)
+}
+
+// Soma (ou subtrai) quantidade no estoque da MP.
+// Com dataCompra, respeita a última contagem (ver efeitoNoSaldo).
+async function ajustarEstoqueCompra(mpId, delta, dataCompra = null) {
+  if (dataCompra) delta = await efeitoNoSaldo(mpId, delta, dataCompra)
   if (!mpId || !delta) return
   const { data: mp } = await supabase.from('materias_primas')
     .select('estoque_atual').eq('id', mpId).single()
@@ -194,7 +228,7 @@ const entradaVazia = base => ({ qtd: '', unidade: base || 'g', conteudo: '', uni
 // Exclui uma compra revertendo estoque e recalculando o preço
 async function excluirCompraMP(compra) {
   await supabase.from('mp_compras').delete().eq('id', compra.id)
-  await ajustarEstoqueCompra(compra.materia_prima_id, -(parseFloat(compra.quantidade) || 0))
+  await ajustarEstoqueCompra(compra.materia_prima_id, -(parseFloat(compra.quantidade) || 0), compra.data_compra)
   await recalcularCustoMP(compra.materia_prima_id)
 }
 
@@ -352,8 +386,13 @@ function ModalImportarXML({ onClose, onSaved }) {
   const vinculoValido = v => v?.mp_id && v.entrada && entradaValida(v.entrada, baseDe(v.mp_id))
 
   async function salvar() {
+    const validos = Object.values(vinculos).filter(vinculoValido)
+    if (!await confirmarSemDuplicata(validos.map(v => ({
+      mp_id: v.mp_id, numero_nf: nf.numero, quantidade: converterParaBase(v.entrada, baseDe(v.mp_id)),
+    })))) return
     setSaving(true)
     try {
+      const dataCompra = nf.data_emissao || new Date().toISOString().slice(0,10)
       for (const [idx, v] of Object.entries(vinculos)) {
         if (!vinculoValido(v)) continue
         const item = nf.itens[parseInt(idx)]
@@ -364,14 +403,14 @@ function ModalImportarXML({ onClose, onSaved }) {
           materia_prima_id: v.mp_id,
           quantidade: qtd,
           custo_total: custo,
-          data_compra: nf.data_emissao || new Date().toISOString().slice(0,10),
+          data_compra: dataCompra,
           fornecedor: nf.fornecedor || null,
           numero_nf: nf.numero || null,
           observacao: `${item.descricao} — importado via XML`,
           ...camposEntrada(v.entrada),
         })
         // Mesma regra de todos os outros lançamentos
-        await ajustarEstoqueCompra(v.mp_id, qtd)
+        await ajustarEstoqueCompra(v.mp_id, qtd, dataCompra)
         await recalcularCustoMP(v.mp_id)
       }
       onSaved()
@@ -603,6 +642,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
 
   async function salvar() {
     if (!valido) return
+    if (!await confirmarSemDuplicata([{ mp_id: mp.id, numero_nf: form.numero_nf, quantidade: qtdBase }])) return
     setSaving(true)
     const qtd = qtdBase
     const custo = custoTotal
@@ -619,7 +659,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
       ...camposEntrada(entrada),
     })
 
-    await ajustarEstoqueCompra(mp.id, qtd)
+    await ajustarEstoqueCompra(mp.id, qtd, form.data_compra)
     await recalcularCustoMP(mp.id)
     setSaving(false)
     onSaved()
@@ -984,6 +1024,9 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
   async function salvar() {
     const validos = itens.filter(itemValido)
     if (!validos.length) return
+    if (!await confirmarSemDuplicata(validos.map(it => ({
+      mp_id: it.mp_id, numero_nf: form.numero_nf, quantidade: converterParaBase(it.entrada, baseDe(it)),
+    })))) return
     setSaving(true)
     for (const it of validos) {
       const qtd = converterParaBase(it.entrada, baseDe(it))
@@ -999,7 +1042,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         observacao: form.observacao||null,
         ...camposEntrada(it.entrada),
       })
-      await ajustarEstoqueCompra(it.mp_id, qtd)
+      await ajustarEstoqueCompra(it.mp_id, qtd, form.data_compra)
       await recalcularCustoMP(it.mp_id)
     }
     setSaving(false)
@@ -1177,11 +1220,15 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
       //    quando parte da MP já foi consumida — o piso em zero do primeiro
       //    passo descarta estoque e o segundo não o recupera.
       //    Troca de MP: cada uma recebe seu próprio ajuste.
+      //    Lado anterior ou posterior à última contagem não mexe no saldo
+      //    (a contagem já reflete o físico) — ver efeitoNoSaldo.
+      const efAntigo = await efeitoNoSaldo(mpAntigo, qtdAnterior, compra.data_compra)
+      const efNovo = await efeitoNoSaldo(mpNovo, qtdNova, form.data_compra)
       if (trocouProduto) {
-        await ajustarEstoqueCompra(mpAntigo, -qtdAnterior)
-        await ajustarEstoqueCompra(mpNovo, qtdNova)
+        await ajustarEstoqueCompra(mpAntigo, -efAntigo)
+        await ajustarEstoqueCompra(mpNovo, efNovo)
       } else {
-        await ajustarEstoqueCompra(mpAntigo, qtdNova - qtdAnterior)
+        await ajustarEstoqueCompra(mpAntigo, efNovo - efAntigo)
       }
 
       // 3) Preço médio das duas MPs afetadas
@@ -1196,7 +1243,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
   }
 
   async function excluir() {
-    if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO estoque e o preço médio serão recalculados.`)) return
+    if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
     setSaving(true)
     await excluirCompraMP(compra)
     setSaving(false)
@@ -1356,7 +1403,7 @@ export function HistoricoCompras() {
   useEffect(()=>{ load() },[mes])
 
   async function excluirCompra(c) {
-    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO estoque e o preço médio serão recalculados.`)) return
+    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
     await excluirCompraMP(c)
     load()
   }
