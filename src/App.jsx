@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
+import { fecharMesesPendentes } from './lib/cmv'
 import Login from './pages/Login'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
@@ -41,6 +42,9 @@ export default function App() {
   })
   const [page, setPage] = useState('estoque')
   const [csvLogistica, setCsvLogistica] = useState(null)
+
+  // Fecha o CMV dos meses vencidos (a partir do dia 5) — sem botão, em segundo plano
+  useEffect(() => { if (usuario) fecharMesesPendentes() }, [usuario])
 
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('estoque') }} />
 

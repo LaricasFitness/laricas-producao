@@ -1,35 +1,30 @@
 import React, { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
 import { RefreshCw, FileSpreadsheet } from 'lucide-react'
 import { baixarXlsx } from '../lib/xlsx'
+import {
+  carregarFechamentos, calcularTeorico, calcularCMVMes, reabrirMes,
+  dataFechamentoPrevista, ultimoDia,
+} from '../lib/cmv'
 
 function fmt(n, d = 2) { return Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }) }
 function fmtR(n) { return `R$ ${fmt(n, 2)}` }
 function fmtQ(n, un) {
   const v = Number(n) || 0
   if (Math.abs(v) >= 1000 && (un === 'g' || un === 'ml')) return `${fmt(v / 1000, 2)} ${un === 'g' ? 'kg' : 'l'}`
-  return `${fmt(v, 1)} ${un || ''}`
+  return `${fmt(v, un === 'un' ? 0 : 1)} ${un || ''}`
+}
+const soma = (linhas, k) => linhas.reduce((s, l) => s + (l[k] || 0), 0)
+const corDif = pct => Math.abs(pct || 0) > 5 ? 'var(--danger)' : 'var(--ok)'
+
+function usuarioAtual() {
+  try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
 }
 
-// Pega a contagem mais recente de cada item até uma data
-function contagensAte(registros, campoData, campoItem, campoQtd, dataLimite) {
-  const mapa = {}
-  for (const r of registros) {
-    const d = r[campoData]
-    if (!d || d > dataLimite) continue
-    const k = r[campoItem]
-    if (!mapa[k] || d > mapa[k].data || (d === mapa[k].data && r.criado_em > mapa[k].criado_em)) {
-      mapa[k] = { data: d, criado_em: r.criado_em, qtd: parseFloat(r[campoQtd]) || 0 }
-    }
-  }
-  return mapa
-}
-
-// Coage resultado de query para array — tolera tabela/coluna inexistente (404)
-function arr(x) {
-  if (Array.isArray(x)) return x
-  if (x && Array.isArray(x.data)) return x.data
-  return []
+// Selo de origem do estoque: contagem física x saldo calculado
+function Origem({ o }) {
+  if (o !== 'calculado') return null
+  return <span title="Sem contagem no último dia do mês: última contagem + entradas − consumo registrado"
+    style={{ fontSize: 9, fontWeight: 800, color: 'var(--warning)', marginLeft: 4, textTransform: 'uppercase' }}>calc.</span>
 }
 
 export default function ControleEstoque() {
@@ -38,256 +33,157 @@ export default function ControleEstoque() {
   const [expandido, setExpandido] = useState(null)
   const [dados, setDados] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [erro, setErro] = useState('')
+  const [reabrindo, setReabrindo] = useState(false)
 
   useEffect(() => { load() }, [mes])
 
   async function load() {
-    setLoading(true)
-    const ini = mes + '-01'
-    const fim = new Date(mes.slice(0, 4), mes.slice(5, 7), 0).toISOString().slice(0, 10)
-
-    const q = (p) => p.then(r => r).catch(() => ({ data: [] }))
-    const [
-      rMps, rConfMP, rComprasMP,
-      rEmbs, rConfEmb, rRecItens,
-      rProducao, rProdComps, rPreps, rPrepComps,
-      rCatEmbs, rProdEmbs, rCfgPerda,
-    ] = await Promise.all([
-      q(supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario').eq('ativo', true)),
-      q(supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em')),
-      q(supabase.from('mp_compras').select('materia_prima_id,quantidade,custo_total,data_compra')
-        .gte('data_compra', ini).lte('data_compra', fim)),
-      q(supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('ativo', true)),
-      q(supabase.from('conferencia_estoque').select('embalagem_id,data_conferencia,estoque_contado,criado_em')),
-      q(supabase.from('recebimento_itens')
-        .select('embalagem_id,quantidade_recebida,valor_unitario,recebimentos(data_recebimento)')),
-      q(supabase.from('producao_diaria').select('embalagem_id,quantidade')
-        .gte('data_producao', ini).lte('data_producao', fim)
-        .not('registrado_por', 'ilike', '%(auto-embalagem)%')),
-      q(supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade')),
-      q(supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual')),
-      q(supabase.from('preparacao_composicao').select('preparacao_id,quantidade,materia_prima_id,sub_preparacao_id')),
-      q(supabase.from('categoria_embalagem').select('categoria,quantidade,embalagens(custo_unitario)')),
-      q(supabase.from('produto_embalagem').select('sku_produto,quantidade,embalagens(custo_unitario)')),
-      q(supabase.from('configuracoes').select('chave,valor').eq('chave','perda_embalagem_pct')),
-    ])
-
-    const mps = arr(rMps), confMP = arr(rConfMP), comprasMP = arr(rComprasMP)
-    const embs = arr(rEmbs), confEmb = arr(rConfEmb), recItens = arr(rRecItens)
-    const producao = arr(rProducao), prodComps = arr(rProdComps)
-    const preps = arr(rPreps), prepComps = arr(rPrepComps), catEmbs = arr(rCatEmbs)
-    const prodEmbs = arr(rProdEmbs)
-    const perdaEmbPct = parseFloat(arr(rCfgPerda)[0]?.valor) || 2
-
-    const mpMap = {}; for (const m of (mps || [])) mpMap[m.id] = m
-    const embMap = {}; for (const e of (embs || [])) embMap[e.id] = e
-    const prepMap = {}; for (const p of (preps || [])) prepMap[p.id] = p
-
-    // ═══ CONTROLE 1: consumo por inventário ═══
-    const buildInventario = (itens, conferencias, entradas, chaveItem, mapaItens) => {
-      const cIni = contagensAte(conferencias, 'data_conferencia', chaveItem, 'estoque_contado', ini)
-      const cFim = contagensAte(conferencias, 'data_conferencia', chaveItem, 'estoque_contado', fim)
-      const linhas = []
-      let temIni = false, temFim = false
-      for (const item of itens) {
-        const inicial = cIni[item.id]
-        const final = cFim[item.id]
-        // Só conta como final se for contagem posterior à inicial
-        const finalValido = final && (!inicial || final.data > inicial.data || final.criado_em > inicial.criado_em)
-        if (inicial) temIni = true
-        if (finalValido) temFim = true
-        const ent = entradas.filter(e => e[chaveItem] === item.id)
-        const entQtd = ent.reduce((s, e) => s + (parseFloat(e.qtd) || 0), 0)
-        const entVal = ent.reduce((s, e) => s + (parseFloat(e.valor) || 0), 0)
-        const qIni = inicial?.qtd ?? null
-        const qFim = finalValido ? final.qtd : null
-        const preco = parseFloat(item.custo_unitario) || 0
-        const consumoQtd = (qIni !== null && qFim !== null) ? qIni + entQtd - qFim : null
-        const consumoVal = consumoQtd !== null ? (qIni * preco) + entVal - (qFim * preco) : null
-        if (qIni === null && qFim === null && entQtd === 0) continue
-        linhas.push({
-          item, qIni, qFim, entQtd, entVal, preco, consumoQtd, consumoVal,
-          dataIni: inicial?.data, dataFim: finalValido ? final.data : null,
-        })
-      }
-      return { linhas, temIni, temFim }
+    setLoading(true); setErro('')
+    try {
+      const ini = mes + '-01'
+      const fim = ultimoDia(mes)
+      // Sem a tabela de fechamento (SQL ainda não aplicado) tudo fica provisório
+      const fechamentos = await carregarFechamentos().catch(() => ({}))
+      const teorico = await calcularTeorico(ini, fim)
+      const cmv = await calcularCMVMes(mes, { fechamentos, teorico })
+      setDados({ ...teorico, cmv, ini, fim })
+    } catch (e) {
+      setErro(e.message || String(e)); setDados(null)
     }
-
-    const entradasMP = (comprasMP || []).map(c => ({
-      materia_prima_id: c.materia_prima_id, qtd: c.quantidade, valor: c.custo_total,
-    }))
-    const entradasEmb = (recItens || [])
-      .filter(r => {
-        const d = r.recebimentos?.data_recebimento
-        return d && d >= ini && d <= fim
-      })
-      .map(r => ({
-        embalagem_id: r.embalagem_id,
-        qtd: r.quantidade_recebida,
-        valor: (parseFloat(r.quantidade_recebida) || 0) * (parseFloat(r.valor_unitario) || 0),
-      }))
-
-    const invMP = buildInventario(mps || [], confMP || [], entradasMP, 'materia_prima_id', mpMap)
-    const invEmb = buildInventario(embs || [], confEmb || [], entradasEmb, 'embalagem_id', embMap)
-
-    // ═══ CONTROLE 2: CMV pela produção × ficha ═══
-    const cache = {}
-    function custoPrepPorG(prepId, vis = new Set()) {
-      if (cache[prepId] !== undefined) return cache[prepId]
-      if (vis.has(prepId)) return 0
-      const v = new Set([...vis, prepId])
-      const prep = prepMap[prepId]; if (!prep) return 0
-      const ings = (prepComps || []).filter(c => c.preparacao_id === prepId)
-      const custo = ings.reduce((s, ing) => {
-        if (ing.sub_preparacao_id) return s + (parseFloat(ing.quantidade) || 0) * custoPrepPorG(ing.sub_preparacao_id, v)
-        const mp = mpMap[ing.materia_prima_id]
-        return s + (parseFloat(ing.quantidade) || 0) * (parseFloat(mp?.custo_unitario) || 0)
-      }, 0)
-      const real = parseFloat(prep.rendimento_real_medio) || null
-      const rendLiq = real ? real : (parseFloat(prep.rendimento_estimado) || 1) * (1 - (parseFloat(prep.perda_percentual) || 0) / 100)
-      cache[prepId] = rendLiq > 0 ? custo / rendLiq : 0
-      return cache[prepId]
-    }
-
-    const custoEmbCat = {}
-    for (const ce of (catEmbs || [])) {
-      custoEmbCat[ce.categoria] = (custoEmbCat[ce.categoria] || 0)
-        + (parseFloat(ce.quantidade) || 1) * (parseFloat(ce.embalagens?.custo_unitario) || 0)
-    }
-    // Vínculo por produto tem precedência sobre o padrão da categoria
-    const custoEmbSku = {}
-    for (const pe of prodEmbs) {
-      custoEmbSku[pe.sku_produto] = (custoEmbSku[pe.sku_produto] || 0)
-        + (parseFloat(pe.quantidade) || 1) * (parseFloat(pe.embalagens?.custo_unitario) || 0)
-    }
-
-    const skusComFicha = new Set((prodComps || []).map(p => p.sku_produto))
-    const prodPorSku = {}
-    for (const p of (producao || [])) {
-      const emb = embMap[p.embalagem_id]
-      if (!emb) continue
-      if (emb.tipo !== 'rotulo' && !skusComFicha.has(emb.codigo)) continue
-      if (!prodPorSku[emb.codigo]) prodPorSku[emb.codigo] = { emb, qtd: 0 }
-      prodPorSku[emb.codigo].qtd += p.quantidade
-    }
-
-    // Consumo de MP de uma preparação, por grama de rendimento (recursivo)
-    const mpCache = {}
-    function mpPorG(prepId, vis = new Set()) {
-      if (mpCache[prepId]) return mpCache[prepId]
-      if (vis.has(prepId)) return {}
-      const v = new Set([...vis, prepId])
-      const prep = prepMap[prepId]; if (!prep) return {}
-      const ings = (prepComps || []).filter(x => x.preparacao_id === prepId)
-      const real = parseFloat(prep.rendimento_real_medio) || null
-      const rendLiq = real ? real
-        : (parseFloat(prep.rendimento_estimado) || 1) * (1 - (parseFloat(prep.perda_percentual) || 0) / 100)
-      const acc = {}
-      for (const ing of ings) {
-        const q = parseFloat(ing.quantidade) || 0
-        if (ing.sub_preparacao_id) {
-          const sub = mpPorG(ing.sub_preparacao_id, v)
-          for (const [mpId, g] of Object.entries(sub)) acc[mpId] = (acc[mpId] || 0) + g * q
-        } else if (ing.materia_prima_id) {
-          acc[ing.materia_prima_id] = (acc[ing.materia_prima_id] || 0) + q
-        }
-      }
-      const out = {}
-      if (rendLiq > 0) for (const [mpId, g] of Object.entries(acc)) out[mpId] = g / rendLiq
-      mpCache[prepId] = out
-      return out
-    }
-
-    const produzidos = Object.values(prodPorSku).map(({ emb, qtd }) => {
-      const comps = (prodComps || []).filter(c => c.sku_produto === emb.codigo)
-      const mpUnit = comps.reduce((s, c) =>
-        s + custoPrepPorG(c.preparacao_id) * (parseFloat(c.quantidade_por_unidade) || 0), 0)
-      const embUnit = (parseFloat(emb.custo_unitario) || 0)
-        + (custoEmbSku[emb.codigo] ?? (custoEmbCat[emb.categoria] || 0))
-
-      // Consolida matéria-prima do produto acabado
-      const porMP = {}
-      for (const cp of comps) {
-        const gramas = parseFloat(cp.quantidade_por_unidade) || 0
-        const consumo = mpPorG(cp.preparacao_id)
-        for (const [mpId, gPorG] of Object.entries(consumo)) {
-          const g = gPorG * gramas
-          const mp = mpMap[mpId]
-          if (!porMP[mpId]) porMP[mpId] = { nome: mp?.nome || '?', unidade: mp?.unidade, qtd: 0, custo: 0 }
-          porMP[mpId].qtd += g
-          porMP[mpId].custo += g * (parseFloat(mp?.custo_unitario) || 0)
-        }
-      }
-      const mps = Object.values(porMP).filter(m => m.custo > 0).sort((a, b) => b.custo - a.custo)
-
-      return { emb, qtd, mpUnit, embUnit, cmvUnit: mpUnit + embUnit, total: (mpUnit + embUnit) * qtd, mps }
-    }).sort((a, b) => b.total - a.total)
-
-    // ── Consumo de embalagem pela PRODUÇÃO ──
-    // Cada produto consome o próprio rótulo (1 por unidade) mais as
-    // embalagens vinculadas, multiplicadas pela quantidade do vínculo.
-    const embPorItem = {}
-    const addEmb = (id, qtd) => {
-      const e = embMap[id] || (embs || []).find(x => x.id === id)
-      if (!e) return
-      if (!embPorItem[id]) embPorItem[id] = {
-        id, nome: e.nome, codigo: e.codigo, categoria: e.categoria,
-        custo: parseFloat(e.custo_unitario) || 0, qtd: 0, valor: 0,
-      }
-      embPorItem[id].qtd += qtd
-      embPorItem[id].valor += qtd * embPorItem[id].custo
-    }
-    const embPorCodigo = {}
-    for (const e of (embs || [])) embPorCodigo[e.codigo] = e
-
-    for (const { emb, qtd } of Object.values(prodPorSku)) {
-      addEmb(emb.id, qtd)                                   // o rótulo do produto
-      const links = (prodEmbs || []).filter(pe => pe.sku_produto === emb.codigo)
-      if (links.length) {
-        for (const pe of links) addEmb(pe.embalagem_id, qtd * (parseFloat(pe.quantidade) || 1))
-      } else {
-        // sem vínculo próprio, cai no padrão da categoria
-        for (const ce of (catEmbs || []).filter(x => x.categoria === emb.categoria)) {
-          if (ce.embalagem_id) addEmb(ce.embalagem_id, qtd * (parseFloat(ce.quantidade) || 1))
-        }
-      }
-    }
-    // Perda de embalagem: a ficha não enxerga rótulo descolado nem filme
-    // rasgado, então aplica-se um percentual sobre o consumo teórico.
-    const fatorPerda = 1 + perdaEmbPct / 100
-    const consumoEmbProducao = Object.values(embPorItem)
-      .filter(x => x.qtd > 0)
-      .map(x => ({
-        ...x,
-        qtdComPerda: x.qtd * fatorPerda,
-        perda: x.valor * (perdaEmbPct / 100),
-        valorComPerda: x.valor * fatorPerda,
-      }))
-      .sort((a, b) => b.valorComPerda - a.valorComPerda)
-    const totalEmbTeorico  = consumoEmbProducao.reduce((s, x) => s + x.valor, 0)
-    const totalEmbPerda    = consumoEmbProducao.reduce((s, x) => s + x.perda, 0)
-    const totalEmbProducao = totalEmbTeorico + totalEmbPerda
-
-    const cmvMP = produzidos.reduce((s, p) => s + p.mpUnit * p.qtd, 0)
-    const cmvEmb = produzidos.reduce((s, p) => s + p.embUnit * p.qtd, 0)
-    const unidades = produzidos.reduce((s, p) => s + p.qtd, 0)
-
-    setDados({ invMP, invEmb, produzidos, cmvMP, cmvEmb, unidades, ini, fim,
-      consumoEmbProducao, totalEmbProducao, totalEmbTeorico, totalEmbPerda, perdaEmbPct })
     setLoading(false)
   }
 
-  const labelMes = new Date(mes + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  async function reabrir() {
+    if (!window.confirm(`Reabrir ${labelMes}?\n\nOs meses seguintes já fechados também serão reabertos ` +
+      `(o estoque final de um é o inicial do outro). Eles fecham de novo sozinhos no próximo acesso a partir do dia 5.`)) return
+    setReabrindo(true)
+    try { await reabrirMes(mes); await load() } catch (e) { alert('Erro ao reabrir: ' + e.message) }
+    setReabrindo(false)
+  }
 
-  const totalMP = dados?.invMP.linhas.reduce((s, l) => s + (l.consumoVal || 0), 0) || 0
-  const totalEmb = dados?.invEmb.linhas.reduce((s, l) => s + (l.consumoVal || 0), 0) || 0
+  const labelMes = new Date(mes + '-15').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+  const linhas = dados?.cmv?.linhas || []
+  const linhasMP = linhas.filter(l => l.tipo === 'mp')
+  const linhasEmb = linhas.filter(l => l.tipo === 'emb')
+  const realMP = soma(linhasMP, 'cmv_valor'), realEmb = soma(linhasEmb, 'cmv_valor')
+  const teoMP = soma(linhasMP, 'teorico_valor'), teoEmb = soma(linhasEmb, 'teorico_valor')
+  const fechado = dados?.cmv?.status === 'fechado'
+  const ehAdmin = usuarioAtual()?.perfil === 'admin'
+
+  function exportarReal() {
+    baixarXlsx({
+      nomeArquivo: `CMV_real_${mes}`,
+      aba: labelMes,
+      colunas: [
+        { header: 'Tipo',              key: 'tipo',    tipo: 'texto',  largura: 12 },
+        { header: 'Item',              key: 'nome',    tipo: 'texto',  largura: 36 },
+        { header: 'Unidade',           key: 'unidade', tipo: 'texto',  largura: 8 },
+        { header: 'Estoque inicial',   key: 'ei_qtd',  tipo: 'numero', largura: 14 },
+        { header: 'EI (R$)',           key: 'ei_valor', tipo: 'moeda', largura: 13 },
+        { header: 'Compras',           key: 'compras_qtd', tipo: 'numero', largura: 12 },
+        { header: 'Compras (R$)',      key: 'compras_valor', tipo: 'moeda', largura: 13 },
+        { header: 'Atrasadas (R$)',    key: 'atrasadas_valor', tipo: 'moeda', largura: 13 },
+        { header: 'Estoque final',     key: 'ef_qtd',  tipo: 'numero', largura: 14 },
+        { header: 'EF (R$)',           key: 'ef_valor', tipo: 'moeda', largura: 13 },
+        { header: 'Origem EF',         key: 'ef_origem', tipo: 'texto', largura: 11 },
+        { header: 'Consumo',           key: 'cmv_qtd', tipo: 'numero', largura: 12 },
+        { header: 'CMV real (R$)',     key: 'cmv_valor', tipo: 'moeda', largura: 14 },
+        { header: 'Teórico (R$)',      key: 'teorico_valor', tipo: 'moeda', largura: 14 },
+      ],
+      linhas: linhas.map(l => ({ ...l, tipo: l.tipo === 'mp' ? 'Matéria-prima' : 'Embalagem' })),
+    })
+  }
+
+  // Tabela de CMV real de um grupo
+  const TabelaReal = ({ titulo, sub, lista, total }) => (
+    <div className="card">
+      <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>{titulo}</div>
+          <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>{sub}</div>
+        </div>
+        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>{fmtR(total)}</div>
+      </div>
+      {lista.length === 0 ? (
+        <div style={{ padding: 28, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>Sem movimento no período.</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)' }}>
+                <th style={{ padding: '8px 14px', textAlign: 'left' }}>Item</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>Estoque inicial</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>+ Compras</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>− Estoque final</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>= Consumo</th>
+                <th style={{ padding: '8px 14px', textAlign: 'right' }}>CMV real</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map((l, i) => (
+                <tr key={l.item_id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
+                  <td style={{ padding: '7px 14px', fontWeight: 600 }}>
+                    {l.nome}
+                    {l.categoria && <div style={{ fontSize: 10, color: 'var(--gray-400)', fontWeight: 400 }}>{l.categoria}</div>}
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>
+                    {l.ei_qtd === null ? <span style={{ color: 'var(--gray-300)' }}>sem dado</span> : <>
+                      {fmtQ(l.ei_qtd, l.unidade)}<Origem o={l.ei_origem} />
+                      <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{fmtR(l.ei_valor)}</div>
+                    </>}
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--ok)' }}>
+                    {l.compras_qtd > 0 ? <>+{fmtQ(l.compras_qtd, l.unidade)}
+                      <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{fmtR(l.compras_valor)}</div></> : '—'}
+                    {l.atrasadas_qtd > 0 && (
+                      <div style={{ fontSize: 10, color: 'var(--warning)', fontWeight: 700 }}
+                        title="Compra de mês já fechado, lançada depois do fechamento">
+                        +{fmtR(l.atrasadas_valor)} de mês anterior
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>
+                    {l.ef_qtd === null ? <span style={{ color: 'var(--gray-300)' }}>sem dado</span> : <>
+                      {fmtQ(l.ef_qtd, l.unidade)}<Origem o={l.ef_origem} />
+                      <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{fmtR(l.ef_valor)}</div>
+                    </>}
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700,
+                    color: (l.cmv_qtd || 0) < 0 ? 'var(--danger)' : 'var(--purple)' }}>
+                    {l.cmv_qtd === null ? 'n/d' : fmtQ(l.cmv_qtd, l.unidade)}
+                  </td>
+                  <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 700 }}>
+                    {l.cmv_valor === null ? 'n/d' : fmtR(l.cmv_valor)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {lista.some(l => (l.cmv_qtd || 0) < 0) && (
+            <div style={{ padding: '10px 20px', background: '#fff8f0', fontSize: 12, color: 'var(--gray-600)' }}>
+              ⚠️ Consumo negativo indica erro de contagem ou compra não lançada.
+            </div>
+          )}
+          {lista.some(l => l.ef_origem === 'calculado') && (
+            <div style={{ padding: '10px 20px', background: 'var(--gray-50)', fontSize: 11, color: 'var(--gray-500)', borderTop: '1px solid var(--gray-100)' }}>
+              <b style={{ color: 'var(--warning)' }}>CALC.</b> = sem contagem no último dia do mês; o estoque final é a última
+              contagem + entradas − consumo registrado. Nesses itens o CMV real repete o consumo registrado e não enxerga perdas —
+              conte-os no fechamento para medir o real.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ fontWeight: 800, fontSize: 15 }}>📦 Controle de Estoque e CMV</div>
         <div style={{ display: 'flex', gap: 4, marginLeft: 12 }}>
-          {[['real', '📊 Consumo Real'], ['produzido', '🏭 CMV Produzido'], ['comparar', '🔀 Comparação']].map(([k, l]) => (
+          {[['real', '📊 CMV Real'], ['produzido', '🏭 CMV Produzido'], ['comparar', '🔀 Real × Teórico']].map(([k, l]) => (
             <button key={k} className={`btn btn-sm ${vista === k ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setVista(k)}>{l}</button>
           ))}
@@ -298,193 +194,51 @@ export default function ControleEstoque() {
         <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13} /></button>
       </div>
 
+      {erro && <div className="card card-pad" style={{ color: 'var(--danger)', fontSize: 13 }}>Erro ao calcular: {erro}</div>}
+
       {loading ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : !dados ? null : (
         <>
-          {/* ═══ CONSUMO REAL ═══ */}
+          {/* Situação do mês */}
+          {vista !== 'produzido' && (
+            <div className="card card-pad" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+              background: fechado ? '#f0faf0' : '#fff8f0' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: fechado ? 'var(--ok)' : 'var(--warning)' }}>
+                {fechado
+                  ? `🔒 Fechado em ${new Date(dados.cmv.fechado_em).toLocaleDateString('pt-BR')} — valores congelados`
+                  : `⏳ Provisório — fecha automaticamente em ${dataFechamentoPrevista(mes)}`}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
+                Estoques valorizados por PEPS · CMV = estoque inicial + compras − estoque final
+              </div>
+              <div style={{ flex: 1 }} />
+              <button className="btn btn-ghost btn-sm" onClick={exportarReal} disabled={!linhas.length}>
+                <FileSpreadsheet size={13} /> Exportar Excel
+              </button>
+              {fechado && ehAdmin && (
+                <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={reabrir} disabled={reabrindo}>
+                  {reabrindo ? <RefreshCw size={12} className="spin" /> : '🔓'} Reabrir mês
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ═══ CMV REAL ═══ */}
           {vista === 'real' && (
             <>
-              {[
-                { titulo: '🧂 Matéria-prima', inv: dados.invMP, total: totalMP },
-              ].map(({ titulo, inv, total }) => (
-                <div key={titulo} className="card">
-                  <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 800, fontSize: 14 }}>{titulo}</div>
-                    <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>{fmtR(total)}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+                {[
+                  ['Matéria-prima', realMP],
+                  ['Embalagem', realEmb],
+                  ['CMV real total', realMP + realEmb],
+                ].map(([l, v]) => (
+                  <div key={l} className="card card-pad" style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: 'var(--gray-400)', fontWeight: 700, textTransform: 'uppercase' }}>{l}</div>
+                    <div style={{ fontSize: 19, fontWeight: 800, color: 'var(--purple)', margin: '4px 0' }}>{fmtR(v)}</div>
                   </div>
-
-                  {(!inv.temIni || !inv.temFim) ? (
-                    <div style={{ padding: '14px 20px', background: '#fff8f0', fontSize: 13, color: 'var(--gray-600)' }}>
-                      ⚠️ Faltam contagens para calcular o consumo.
-                      {!inv.temIni && <div>· Sem contagem de abertura (até {dados.ini})</div>}
-                      {!inv.temFim && <div>· Sem contagem de fechamento (até {dados.fim})</div>}
-                      <div style={{ marginTop: 4, color: 'var(--gray-400)' }}>
-                        O consumo por inventário exige duas contagens: uma no início e outra no fim do período.
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)' }}>
-                            <th style={{ padding: '8px 14px', textAlign: 'left' }}>Item</th>
-                            <th style={{ padding: '8px 10px', textAlign: 'right' }}>Estoque inicial</th>
-                            <th style={{ padding: '8px 10px', textAlign: 'right' }}>+ Entradas</th>
-                            <th style={{ padding: '8px 10px', textAlign: 'right' }}>− Estoque final</th>
-                            <th style={{ padding: '8px 10px', textAlign: 'right' }}>= Consumo</th>
-                            <th style={{ padding: '8px 14px', textAlign: 'right' }}>Valor</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {inv.linhas.filter(l => l.consumoQtd !== null).map((l, i) => (
-                            <tr key={l.item.id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
-                              <td style={{ padding: '7px 14px', fontWeight: 600 }}>{l.item.nome}</td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>{fmtQ(l.qIni, l.item.unidade)}</td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--ok)' }}>
-                                {l.entQtd > 0 ? `+${fmtQ(l.entQtd, l.item.unidade)}` : '—'}
-                              </td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>{fmtQ(l.qFim, l.item.unidade)}</td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700,
-                                color: l.consumoQtd < 0 ? 'var(--danger)' : 'var(--purple)' }}>
-                                {fmtQ(l.consumoQtd, l.item.unidade)}
-                              </td>
-                              <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 700 }}>{fmtR(l.consumoVal)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {inv.linhas.some(l => l.consumoQtd < 0) && (
-                        <div style={{ padding: '10px 20px', background: '#fff8f0', fontSize: 12, color: 'var(--gray-600)' }}>
-                          ⚠️ Consumo negativo indica erro de contagem ou entrada não lançada.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* ── Embalagem: consumo pela produção registrada ── */}
-              <div className="card">
-                <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: 14 }}>📦 Embalagens e rótulos</div>
-                    <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>
-                      unidades produzidas × embalagem de cada produto · perda de {fmt(dados.perdaEmbPct,0)}%
-                    </div>
-                  </div>
-                  <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>
-                    {fmtR(dados.totalEmbProducao)}
-                  </div>
-                </div>
-
-                {dados.consumoEmbProducao.length === 0 ? (
-                  <div style={{ padding: 28, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>
-                    Nenhuma produção registrada no período.
-                  </div>
-                ) : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)' }}>
-                          <th style={{ padding: '8px 14px', textAlign: 'left' }}>Item</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'left' }}>Categoria</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Consumido</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Custo un.</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Valor</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>+ Perda</th>
-                          <th style={{ padding: '8px 14px', textAlign: 'right' }}>Total</th>
-                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>% do total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dados.consumoEmbProducao.map((x, i) => {
-                          const p = dados.totalEmbProducao > 0 ? x.valorComPerda / dados.totalEmbProducao * 100 : 0
-                          return (
-                            <tr key={x.id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
-                              <td style={{ padding: '7px 14px', fontWeight: 600 }}>{x.nome}</td>
-                              <td style={{ padding: '7px 10px', color: 'var(--gray-400)', fontSize: 11 }}>{x.categoria}</td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
-                                {x.qtd.toLocaleString('pt-BR')} un
-                              </td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>
-                                {x.custo > 0 ? fmtR(x.custo) : <span style={{ color: 'var(--danger)' }}>sem custo</span>}
-                              </td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>
-                                {fmtR(x.valor)}
-                              </td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--warning)', fontSize: 11 }}>
-                                {x.perda > 0.005 ? `+${fmtR(x.perda)}` : '—'}
-                              </td>
-                              <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--purple)' }}>
-                                {fmtR(x.valorComPerda)}
-                              </td>
-                              <td style={{ padding: '7px 10px', width: 130 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-                                  <div style={{ width: 50, height: 6, background: 'var(--gray-100)', borderRadius: 3 }}>
-                                    <div style={{ height: '100%', width: `${Math.min(100, p)}%`, background: 'var(--purple)', borderRadius: 3 }} />
-                                  </div>
-                                  <span style={{ fontSize: 11, fontWeight: 700, minWidth: 36, textAlign: 'right' }}>{fmt(p, 1)}%</span>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr style={{ borderTop: '2px solid var(--gray-200)', background: 'var(--gray-50)' }}>
-                          <td colSpan={4} style={{ padding: '9px 14px', fontWeight: 800 }}>
-                            Consumo teórico + perda de {fmt(dados.perdaEmbPct,0)}%
-                          </td>
-                          <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--gray-600)' }}>
-                            {fmtR(dados.totalEmbTeorico)}
-                          </td>
-                          <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--warning)' }}>
-                            +{fmtR(dados.totalEmbPerda)}
-                          </td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 800, color: 'var(--purple)' }}>
-                            {fmtR(dados.totalEmbProducao)}
-                          </td>
-                          <td/>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                )}
-
-                {/* Inventário como referência — método diferente, serve de contraprova */}
-                {(dados.invEmb.temIni && dados.invEmb.temFim) && (
-                  <div style={{ padding: '10px 20px', borderTop: '1px solid var(--gray-200)',
-                    background: 'var(--gray-50)', fontSize: 12, color: 'var(--gray-600)',
-                    display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                    <span>
-                      Por inventário no mesmo período (inicial + entradas − final): <strong>{fmtR(totalEmb)}</strong>
-                    </span>
-                    {dados.totalEmbProducao > 0 && (
-                      <span style={{ fontWeight: 700,
-                        color: Math.abs(totalEmb - dados.totalEmbProducao) / dados.totalEmbProducao > 0.1
-                          ? 'var(--danger)' : 'var(--gray-500)' }}>
-                        diferença {totalEmb - dados.totalEmbProducao >= 0 ? '+' : '−'}
-                        {fmtR(Math.abs(totalEmb - dados.totalEmbProducao))}
-                        {' '}({fmt(Math.abs(totalEmb - dados.totalEmbProducao) / dados.totalEmbProducao * 100, 1)}%)
-                      </span>
-                    )}
-                  </div>
-                )}
+                ))}
               </div>
-
-              {(dados.invMP.temIni && dados.invMP.temFim) && (
-                <div className="card card-pad" style={{ display: 'flex', justifyContent: 'space-between',
-                  alignItems: 'center', background: 'var(--purple-pale)' }}>
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: 'var(--purple)' }}>Consumo real total — {labelMes}</div>
-                    <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}>
-                      MP por inventário físico · embalagem por produção registrada
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--purple)' }}>{fmtR(totalMP + dados.totalEmbProducao)}</div>
-                </div>
-              )}
+              <TabelaReal titulo="🧂 Matéria-prima" sub="contagem física no último dia do mês" lista={linhasMP} total={realMP} />
+              <TabelaReal titulo="📦 Embalagens e rótulos" sub="contagem no último dia do mês; sem ela, saldo calculado" lista={linhasEmb} total={realEmb} />
             </>
           )}
 
@@ -632,95 +386,86 @@ export default function ControleEstoque() {
             </>
           )}
 
-          {/* ═══ COMPARAÇÃO ═══ */}
+          {/* ═══ REAL × TEÓRICO ═══ */}
           {vista === 'comparar' && (() => {
-            const podeComparar = dados.invMP.temIni && dados.invMP.temFim
-            const difMP = podeComparar ? totalMP - dados.cmvMP : null
-            const difMPpct = podeComparar && dados.cmvMP > 0 ? (difMP / dados.cmvMP * 100) : null
-            // Embalagem agora usa produção dos dois lados — mesma base,
-            // então a comparação não valida nada e é mostrada como tal.
-            const podeEmb = dados.invEmb.temIni && dados.invEmb.temFim
-            const difEmb = podeEmb ? totalEmb - dados.cmvEmb : null
-            const difEmbPct = podeEmb && dados.cmvEmb > 0 ? (difEmb / dados.cmvEmb * 100) : null
-
-            const Linha = ({ label, real, ficha, dif, difPct, ok }) => (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
-                padding: '12px 16px', borderTop: '1px solid var(--gray-100)', alignItems: 'center' }}>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>{label}</div>
-                <div style={{ textAlign: 'right', fontWeight: 700 }}>{ok ? fmtR(real) : 'n/d'}</div>
-                <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(ficha)}</div>
-                <div style={{ textAlign: 'right', fontWeight: 800,
-                  color: !ok ? 'var(--gray-300)' : Math.abs(difPct || 0) > 5 ? 'var(--danger)' : 'var(--ok)' }}>
-                  {ok ? `${dif >= 0 ? '+' : '−'}${fmtR(Math.abs(dif))} (${fmt(Math.abs(difPct || 0), 1)}%)` : '—'}
+            const Grupo = ({ titulo, lista, real, teo }) => {
+              const comDado = lista.filter(l => l.cmv_valor !== null || l.teorico_valor > 0)
+                .map(l => ({ ...l, dif: (l.cmv_valor || 0) - (l.teorico_valor || 0) }))
+                .sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif))
+              const dif = real - teo, difPct = teo > 0 ? dif / teo * 100 : null
+              return (
+                <div className="card">
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px 150px', gap: 12,
+                    padding: '12px 16px', background: 'var(--purple)', color: '#fff', alignItems: 'center' }}>
+                    <div style={{ fontWeight: 800, fontSize: 14 }}>{titulo}</div>
+                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Real</div>
+                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Teórico (ficha)</div>
+                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Diferença</div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px 150px', gap: 12,
+                    padding: '12px 16px', background: 'var(--purple-pale)', alignItems: 'center', fontWeight: 800 }}>
+                    <div style={{ color: 'var(--purple)' }}>Total</div>
+                    <div style={{ textAlign: 'right' }}>{fmtR(real)}</div>
+                    <div style={{ textAlign: 'right' }}>{fmtR(teo)}</div>
+                    <div style={{ textAlign: 'right', color: corDif(difPct) }}>
+                      {dif >= 0 ? '+' : '−'}{fmtR(Math.abs(dif))}{difPct !== null && ` (${fmt(Math.abs(difPct), 1)}%)`}
+                    </div>
+                  </div>
+                  {comDado.map((l, i) => {
+                    const pct = l.teorico_valor > 0 ? l.dif / l.teorico_valor * 100 : null
+                    const difQ = (l.cmv_qtd || 0) - (l.teorico_qtd || 0)
+                    return (
+                      <div key={l.item_id} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px 150px', gap: 12,
+                        padding: '7px 16px', borderTop: '1px solid var(--gray-100)', alignItems: 'center', fontSize: 12,
+                        background: i % 2 ? '#fafafa' : '#fff' }}>
+                        <div style={{ fontWeight: 600 }}>{l.nome}<Origem o={l.ef_origem} /></div>
+                        <div style={{ textAlign: 'right' }}>
+                          {l.cmv_valor === null ? 'n/d' : fmtR(l.cmv_valor)}
+                          <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{l.cmv_qtd === null ? '' : fmtQ(l.cmv_qtd, l.unidade)}</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          {fmtR(l.teorico_valor)}
+                          <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{fmtQ(l.teorico_qtd, l.unidade)}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', fontWeight: 700, color: l.cmv_valor === null ? 'var(--gray-300)' : corDif(pct) }}>
+                          {l.cmv_valor === null ? '—' : <>
+                            {l.dif >= 0 ? '+' : '−'}{fmtR(Math.abs(l.dif))}{pct !== null && ` (${fmt(Math.abs(pct), 1)}%)`}
+                            <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--gray-400)' }}>
+                              {difQ >= 0 ? '+' : '−'}{fmtQ(Math.abs(difQ), l.unidade)}
+                            </div>
+                          </>}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-              </div>
-            )
+              )
+            }
 
             return (
               <>
-                <div className="card">
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
-                    padding: '12px 16px', background: 'var(--purple)', color: '#fff' }}>
-                    <div style={{ fontWeight: 800, fontSize: 14 }}>Consumo real vs CMV produzido</div>
-                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Inventário</div>
-                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Ficha</div>
-                    <div style={{ textAlign: 'right', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>Diferença</div>
-                  </div>
-                  <Linha label="Matéria-prima" real={totalMP} ficha={dados.cmvMP} dif={difMP} difPct={difMPpct} ok={podeComparar} />
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
-                    padding: '12px 16px', borderTop: '1px solid var(--gray-100)', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>Embalagem</div>
-                      <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
-                        mesma base nos dois lados — produção × ficha
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(dados.totalEmbProducao)}</div>
-                    <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(dados.cmvEmb)}</div>
-                    <div style={{ textAlign: 'right', fontWeight: 700, color: 'var(--gray-300)' }}>—</div>
-                  </div>
-                  {podeEmb && (
-                    <div style={{ padding: '8px 16px', background: 'var(--gray-50)', fontSize: 11,
-                      color: 'var(--gray-500)', borderTop: '1px solid var(--gray-100)' }}>
-                      Contraprova por inventário de embalagem no período: <strong>{fmtR(totalEmb)}</strong>
-                      {' '}(diferença de {fmt(Math.abs(totalEmb - dados.totalEmbProducao) / (dados.totalEmbProducao||1) * 100, 1)}%
-                      {' '}contra a produção)
-                    </div>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px 150px', gap: 12,
-                    padding: '14px 16px', borderTop: '2px solid var(--gray-200)', background: 'var(--purple-pale)', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--purple)' }}>Total</div>
-                    <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
-                      {podeComparar ? fmtR(totalMP + dados.totalEmbProducao) : 'n/d'}
-                    </div>
-                    <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 16, color: 'var(--purple)' }}>
-                      {fmtR(dados.cmvMP + dados.cmvEmb)}
-                    </div>
-                    <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 15,
-                      color: podeComparar ? 'var(--purple)' : 'var(--gray-300)' }}>
-                      {podeComparar
-                        ? `${(totalMP - dados.cmvMP) >= 0 ? '+' : '−'}${fmtR(Math.abs(totalMP - dados.cmvMP))}`
-                        : '—'}
-                    </div>
-                  </div>
-                </div>
+                <Grupo titulo="🧂 Matéria-prima" lista={linhasMP} real={realMP} teo={teoMP} />
+                <Grupo titulo="📦 Embalagens e rótulos" lista={linhasEmb} real={realEmb} teo={teoEmb} />
 
                 {/* Interpretação */}
                 <div style={{ padding: '14px 18px', borderRadius: 8, background: 'var(--gray-50)',
                   border: '1px solid var(--gray-200)', fontSize: 13, lineHeight: 1.6 }}>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>Como ler a diferença</div>
                   <div style={{ color: 'var(--gray-600)' }}>
-                    O <strong>inventário</strong> mede o que realmente saiu do estoque, sem depender de ficha técnica.
-                    A <strong>ficha</strong> calcula o que deveria ter sido usado para produzir as unidades registradas.
+                    O <strong>real</strong> mede o que saiu do estoque (inicial + compras − final), sem depender de ficha técnica.
+                    O <strong>teórico</strong> é o que a ficha diz que deveria ter sido usado para produzir as unidades registradas,
+                    valorizado ao mesmo custo unitário do real — a diferença em R$ é só de quantidade.
                   </div>
                   <div style={{ marginTop: 8, color: 'var(--gray-600)' }}>
-                    <strong>Inventário maior que a ficha</strong> pode ser desperdício, rendimento pior que o cadastrado,
-                    produção não registrada — ou <strong>preparação pronta em estoque</strong>, que já consumiu matéria-prima
-                    mas ainda não virou produto acabado. Nem toda diferença positiva é perda.
+                    <strong>Real maior que o teórico</strong>: desperdício, rendimento pior que o cadastrado, produção não registrada —
+                    ou <strong>preparação pronta em estoque</strong>, que já consumiu matéria-prima mas ainda não virou produto acabado.
                   </div>
                   <div style={{ marginTop: 6, color: 'var(--gray-600)' }}>
-                    <strong>Inventário menor que a ficha</strong> costuma indicar erro de contagem, compra não lançada
-                    ou ficha com quantidades superestimadas.
+                    <strong>Real menor que o teórico</strong>: erro de contagem, compra não lançada ou ficha superestimada.
+                  </div>
+                  <div style={{ marginTop: 6, color: 'var(--gray-500)', fontSize: 12 }}>
+                    Itens marcados <b style={{ color: 'var(--warning)' }}>CALC.</b> não tiveram contagem no último dia do mês — neles o real
+                    repete o consumo registrado e a diferença não indica perda.
                   </div>
                 </div>
               </>

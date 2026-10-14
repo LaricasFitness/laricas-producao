@@ -106,12 +106,21 @@ O sistema calcula custo por dois métodos independentes, que devem convergir.
 
 **Teórico** — produção registrada × ficha técnica. É o CMV por produto.
 
-**Real** — para matéria-prima, inventário físico:
-`estoque inicial + compras − estoque final`. Não depende de ficha nenhuma.
-Para embalagem, produção × ficha + percentual de perda configurável.
+**Real** — `estoque inicial + compras − estoque final`, em R$, para
+matéria-prima e embalagem (`src/lib/cmv.js`). Não depende de ficha nenhuma.
 
-A aba **CMV do Mês** mostra os dois lado a lado. A diferença na matéria-prima
-é desperdício, rendimento pior que o cadastrado ou lançamento faltando.
+- Estoque final = contagem do **último dia do mês**. Sem ela, saldo calculado
+  (última contagem + entradas − consumo registrado), marcado "calc.".
+- Valorização **PEPS**: o estoque vale o preço das compras mais recentes.
+- **Fechamento automático**: a partir do dia 5 do mês seguinte, o primeiro
+  acesso ao sistema grava o mês em `fechamento_cmv` (congelado). O estoque
+  final de um mês é o inicial do seguinte.
+- Compra lançada depois do fechamento com data de mês fechado entra no
+  primeiro mês aberto ("de mês anterior"). Editar/excluir compra de mês
+  fechado é bloqueado — reabrir o mês na tela CMV do Mês (admin).
+
+A aba **CMV do Mês** mostra real e teórico lado a lado. A diferença é
+desperdício, rendimento pior que o cadastrado ou lançamento faltando.
 
 ---
 

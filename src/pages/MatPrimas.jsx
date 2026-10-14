@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { Plus, RefreshCw, Save, Pencil, Upload, FileText } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { mesFechado, avisoMesFechado } from '../lib/cmv'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -45,13 +46,17 @@ async function recalcularCustoMP(mpId) {
   return preco
 }
 
-// Data da última contagem física da MP (conferencia_mp), ou null
+// Data da última contagem física da MP (conferência ou inventário), ou null
 async function ultimaContagemMP(mpId) {
   if (!mpId) return null
-  const { data } = await supabase.from('conferencia_mp')
-    .select('data_conferencia').eq('materia_prima_id', mpId)
-    .order('data_conferencia', { ascending: false }).limit(1)
-  return data?.[0]?.data_conferencia || null
+  const [{ data: c }, { data: i }] = await Promise.all([
+    supabase.from('conferencia_mp').select('data_conferencia').eq('materia_prima_id', mpId)
+      .order('data_conferencia', { ascending: false }).limit(1),
+    supabase.from('mp_inventarios').select('data_inventario').eq('materia_prima_id', mpId)
+      .order('data_inventario', { ascending: false }).limit(1),
+  ])
+  const datas = [c?.[0]?.data_conferencia, i?.[0]?.data_inventario].filter(Boolean).sort()
+  return datas.length ? datas[datas.length - 1] : null
 }
 
 // Quanto uma compra mexe no saldo: compra com data igual ou anterior à
@@ -1200,6 +1205,10 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 
   async function salvar() {
     if (!entradaOk || !form.custo_total || !mpNovo) return
+    // Mês fechado no CMV: nem a compra original nem a nova data podem cair nele
+    for (const d of [compra.data_compra, form.data_compra]) {
+      if (await mesFechado(d)) { setErro(avisoMesFechado(d)); return }
+    }
     setSaving(true); setErro('')
     try {
       // 1) Atualiza o lançamento primeiro — o recálculo de preço lê mp_compras
@@ -1243,6 +1252,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
   }
 
   async function excluir() {
+    if (await mesFechado(compra.data_compra)) { alert(avisoMesFechado(compra.data_compra)); return }
     if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
     setSaving(true)
     await excluirCompraMP(compra)
@@ -1403,6 +1413,7 @@ export function HistoricoCompras() {
   useEffect(()=>{ load() },[mes])
 
   async function excluirCompra(c) {
+    if (await mesFechado(c.data_compra)) { alert(avisoMesFechado(c.data_compra)); return }
     if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
     await excluirCompraMP(c)
     load()
