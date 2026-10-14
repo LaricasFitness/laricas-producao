@@ -319,6 +319,8 @@ function parseNFe(xmlText) {
   const doc = parser.parseFromString(xmlText, 'text/xml')
   const get = (tag) => doc.querySelector(tag)?.textContent?.trim() || ''
   const getAll = (tag) => [...doc.querySelectorAll(tag)]
+  // Valor opcional: null quando a tag não existe (o rateio distingue "não informado" de zero)
+  const opt = (el, tag) => { const t = el.querySelector(tag)?.textContent; return t ? parseFloat(t) : null }
   const fornecedor = get('emit xNome') || get('emit xFant')
   const itens = getAll('det').map(det => ({
     descricao: det.querySelector('xProd')?.textContent?.trim() || '',
@@ -327,21 +329,138 @@ function parseNFe(xmlText) {
     unidade: det.querySelector('uCom')?.textContent?.trim() || 'UN',
     valor_unitario: parseFloat(det.querySelector('vUnCom')?.textContent || '0'),
     valor_total: parseFloat(det.querySelector('vProd')?.textContent || '0'),
+    // Rateios que o emitente já fez por item (prod/vFrete etc.) e impostos que viram custo
+    frete: opt(det, 'prod vFrete'), seguro: opt(det, 'prod vSeg'), desconto: opt(det, 'prod vDesc'),
+    outras_despesas: opt(det, 'prod vOutro'), ipi: opt(det, 'imposto IPI vIPI'), icms_st: opt(det, 'imposto ICMS vICMSST'),
   }))
+  const tot = tag => parseFloat(get(`ICMSTot ${tag}`) || '0')
   return {
     numero: get('nNF'),
     data_emissao: (get('dhEmi') || get('dEmi')).slice(0,10),
-    valor_total: parseFloat(get('vNF') || '0'),
+    cnpj: get('emit CNPJ') || get('emit CPF'),
     tipo_nota: 'NFe', fornecedor, itens,
+    totais: {
+      valor_produtos: tot('vProd'), frete: tot('vFrete'), seguro: tot('vSeg'), desconto: tot('vDesc'),
+      outras_despesas: tot('vOutro'), ipi: tot('vIPI'), icms_st: tot('vST'), valor_total_nota: tot('vNF'),
+    },
   }
 }
 
-// ── Modal importar XML ────────────────────────────────────────────────────────
-function ModalImportarXML({ onClose, onSaved }) {
+// ═══════════════════════════════════════════════════════════════
+// Custo de cada item da nota com frete, seguro, outras despesas,
+// IPI e ICMS-ST somados e desconto subtraído.
+// Componente informado item a item (e que fecha com o total da nota)
+// usa o valor do item; senão é rateado pelo VALOR do produto — mesmo
+// critério da NF-e. Por quantidade não serve: as unidades não se
+// comparam (25 kg de leite × 300 g de cravo).
+// ═══════════════════════════════════════════════════════════════
+const COMPONENTES_NF = [
+  ['frete', 1], ['seguro', 1], ['outras_despesas', 1], ['ipi', 1], ['icms_st', 1], ['desconto', -1],
+]
+function custosRateados(itens, totais) {
+  const base = itens.map(i => parseFloat(i.valor_total) || 0)
+  const somaBase = base.reduce((s, v) => s + v, 0)
+  const custos = [...base]
+  for (const [c, sinal] of COMPONENTES_NF) {
+    const total = parseFloat(totais?.[c]) || 0
+    const porItem = itens.map(i => i[c])
+    const informado = porItem.every(v => v !== null && v !== undefined && v !== '')
+    const somaItens = informado ? porItem.reduce((s, v) => s + (parseFloat(v) || 0), 0) : null
+    if (informado && Math.abs(somaItens - total) < 0.05) {
+      porItem.forEach((v, k) => { custos[k] += sinal * (parseFloat(v) || 0) })
+    } else if (total && somaBase > 0) {
+      base.forEach((b, k) => { custos[k] += sinal * total * b / somaBase })
+    }
+  }
+  return custos.map(c => Math.round(c * 100) / 100)
+}
+
+// Conferência aritmética da nota — o que não fecha precisa ser corrigido antes de lançar
+function conferirNota(nf) {
+  const t = nf.totais || {}, prob = []
+  const n = v => parseFloat(v) || 0
+  const somaItens = nf.itens.reduce((s, i) => s + n(i.valor_total), 0)
+  if (Math.abs(somaItens - n(t.valor_produtos)) > 0.05)
+    prob.push(`Soma dos itens (${fmtR(somaItens)}) ≠ valor total dos produtos (${fmtR(t.valor_produtos)})`)
+  const calc = n(t.valor_produtos) + n(t.frete) + n(t.seguro) + n(t.outras_despesas) + n(t.ipi) + n(t.icms_st) - n(t.desconto)
+  if (Math.abs(calc - n(t.valor_total_nota)) > 0.05)
+    prob.push(`Produtos + frete + seguro + despesas + IPI + ST − desconto (${fmtR(calc)}) ≠ total da nota (${fmtR(t.valor_total_nota)})`)
+  nf.itens.forEach((i, k) => {
+    const esp = n(i.quantidade) * n(i.valor_unitario)
+    if (Math.abs(esp - n(i.valor_total)) > Math.max(0.05, n(i.valor_total) * 0.01))
+      prob.push(`Item ${k + 1} (${i.descricao}): quantidade × valor unitário (${fmtR(esp)}) ≠ total (${fmtR(i.valor_total)})`)
+  })
+  return prob
+}
+
+// ── Memória de vínculos: descrição do fornecedor → matéria-prima ──
+// Na primeira nota de um fornecedor alguém escolhe a MP de cada item;
+// nas seguintes o vínculo (e a conversão de unidade) já vem pronto.
+const chaveFornecedor = nf => (nf.cnpj || '').replace(/\D/g, '') ||
+  (nf.fornecedor || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim()
+const chaveDescricao = d => (d || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim()
+
+async function carregarVinculosNF(nf) {
+  const chave = chaveFornecedor(nf)
+  if (!chave) return {}
+  const { data, error } = await supabase.from('nf_vinculos').select('*').eq('fornecedor_chave', chave)
+  if (error) return {}   // tabela ainda não criada
+  const m = {}
+  for (const v of (data || [])) m[v.descricao] = v
+  return m
+}
+
+async function salvarVinculosNF(nf, linhas) {
+  const chave = chaveFornecedor(nf)
+  if (!chave || !linhas.length) return
+  await supabase.from('nf_vinculos').upsert(linhas.map(l => ({
+    fornecedor_chave: chave, fornecedor_nome: nf.fornecedor || null,
+    descricao: chaveDescricao(l.descricao), materia_prima_id: l.mp_id,
+    unidade_compra: l.entrada?.unidade || null,
+    conteudo_embalagem: ehEmbalagem(l.entrada?.unidade) ? (parseFloat(l.entrada.conteudo) || null) : null,
+    unidade_conteudo: ehEmbalagem(l.entrada?.unidade) ? (l.entrada.unidadeConteudo || null) : null,
+    atualizado_em: new Date().toISOString(),
+  })), { onConflict: 'fornecedor_chave,descricao' })
+}
+
+// Reduz a foto antes de enviar (limite de 4,5 MB por requisição no Vercel)
+function arquivoParaEnvio(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Não foi possível ler o arquivo'))
+    if (file.type === 'application/pdf') {
+      if (file.size > 3_000_000) return reject(new Error('PDF maior que 3 MB — envie uma foto da nota'))
+      reader.onload = () => resolve({ media_type: 'application/pdf', data: String(reader.result).split(',')[1] })
+      return reader.readAsDataURL(file)
+    }
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => reject(new Error('Formato de imagem não suportado — use JPG ou PNG'))
+      img.onload = () => {
+        const MAX = 2400
+        const escala = Math.min(1, MAX / Math.max(img.width, img.height))
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(img.width * escala)
+        canvas.height = Math.round(img.height * escala)
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve({ media_type: 'image/jpeg', data: canvas.toDataURL('image/jpeg', 0.85).split(',')[1] })
+      }
+      img.src = reader.result
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+// ── Modal nota fiscal: XML ou foto ────────────────────────────────────────────
+function ModalImportarXML(props) { return <ModalNotaFiscal modo="xml" {...props} /> }
+
+function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
+  const foto = modo === 'foto'
   const [nf, setNf] = useState(null)
   const [mps, setMps] = useState([])
-  const [vinculos, setVinculos] = useState({}) // idx → { mp_id, quantidade, unidade }
+  const [vinculos, setVinculos] = useState({}) // idx → { mp_id, entrada, uNF, qNF, memoria }
   const [saving, setSaving] = useState(false)
+  const [lendo, setLendo] = useState(false)
   const [erro, setErro] = useState('')
   const fileRef = useRef()
 
@@ -350,7 +469,35 @@ function ModalImportarXML({ onClose, onSaved }) {
       .then(({ data }) => setMps(data||[]))
   }, [])
 
-  function handleFile(file) {
+  // Entrada inicial de um item vinculado: unidade da nota (ou a lembrada) e conteúdo da embalagem
+  async function entradaPara(mpId, item, memoria) {
+    const base = mps.find(m => m.id === mpId)?.unidade || 'g'
+    const unidade = memoria?.unidade_compra || unidadeDaNF(item.unidade, base)
+    const entrada = { qtd: String(item.quantidade ?? ''), unidade, conteudo: '', unidadeConteudo: base }
+    if (ehEmbalagem(unidade)) {
+      const u = memoria?.conteudo_embalagem ? memoria : await ultimaEntradaMP(mpId)
+      if (u?.conteudo_embalagem) {
+        entrada.conteudo = String(u.conteudo_embalagem)
+        entrada.unidadeConteudo = u.unidade_conteudo || base
+      }
+    }
+    return entrada
+  }
+
+  async function carregarNota(parsed) {
+    setNf(parsed); setErro('')
+    const memoria = await carregarVinculosNF(parsed)
+    const v = {}
+    for (const [i, item] of parsed.itens.entries()) {
+      const mem = memoria[chaveDescricao(item.descricao)]
+      const ativa = mem && mps.some(m => m.id === mem.materia_prima_id) ? mem : null
+      v[i] = { mp_id: ativa?.materia_prima_id || '', entrada: ativa ? await entradaPara(ativa.materia_prima_id, item, ativa) : null,
+        uNF: item.unidade, qNF: item.quantidade, memoria: !!ativa }
+    }
+    setVinculos(v)
+  }
+
+  function handleXML(file) {
     if (!file) return
     const reader = new FileReader()
     reader.onload = e => {
@@ -359,65 +506,77 @@ function ModalImportarXML({ onClose, onSaved }) {
         const isNFSe = text.includes('NFSe') || text.includes('CompNfse') || text.includes('nfse')
         const parsed = isNFSe ? parseNFSe(text) : parseNFe(text)
         if (!parsed.itens?.length) { setErro('XML não reconhecido ou sem itens.'); return }
-        setNf(parsed)
-        setErro('')
-        // Pré-preenche vinculos com índice
-        const v = {}
-        parsed.itens.forEach((_,i) => { v[i] = { mp_id:'', entrada: null, uNF: parsed.itens[i].unidade, qNF: parsed.itens[i].quantidade } })
-        setVinculos(v)
+        if (!parsed.totais) {
+          const v = parsed.valor_total || 0
+          parsed.totais = { valor_produtos: v, frete: 0, seguro: 0, desconto: 0, outras_despesas: 0, ipi: 0, icms_st: 0, valor_total_nota: v }
+        }
+        carregarNota(parsed)
       } catch { setErro('Erro ao processar XML. Verifique o arquivo.') }
     }
     reader.readAsText(file)
   }
 
-  async function vincularMP(idx, mpId) {
-    const mp = mps.find(m => m.id === mpId)
-    const base = mp?.unidade || 'g'
-    const v = vinculos[idx]
-    const unidade = mpId ? unidadeDaNF(v.uNF, base) : base
-    let entrada = { qtd: String(v.qNF ?? ''), unidade, conteudo: '', unidadeConteudo: base }
-    // Embalagem: tenta herdar o conteúdo da última compra dessa MP
-    if (mpId && ehEmbalagem(unidade)) {
-      const u = await ultimaEntradaMP(mpId)
-      if (u?.conteudo_embalagem) {
-        entrada.conteudo = String(u.conteudo_embalagem)
-        entrada.unidadeConteudo = u.unidade_conteudo || base
-      }
-    }
-    setVinculos(p => ({ ...p, [idx]: { ...p[idx], mp_id: mpId, entrada: mpId ? entrada : null } }))
+  async function handleFoto(file) {
+    if (!file) return
+    setLendo(true); setErro('')
+    try {
+      const corpo = await arquivoParaEnvio(file)
+      const r = await fetch('/api/ler-nf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.erro || `Falha na leitura (${r.status})`)
+      const n = j.nf
+      if (!n.itens?.length) throw new Error(n.problemas || 'Nenhum item encontrado na nota.')
+      await carregarNota({
+        numero: n.numero_nf, data_emissao: n.data_emissao, fornecedor: n.fornecedor, cnpj: n.cnpj_fornecedor,
+        tipo_nota: 'NF (foto)', itens: n.itens, totais: n.totais, legivel: n.legivel, problemas: n.problemas,
+      })
+    } catch (e) { setErro(e.message || String(e)) }
+    setLendo(false)
   }
+
+  async function vincularMP(idx, mpId) {
+    const entrada = mpId ? await entradaPara(mpId, nf.itens[idx], null) : null
+    setVinculos(p => ({ ...p, [idx]: { ...p[idx], mp_id: mpId, entrada, memoria: false } }))
+  }
+
+  // Edição manual dos números lidos da foto
+  const setItem = (idx, k, v) => setNf(p => ({ ...p, itens: p.itens.map((it, i) => i === idx ? { ...it, [k]: v } : it) }))
+  const setTotal = (k, v) => setNf(p => ({ ...p, totais: { ...p.totais, [k]: v } }))
+  const setCab = (k, v) => setNf(p => ({ ...p, [k]: v }))
 
   const baseDe = mpId => mps.find(m => m.id === mpId)?.unidade || 'g'
   const vinculoValido = v => v?.mp_id && v.entrada && entradaValida(v.entrada, baseDe(v.mp_id))
 
+  const problemas = nf ? conferirNota(nf) : []
+  const custos = nf ? custosRateados(nf.itens, nf.totais) : []
+  const faltaCabecalho = nf && (!nf.numero || !/^\d{4}-\d{2}-\d{2}$/.test(nf.data_emissao || ''))
+
   async function salvar() {
-    const validos = Object.values(vinculos).filter(vinculoValido)
-    if (!await confirmarSemDuplicata(validos.map(v => ({
+    const validos = Object.entries(vinculos).filter(([, v]) => vinculoValido(v))
+    if (!await confirmarSemDuplicata(validos.map(([, v]) => ({
       mp_id: v.mp_id, numero_nf: nf.numero, quantidade: converterParaBase(v.entrada, baseDe(v.mp_id)),
     })))) return
     setSaving(true)
     try {
       const dataCompra = nf.data_emissao || new Date().toISOString().slice(0,10)
-      for (const [idx, v] of Object.entries(vinculos)) {
-        if (!vinculoValido(v)) continue
+      for (const [idx, v] of validos) {
         const item = nf.itens[parseInt(idx)]
         const qtd = converterParaBase(v.entrada, baseDe(v.mp_id))
-        const custo = item.valor_total
-
         await supabase.from('mp_compras').insert({
           materia_prima_id: v.mp_id,
           quantidade: qtd,
-          custo_total: custo,
+          custo_total: custos[parseInt(idx)],
           data_compra: dataCompra,
           fornecedor: nf.fornecedor || null,
           numero_nf: nf.numero || null,
-          observacao: `${item.descricao} — importado via XML`,
+          observacao: `${item.descricao} — ${foto ? 'lido da foto da NF' : 'importado via XML'}`,
           ...camposEntrada(v.entrada),
         })
         // Mesma regra de todos os outros lançamentos
         await ajustarEstoqueCompra(v.mp_id, qtd, dataCompra)
         await recalcularCustoMP(v.mp_id)
       }
+      await salvarVinculosNF(nf, validos.map(([idx, v]) => ({ ...v, descricao: nf.itens[parseInt(idx)].descricao })))
       onSaved()
     } catch(e) { setErro('Erro ao salvar: ' + e.message) }
     setSaving(false)
@@ -425,27 +584,45 @@ function ModalImportarXML({ onClose, onSaved }) {
 
   const itensVinculados = Object.values(vinculos).filter(vinculoValido).length
   const itensIncompletos = Object.values(vinculos).filter(v => v.mp_id && !vinculoValido(v)).length
+  const bloqueado = problemas.length > 0 || faltaCabecalho
+  const numInput = (valor, onChange, w = 90) => (
+    <input type="number" step="any" className="form-input" value={valor ?? ''} onChange={e => onChange(e.target.value)}
+      style={{ width: w, fontSize: 12, padding: '3px 6px', textAlign: 'right' }} />
+  )
 
   return (
     <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
-      <div className="modal" style={{maxWidth:680, maxHeight:'92vh', overflowY:'auto'}}>
+      <div className="modal" style={{maxWidth:720, maxHeight:'92vh', overflowY:'auto'}}>
         <div className="modal-header">
-          <div className="modal-title">📥 Importar XML de Compra</div>
+          <div className="modal-title">{foto ? '📷 Lançar compra pela foto da NF' : '📥 Importar XML de Compra'}</div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
           {/* Upload */}
-          {!nf && (
+          {!nf && !lendo && (
             <div
               onClick={() => fileRef.current?.click()}
               style={{ border:'2px dashed var(--gray-200)', borderRadius:10, padding:40, textAlign:'center', cursor:'pointer', background:'var(--gray-50)' }}
               onDragOver={e=>{e.preventDefault()}}
-              onDrop={e=>{e.preventDefault(); handleFile(e.dataTransfer.files[0])}}
+              onDrop={e=>{e.preventDefault(); (foto ? handleFoto : handleXML)(e.dataTransfer.files[0])}}
             >
-              <div style={{fontSize:32,marginBottom:8}}>📄</div>
-              <div style={{fontWeight:700,color:'var(--purple)'}}>Clique ou arraste o XML da NF-e / NFS-e</div>
-              <div style={{fontSize:12,color:'var(--gray-400)',marginTop:4}}>Arquivos .xml de nota fiscal eletrônica</div>
-              <input ref={fileRef} type="file" accept=".xml" style={{display:'none'}} onChange={e=>handleFile(e.target.files[0])} />
+              <div style={{fontSize:32,marginBottom:8}}>{foto ? '📷' : '📄'}</div>
+              <div style={{fontWeight:700,color:'var(--purple)'}}>
+                {foto ? 'Tire uma foto da nota ou escolha a imagem' : 'Clique ou arraste o XML da NF-e / NFS-e'}
+              </div>
+              <div style={{fontSize:12,color:'var(--gray-400)',marginTop:4}}>
+                {foto ? 'Nota inteira, bem iluminada e legível — JPG, PNG ou PDF' : 'Arquivos .xml de nota fiscal eletrônica'}
+              </div>
+              <input ref={fileRef} type="file" accept={foto ? 'image/*,application/pdf' : '.xml'} style={{display:'none'}}
+                onChange={e=>(foto ? handleFoto : handleXML)(e.target.files[0])} />
+            </div>
+          )}
+
+          {lendo && (
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--purple)' }}>
+              <RefreshCw size={22} className="spin" />
+              <div style={{ fontWeight: 700, marginTop: 10 }}>Lendo a nota…</div>
+              <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 4 }}>Pode levar até 1 minuto</div>
             </div>
           )}
 
@@ -455,14 +632,57 @@ function ModalImportarXML({ onClose, onSaved }) {
           {nf && (
             <>
               {/* Cabeçalho da NF */}
-              <div style={{padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,marginBottom:16,fontSize:13}}>
-                <div style={{fontWeight:800,color:'var(--purple)'}}>{nf.tipo_nota} nº {nf.numero} — {nf.fornecedor}</div>
-                <div style={{color:'var(--gray-500)',marginTop:2}}>
-                  Data: {nf.data_emissao ? new Date(nf.data_emissao+'T12:00:00').toLocaleDateString('pt-BR') : '—'} · 
-                  Total: <strong>{fmtR(nf.valor_total)}</strong> · 
-                  {nf.itens.length} iten(s)
-                </div>
+              <div style={{padding:'10px 14px',background:'var(--purple-pale)',borderRadius:8,marginBottom:12,fontSize:13}}>
+                {foto ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 140px', gap: 8 }}>
+                    <div><div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Fornecedor</div>
+                      <input className="form-input" value={nf.fornecedor || ''} onChange={e => setCab('fornecedor', e.target.value)} style={{ fontSize: 12, padding: '4px 6px' }} /></div>
+                    <div><div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Nº NF</div>
+                      <input className="form-input" value={nf.numero || ''} onChange={e => setCab('numero', e.target.value)} style={{ fontSize: 12, padding: '4px 6px' }} /></div>
+                    <div><div style={{ fontSize: 10, color: 'var(--gray-500)' }}>Data de emissão</div>
+                      <input type="date" className="form-input" value={nf.data_emissao || ''} onChange={e => setCab('data_emissao', e.target.value)} style={{ fontSize: 12, padding: '4px 6px' }} /></div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{fontWeight:800,color:'var(--purple)'}}>{nf.tipo_nota} nº {nf.numero} — {nf.fornecedor}</div>
+                    <div style={{color:'var(--gray-500)',marginTop:2}}>
+                      Data: {nf.data_emissao ? new Date(nf.data_emissao+'T12:00:00').toLocaleDateString('pt-BR') : '—'} ·
+                      Total: <strong>{fmtR(nf.totais.valor_total_nota)}</strong> · {nf.itens.length} iten(s)
+                    </div>
+                  </>
+                )}
               </div>
+
+              {foto && nf.problemas && (
+                <div className="alert-banner warning" style={{ marginBottom: 12 }}>
+                  ⚠️ {nf.legivel ? 'Atenção na leitura' : 'Leitura incompleta'}: {nf.problemas}
+                </div>
+              )}
+
+              {/* Totais da nota (editáveis na foto) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12, fontSize: 11 }}>
+                {[['valor_produtos', 'Produtos'], ['frete', 'Frete'], ['desconto', 'Desconto'], ['valor_total_nota', 'Total da nota'],
+                  ['seguro', 'Seguro'], ['outras_despesas', 'Outras despesas'], ['ipi', 'IPI'], ['icms_st', 'ICMS-ST']].map(([k, l]) => (
+                  <div key={k}>
+                    <div style={{ color: 'var(--gray-500)' }}>{l}</div>
+                    {foto ? numInput(nf.totais[k], v => setTotal(k, v), '100%')
+                      : <div style={{ fontWeight: 700, fontSize: 12 }}>{fmtR(nf.totais[k])}</div>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Conferência */}
+              {problemas.length > 0 ? (
+                <div className="alert-banner danger" style={{ marginBottom: 12, fontSize: 12 }}>
+                  <b>A nota não fecha — corrija antes de lançar:</b>
+                  {problemas.map(p => <div key={p}>• {p}</div>)}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--ok)', fontWeight: 700, marginBottom: 12 }}>
+                  ✓ Totais conferidos{(parseFloat(nf.totais.frete) || parseFloat(nf.totais.desconto) || parseFloat(nf.totais.outras_despesas) || parseFloat(nf.totais.ipi) || parseFloat(nf.totais.icms_st) || parseFloat(nf.totais.seguro))
+                    ? ' — frete, despesas, impostos e desconto rateados pelo valor de cada item' : ''}
+                </div>
+              )}
 
               <div style={{fontWeight:700,fontSize:13,marginBottom:8}}>
                 Vincule cada item da NF à matéria-prima correspondente:
@@ -474,12 +694,25 @@ function ModalImportarXML({ onClose, onSaved }) {
                   borderRadius:8, padding:'12px 14px', marginBottom:10,
                   background: vinculoValido(vinculos[idx]) ? '#f0faf0' : vinculos[idx]?.mp_id ? '#fffbf0' : '#fff',
                 }}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
-                    <div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8,gap:8}}>
+                    <div style={{ flex: 1 }}>
                       <div style={{fontWeight:700,fontSize:13}}>{item.descricao}</div>
-                      <div style={{fontSize:11,color:'var(--gray-400)'}}>
-                        {fmt(item.quantidade,3)} {item.unidade} · {fmtR(item.valor_unitario)}/un · Total: {fmtR(item.valor_total)}
-                      </div>
+                      {foto ? (
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 11, color: 'var(--gray-500)', marginTop: 4 }}>
+                          {numInput(item.quantidade, v => setItem(idx, 'quantidade', v), 70)} {item.unidade} ×
+                          {numInput(item.valor_unitario, v => setItem(idx, 'valor_unitario', v), 80)} =
+                          {numInput(item.valor_total, v => setItem(idx, 'valor_total', v), 90)}
+                        </div>
+                      ) : (
+                        <div style={{fontSize:11,color:'var(--gray-400)'}}>
+                          {fmt(item.quantidade,3)} {item.unidade} · {fmtR(item.valor_unitario)}/un · Total: {fmtR(item.valor_total)}
+                        </div>
+                      )}
+                      {Math.abs(custos[idx] - (parseFloat(item.valor_total) || 0)) >= 0.01 && (
+                        <div style={{ fontSize: 11, color: 'var(--purple)', fontWeight: 700, marginTop: 2 }}>
+                          Custo lançado com rateio: {fmtR(custos[idx])}
+                        </div>
+                      )}
                     </div>
                     {vinculoValido(vinculos[idx]) && <span style={{color:'var(--ok)',fontSize:18}}>✓</span>}
                   </div>
@@ -487,12 +720,17 @@ function ModalImportarXML({ onClose, onSaved }) {
                     <select className="form-input" value={vinculos[idx]?.mp_id||''} style={{fontSize:13,marginBottom:8}}
                       onChange={e => vincularMP(idx, e.target.value)}>
                       <option value="">— Ignorar este item —</option>
-                      {['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros'].map(cat => {
+                      {CATEGORIAS.map(cat => {
                         const grupo = mps.filter(m=>m.categoria===cat)
                         if (!grupo.length) return null
                         return <optgroup key={cat} label={cat}>{grupo.map(m=><option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}</optgroup>
                       })}
                     </select>
+                    {vinculos[idx]?.memoria && (
+                      <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: -4, marginBottom: 6 }}>
+                        ↺ vínculo lembrado da última nota deste fornecedor
+                      </div>
+                    )}
                     {vinculos[idx]?.mp_id && vinculos[idx]?.entrada && (
                       <>
                         <div style={{fontSize:11,color:'var(--gray-500)',marginBottom:4}}>
@@ -516,19 +754,23 @@ function ModalImportarXML({ onClose, onSaved }) {
                   ⚠️ {itensIncompletos} item(ns) vinculado(s) sem conteúdo da embalagem — não serão salvos até completar.
                 </div>
               )}
+              {faltaCabecalho && (
+                <div style={{fontSize:12,color:'var(--danger)',fontWeight:700}}>⚠️ Informe o número e a data da nota.</div>
+              )}
             </>
           )}
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           {nf && !saving && (
-            <button className="btn btn-ghost" onClick={()=>{setNf(null);setVinculos({})}}>
+            <button className="btn btn-ghost" onClick={()=>{setNf(null);setVinculos({});setErro('')}}>
               ↩ Trocar arquivo
             </button>
           )}
           {nf && (
-            <button className="btn btn-primary" onClick={salvar} disabled={saving||itensVinculados===0}>
-              {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar {itensVinculados} item(s)</>}
+            <button className="btn btn-primary" onClick={salvar} disabled={saving||itensVinculados===0||bloqueado}
+              title={bloqueado ? 'Corrija a nota antes de lançar' : ''}>
+              {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Confirmar e lançar {itensVinculados} item(s)</>}
             </button>
           )}
         </div>
@@ -1391,6 +1633,7 @@ export function HistoricoCompras() {
   const [loading, setLoading] = useState(true)
   const [mes, setMes] = useState(new Date().toISOString().slice(0,7))
   const [xmlModal, setXmlModal] = useState(false)
+  const [fotoModal, setFotoModal] = useState(false)
   const [compraModal, setCompraModal] = useState(false)
   const [editModal, setEditModal] = useState(null) // compra a editar
 
@@ -1424,6 +1667,7 @@ export function HistoricoCompras() {
   return (
     <div className="card">
       {xmlModal && <ModalImportarXML onClose={()=>setXmlModal(false)} onSaved={()=>{setXmlModal(false);load()}} />}
+      {fotoModal && <ModalNotaFiscal modo="foto" onClose={()=>setFotoModal(false)} onSaved={()=>{setFotoModal(false);load()}} />}
       {compraModal && <ModalCompraAvulsa mps={mps} onClose={()=>setCompraModal(false)} onSaved={()=>{setCompraModal(false);load()}} />}
       {editModal && <ModalEditarCompra compra={editModal} onClose={()=>setEditModal(null)} onSaved={()=>{setEditModal(null);load()}} />}
       <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
@@ -1431,7 +1675,8 @@ export function HistoricoCompras() {
         <div style={{flex:1}}/>
         <input type="month" className="form-input" value={mes} onChange={e=>setMes(e.target.value)} style={{width:160,fontSize:13}} />
         <button className="btn btn-ghost btn-sm" onClick={()=>setXmlModal(true)}><Upload size={13}/> Importar XML</button>
-        <button className="btn btn-primary btn-sm" onClick={()=>setCompraModal(true)}><Plus size={13}/> Registrar compra</button>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setCompraModal(true)}><Plus size={13}/> Registrar manual</button>
+        <button className="btn btn-primary btn-sm" onClick={()=>setFotoModal(true)}>📷 Lançar pela foto da NF</button>
         <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
       </div>
       {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
