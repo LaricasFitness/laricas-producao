@@ -17,4 +17,4 @@ CREATE TABLE IF NOT EXISTS nf_vinculos (
 );
 
 ALTER TABLE nf_vinculos ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "public_all" ON nf_vinculos FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public_all" ON nf_vinculos FOR ALL USING (true) WITH CHECKa (true);
