@@ -1,6 +1,5 @@
 import { supabase } from '../supabase'
 import { atualizarStatusPedido } from './data'
-import { mesFechado, avisoMesFechado } from './cmv'
 
 function getUsuario() {
   try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
@@ -60,8 +59,6 @@ export async function reverterAcao(logEntry) {
       await supabase.from('pedidos_grafica').delete().eq('id', registro_id)
     }
     else if (acao === 'recebimento') {
-      const { data: r0 } = await supabase.from('recebimentos').select('data_recebimento').eq('id', registro_id).maybeSingle()
-      if (r0 && await mesFechado(r0.data_recebimento)) return { ok: false, erro: avisoMesFechado(r0.data_recebimento) }
       const itens = dados_anteriores?.itens || []
       for (const item of itens) {
         const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', item.embalagem_id).single()

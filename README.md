@@ -106,8 +106,10 @@ O sistema calcula custo por dois métodos independentes, que devem convergir.
 
 **Teórico** — produção registrada × ficha técnica. É o CMV por produto.
 
-**Real** — `estoque inicial + compras − estoque final`, em R$, para
-matéria-prima e embalagem (`src/lib/cmv.js`). Não depende de ficha nenhuma.
+**Real** — para matéria-prima, `estoque inicial + compras − estoque final`,
+em R$ (`src/lib/cmv.js`). Não depende de ficha nenhuma. Para embalagem
+(sem controle de estoque por contagem), produção × ficha + percentual de
+perda configurável (`perda_embalagem_pct`, padrão 2%).
 
 - Estoque final = contagem do **último dia do mês**. Sem ela, saldo calculado
   (última contagem + entradas − consumo registrado), marcado "calc.".

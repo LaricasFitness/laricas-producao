@@ -238,7 +238,54 @@ export default function ControleEstoque() {
                 ))}
               </div>
               <TabelaReal titulo="🧂 Matéria-prima" sub="contagem física no último dia do mês" lista={linhasMP} total={realMP} />
-              <TabelaReal titulo="📦 Embalagens e rótulos" sub="contagem no último dia do mês; sem ela, saldo calculado" lista={linhasEmb} total={realEmb} />
+              <div className="card">
+                <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 14 }}>📦 Embalagens e rótulos</div>
+                    <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>
+                      unidades produzidas × embalagem de cada produto · perda de {fmt(dados.perdaEmbPct, 0)}%
+                    </div>
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>{fmtR(realEmb)}</div>
+                </div>
+                {linhasEmb.length === 0 ? (
+                  <div style={{ padding: 28, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>Nenhuma produção registrada no período.</div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: 'var(--gray-50)', borderBottom: '1px solid var(--gray-200)' }}>
+                          <th style={{ padding: '8px 14px', textAlign: 'left' }}>Item</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Pela produção</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>+ Perda</th>
+                          <th style={{ padding: '8px 10px', textAlign: 'right' }}>Custo un.</th>
+                          <th style={{ padding: '8px 14px', textAlign: 'right' }}>CMV</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {linhasEmb.map((l, i) => {
+                          const custo = l.cmv_qtd > 0 ? l.cmv_valor / l.cmv_qtd : 0
+                          return (
+                            <tr key={l.item_id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
+                              <td style={{ padding: '7px 14px', fontWeight: 600 }}>
+                                {l.nome}
+                                {l.categoria && <div style={{ fontSize: 10, color: 'var(--gray-400)', fontWeight: 400 }}>{l.categoria}</div>}
+                              </td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmtQ(l.teorico_qtd, 'un')}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--warning)' }}>+{fmtQ(l.cmv_qtd - l.teorico_qtd, 'un')}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>
+                                {custo > 0 ? `R$ ${fmt(custo, 4)}` : <span style={{ color: 'var(--danger)' }}>sem custo</span>}
+                              </td>
+                              <td style={{ padding: '7px 14px', textAlign: 'right', fontWeight: 700 }}>{fmtR(l.cmv_valor)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -445,7 +492,10 @@ export default function ControleEstoque() {
             return (
               <>
                 <Grupo titulo="🧂 Matéria-prima" lista={linhasMP} real={realMP} teo={teoMP} />
-                <Grupo titulo="📦 Embalagens e rótulos" lista={linhasEmb} real={realEmb} teo={teoEmb} />
+                <div className="card card-pad" style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+                  <b style={{ color: 'var(--gray-700)' }}>📦 Embalagens e rótulos: {fmtR(realEmb)}</b> — sem contagem de estoque, o
+                  real é a própria produção × ficha ({fmtR(teoEmb)}) + {fmt(dados.perdaEmbPct, 0)}% de perda. Não há o que comparar.
+                </div>
 
                 {/* Interpretação */}
                 <div style={{ padding: '14px 18px', borderRadius: 8, background: 'var(--gray-50)',

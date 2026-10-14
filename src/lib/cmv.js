@@ -5,6 +5,11 @@ import { supabase } from '../supabase'
 //
 //   CMV = Estoque inicial + Compras − Estoque final   (em R$)
 //
+// Vale para MATÉRIA-PRIMA. Embalagem (rótulo, lata, filme) não tem
+// controle de estoque por contagem: o "real" dela é a produção × ficha
+// + perda configurável (perda_embalagem_pct, padrão 2%), ao custo médio
+// do momento — congelado no fechamento como o resto.
+//
 // • Estoque final = contagem do ÚLTIMO DIA do mês. Sem contagem nesse
 //   dia, usa o saldo calculado (última contagem + entradas − consumo
 //   registrado) e marca o item como "calculado".
@@ -90,49 +95,29 @@ export async function reabrirMes(mes) {
 // ── Dados de base ────────────────────────────────────────────────
 // Carrega tudo o que o cálculo precisa até `ate` (inclusive).
 export async function carregarBase(ate) {
-  const [mps, embs, confMP, invMP, invEmb, comprasMP, recItens] = await Promise.all([
+  const [mps, embs, confMP, invMP, comprasMP] = await Promise.all([
     buscarTudo(() => supabase.from('materias_primas').select('id,nome,unidade,categoria,custo_unitario,ativo').order('id')),
     buscarTudo(() => supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,ativo').order('id')),
     buscarTudo(() => supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em').order('id')),
     buscarTudo(() => supabase.from('mp_inventarios').select('materia_prima_id,data_inventario,quantidade,criado_em').order('id')),
-    buscarTudo(() => supabase.from('inventarios').select('embalagem_id,data_inventario,quantidade,criado_em').order('id')),
     buscarTudo(() => supabase.from('mp_compras').select('id,materia_prima_id,quantidade,custo_total,data_compra,criado_em').order('id')),
-    buscarTudo(() => supabase.from('recebimento_itens')
-      .select('id,embalagem_id,quantidade_recebida,valor_unitario,recebimentos(data_recebimento,criado_em)')
-      .not('embalagem_id', 'is', null).order('id')),
   ])
 
-  const contagens = {
-    mp: [
-      ...confMP.map(c => ({ item: c.materia_prima_id, data: c.data_conferencia, qtd: parseFloat(c.estoque_contado) || 0, ts: c.criado_em })),
-      ...invMP.map(c => ({ item: c.materia_prima_id, data: c.data_inventario, qtd: parseFloat(c.quantidade) || 0, ts: c.criado_em })),
-    ],
-    emb: invEmb.map(c => ({ item: c.embalagem_id, data: c.data_inventario, qtd: parseFloat(c.quantidade) || 0, ts: c.criado_em })),
-  }
-  const compras = {
-    mp: comprasMP.map(c => {
-      const q = parseFloat(c.quantidade) || 0, v = parseFloat(c.custo_total) || 0
-      return { item: c.materia_prima_id, data: c.data_compra, ts: c.criado_em, qtd: q, valor: v, unit: q > 0 ? v / q : null }
-    }),
-    emb: recItens.filter(r => r.recebimentos?.data_recebimento).map(r => {
-      const q = parseFloat(r.quantidade_recebida) || 0, u = parseFloat(r.valor_unitario) || 0
-      return { item: r.embalagem_id, data: r.recebimentos.data_recebimento, ts: r.recebimentos.criado_em, qtd: q, valor: q * u, unit: u > 0 ? u : null }
-    }),
-  }
+  const contagens = [
+    ...confMP.map(c => ({ item: c.materia_prima_id, data: c.data_conferencia, qtd: parseFloat(c.estoque_contado) || 0, ts: c.criado_em })),
+    ...invMP.map(c => ({ item: c.materia_prima_id, data: c.data_inventario, qtd: parseFloat(c.quantidade) || 0, ts: c.criado_em })),
+  ]
+  const compras = comprasMP.map(c => {
+    const q = parseFloat(c.quantidade) || 0, v = parseFloat(c.custo_total) || 0
+    return { item: c.materia_prima_id, data: c.data_compra, ts: c.criado_em, qtd: q, valor: v, unit: q > 0 ? v / q : null }
+  })
 
-  // Saídas registradas: só desde a contagem mais antiga (é o que o saldo calculado usa)
-  const datas = [...contagens.mp, ...contagens.emb].map(c => c.data).filter(Boolean).sort()
+  // Consumo registrado: só desde a contagem mais antiga (é o que o saldo calculado usa)
+  const datas = contagens.map(c => c.data).filter(Boolean).sort()
   const desde = datas[0] || ate
-  const [consMP, saidasEmb] = await Promise.all([
-    buscarTudo(() => supabase.from('mp_consumos').select('id,materia_prima_id,quantidade,data_consumo,criado_em')
-      .gte('data_consumo', desde).lte('data_consumo', ate).order('id')),
-    buscarTudo(() => supabase.from('producao_diaria').select('id,embalagem_id,quantidade,data_producao,criado_em')
-      .gte('data_producao', desde).lte('data_producao', ate).order('id')),
-  ])
-  const saidas = {
-    mp: consMP.map(c => ({ item: c.materia_prima_id, data: c.data_consumo, ts: c.criado_em, qtd: parseFloat(c.quantidade) || 0 })),
-    emb: saidasEmb.map(p => ({ item: p.embalagem_id, data: p.data_producao, ts: p.criado_em, qtd: parseFloat(p.quantidade) || 0 })),
-  }
+  const consMP = await buscarTudo(() => supabase.from('mp_consumos').select('id,materia_prima_id,quantidade,data_consumo,criado_em')
+    .gte('data_consumo', desde).lte('data_consumo', ate).order('id'))
+  const saidas = consMP.map(c => ({ item: c.materia_prima_id, data: c.data_consumo, ts: c.criado_em, qtd: parseFloat(c.quantidade) || 0 }))
 
   const agrupa = lista => {
     const m = {}
@@ -141,10 +126,10 @@ export async function carregarBase(ate) {
   }
   return {
     itens: { mp: mps, emb: embs },
-    contagens: { mp: agrupa(contagens.mp), emb: agrupa(contagens.emb) },
-    compras: { mp: agrupa(compras.mp), emb: agrupa(compras.emb) },
-    comprasLista: compras,
-    saidas: { mp: agrupa(saidas.mp), emb: agrupa(saidas.emb) },
+    contagens: { mp: agrupa(contagens) },
+    compras: { mp: agrupa(compras) },
+    comprasLista: { mp: compras },
+    saidas: { mp: agrupa(saidas) },
   }
 }
 
@@ -171,16 +156,13 @@ function estoqueEm(base, tipo, itemId, data) {
   if (!cont) return null
   if (cont.data === data) return { qtd: cont.qtd, origem: 'contagem' }
 
-  // Mesmo dia da contagem: o que foi registrado depois dela ainda mexe no saldo.
-  // Exceção: compra de MP com data igual à da contagem já está no número contado
-  // (mesma regra de efeitoNoSaldo em MatPrimas.jsx).
-  const depois = (x, contaMesmoDia) => x.data > cont.data && x.data <= data ||
-    (contaMesmoDia && x.data === cont.data && x.ts > cont.ts)
-  const ent = (base.compras[tipo][itemId] || []).filter(x => depois(x, tipo === 'emb')).reduce((s, x) => s + x.qtd, 0)
-  const sai = (base.saidas[tipo][itemId] || []).filter(x => depois(x, true)).reduce((s, x) => s + x.qtd, 0)
-  const qtd = cont.qtd + ent - sai
-  // Embalagem segue calcularEstoqueCronologico (piso zero); MP pode ficar negativa de propósito
-  return { qtd: tipo === 'emb' ? Math.max(0, qtd) : qtd, origem: 'calculado' }
+  // Compra com data igual à da contagem já está no número contado (mesma regra
+  // de efeitoNoSaldo em MatPrimas.jsx); consumo registrado depois da contagem
+  // no mesmo dia ainda mexe no saldo. Pode ficar negativo de propósito.
+  const ent = (base.compras[tipo][itemId] || []).filter(x => x.data > cont.data && x.data <= data).reduce((s, x) => s + x.qtd, 0)
+  const sai = (base.saidas[tipo][itemId] || []).filter(x => x.data > cont.data && x.data <= data ||
+    (x.data === cont.data && x.ts > cont.ts)).reduce((s, x) => s + x.qtd, 0)
+  return { qtd: cont.qtd + ent - sai, origem: 'calculado' }
 }
 
 // PEPS: a quantidade em estoque vale o preço das compras mais recentes até a data
@@ -352,20 +334,35 @@ export async function calcularCMVMes(mes, { base, fechamentos, teorico } = {}) {
   for (const l of (fechamentos[mesAnt]?.linhas || [])) eiFechado[`${l.tipo}:${l.item_id}`] = l
 
   // Compras atrasadas que caem neste mês
-  const atrasadas = { mp: {}, emb: {} }
-  for (const tipo of ['mp', 'emb']) {
-    for (const c of base.comprasLista[tipo]) {
-      const mC = c.data.slice(0, 7)
-      const f = fechamentos[mC]
-      if (!f || !(c.ts > f.fechado_em) || destinoAtrasada(c, fechamentos) !== mes) continue
-      const a = atrasadas[tipo][c.item] || (atrasadas[tipo][c.item] = { qtd: 0, valor: 0 })
-      a.qtd += c.qtd; a.valor += c.valor
-    }
+  const atrasadas = { mp: {} }
+  for (const c of base.comprasLista.mp) {
+    const f = fechamentos[c.data.slice(0, 7)]
+    if (!f || !(c.ts > f.fechado_em) || destinoAtrasada(c, fechamentos) !== mes) continue
+    const a = atrasadas.mp[c.item] || (atrasadas.mp[c.item] = { qtd: 0, valor: 0 })
+    a.qtd += c.qtd; a.valor += c.valor
   }
 
   const linhas = []
-  for (const tipo of ['mp', 'emb']) {
-    const teoQtd = tipo === 'mp' ? teorico.mpQtd : teorico.embQtd
+
+  // Embalagem: produção × ficha + perda, ao custo médio atual
+  const fatorPerda = 1 + (teorico.perdaEmbPct || 0) / 100
+  for (const item of base.itens.emb) {
+    const tQtd = teorico.embQtd[item.id] || 0
+    if (!tQtd) continue
+    const custo = parseFloat(item.custo_unitario) || 0
+    linhas.push({
+      mes, tipo: 'emb', item_id: item.id, nome: item.nome, categoria: item.categoria || null, unidade: 'un',
+      ei_qtd: null, ei_valor: null, ei_origem: null,
+      compras_qtd: 0, compras_valor: 0, atrasadas_qtd: 0, atrasadas_valor: 0,
+      ef_qtd: null, ef_valor: null, ef_origem: 'producao',
+      cmv_qtd: tQtd * fatorPerda, cmv_valor: tQtd * fatorPerda * custo,
+      teorico_qtd: tQtd, teorico_valor: tQtd * custo,
+    })
+  }
+
+  // Matéria-prima: estoque inicial + compras − estoque final
+  for (const tipo of ['mp']) {
+    const teoQtd = teorico.mpQtd
     for (const item of base.itens[tipo]) {
       // Estoque inicial: o final congelado do mês anterior; senão contagem/saldo no fim dele
       let ei

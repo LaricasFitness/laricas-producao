@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
-import { mesFechado, avisoMesFechado } from '../lib/cmv'
 import { registrarAcao } from '../lib/log'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
@@ -260,10 +259,6 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
   async function salvar() {
     const fil = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
     if (!fil.length) { alert('Adicione pelo menos um item.'); return }
-    // Mês fechado no CMV: nem a data original nem a nova podem cair nele
-    for (const d of [recebimento.data_recebimento, dataRec]) {
-      if (await mesFechado(d)) { alert(avisoMesFechado(d)); return }
-    }
     setSaving(true)
     try {
       // Atualiza cabeçalho
