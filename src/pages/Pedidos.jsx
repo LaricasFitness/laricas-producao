@@ -10,11 +10,11 @@ function gerarPDF(numero, itens, obs) {
   const hoje = new Date()
   const prev = new Date(); prev.setDate(hoje.getDate() + 10)
 
-  doc.setFillColor(82, 46, 100)
+  doc.setFillColor(58, 21, 50)
   doc.rect(0, 0, 210, 40, 'F')
-  doc.setTextColor(234, 183, 130)
+  doc.setTextColor(233, 189, 147)
   doc.setFontSize(20); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 17)
+  doc.text('LARC', 14, 17)
   doc.setFontSize(10); doc.setFont(undefined, 'normal')
   doc.setTextColor(255, 255, 255)
   doc.text('Ordem de Pedido — Embalagens', 14, 26)
@@ -23,7 +23,7 @@ function gerarPDF(numero, itens, obs) {
   doc.setTextColor(42, 31, 40); doc.setFontSize(10)
   doc.text(`Emissão: ${hoje.toLocaleDateString('pt-BR')}`, 14, 50)
   doc.text(`Prazo estimado: ${prev.toLocaleDateString('pt-BR')} (10 dias corridos)`, 14, 57)
-  if (obs) { doc.setTextColor(100,60,140); doc.text(`Obs: ${obs}`, 14, 64) }
+  if (obs) { doc.setTextColor(116,56,106); doc.text(`Obs: ${obs}`, 14, 64) }
 
   // Agrupa por categoria
   const porCat = {}
@@ -39,7 +39,7 @@ function gerarPDF(numero, itens, obs) {
     body.push([{
       content: cat,
       colSpan: 3,
-      styles: { fillColor: [103,63,124], textColor: 255, fontStyle: 'bold', fontSize: 9, cellPadding: 3 }
+      styles: { fillColor: [90,36,80], textColor: 255, fontStyle: 'bold', fontSize: 9, cellPadding: 3 }
     }])
     for (const i of citens) {
       body.push([
@@ -55,7 +55,7 @@ function gerarPDF(numero, itens, obs) {
     head: [['Código', 'Embalagem', 'Qtd solicitada']],
     body,
     styles: { fontSize: 10, cellPadding: 4 },
-    headStyles: { fillColor: [60, 35, 80], textColor: 255, fontStyle: 'bold' },
+    headStyles: { fillColor: [58, 21, 50], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 240, 248] },
     columnStyles: {
       0: { cellWidth: 36 },
@@ -65,10 +65,10 @@ function gerarPDF(numero, itens, obs) {
 
   const fy = doc.lastAutoTable.finalY + 12
   const total = itens.reduce((s, i) => s + i.qtd, 0)
-  doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(60, 35, 80)
+  doc.setFont(undefined, 'bold'); doc.setFontSize(11); doc.setTextColor(58, 21, 50)
   doc.text(`Total geral: ${total.toLocaleString('pt-BR')} unidades`, 14, fy)
   doc.setFont(undefined, 'normal'); doc.setFontSize(8); doc.setTextColor(150, 150, 150)
-  doc.text('Laricas Fitness — Sistema de Controle de Embalagens', 14, 285)
+  doc.text('LARC — Sistema de Controle de Embalagens', 14, 285)
   doc.text(hoje.toLocaleString('pt-BR'), 155, 285)
   doc.save(`Pedido_${numero}.pdf`)
 }

@@ -25,8 +25,11 @@ const ROTULOS = {
   pack:   '📦 Rótulos e embalagens',
 }
 
-export default function EstoqueHub() {
-  const [aba, setAba] = useState('situacao')
+// sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
+export default function EstoqueHub({ sub, onSub }) {
+  const [abaLocal, setAbaLocal] = useState('situacao')
+  const aba = sub ?? abaLocal
+  const setAba = onSub ?? setAbaLocal
   const [tipo, setTipo] = useState('mp')
   const cfg = ABAS.find(a => a.id === aba)
 
@@ -36,7 +39,7 @@ export default function EstoqueHub() {
 
   return (
     <div className="page">
-      <div className="tabs">
+      <div className="tabs hub-tabs">
         {ABAS.map(a => (
           <button key={a.id} className={`tab${aba === a.id ? ' active' : ''}`}
             onClick={() => setAba(a.id)}>{a.label}</button>

@@ -242,14 +242,14 @@ function gerarPDFSituacao(lista, filtrada, totalValor) {
   const agora = new Date().toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo' })
 
   // Header
-  doc.setFillColor(82,46,100)
+  doc.setFillColor(58,21,50)
   doc.rect(0,0,210,18,'F')
-  doc.setTextColor(234,183,130); doc.setFontSize(13); doc.setFont(undefined,'bold')
-  doc.text('Laricas Fitness — Situação de Insumos / Matérias-Primas', 14, 11)
+  doc.setTextColor(233,189,147); doc.setFontSize(13); doc.setFont(undefined,'bold')
+  doc.text('LARC — Situação de Insumos / Matérias-Primas', 14, 11)
   doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
   doc.text(`Gerado: ${agora}`, 130, 16)
 
-  doc.setTextColor(82,46,100); doc.setFontSize(10); doc.setFont(undefined,'bold')
+  doc.setTextColor(58,21,50); doc.setFontSize(10); doc.setFont(undefined,'bold')
   doc.text(`Total em estoque: ${fmtR(totalValor)} · ${filtrada.length} insumos`, 14, 26)
 
   const body = filtrada.map(m => {
@@ -273,8 +273,8 @@ function gerarPDFSituacao(lista, filtrada, totalValor) {
     head: [['Insumo','Categoria','Estoque atual','Preço médio','Valor em estoque','Status']],
     body,
     styles: { fontSize:8, cellPadding:3 },
-    headStyles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold' },
-    alternateRowStyles: { fillColor:[248,245,252] },
+    headStyles: { fillColor:[90,36,80], textColor:255, fontStyle:'bold' },
+    alternateRowStyles: { fillColor:[249,245,242] },
     columnStyles: {
       0: { cellWidth:'auto' },
       1: { cellWidth:28 },
@@ -290,7 +290,7 @@ function gerarPDFSituacao(lista, filtrada, totalValor) {
   for (let i=1;i<=pageCount;i++) {
     doc.setPage(i)
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
-    doc.text('Laricas Fitness — Insumos', 14, 289)
+    doc.text('LARC — Insumos', 14, 289)
     doc.text(`Pág ${i}/${pageCount}`, 185, 289)
   }
   doc.save(`Insumos_Situacao_${new Date().toISOString().slice(0,10)}.pdf`)

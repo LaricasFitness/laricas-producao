@@ -1583,8 +1583,11 @@ function AdminSistema() {
   )
 }
 
-export default function Admin() {
-  const [tab, setTab] = useState('embalagens')
+// sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
+export default function Admin({ sub, onSub }) {
+  const [tabLocal, setTabLocal] = useState('embalagens')
+  const tab = sub ?? tabLocal
+  const setTab = onSub ?? setTabLocal
   const [embs, setEmbs] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
@@ -1644,7 +1647,7 @@ export default function Admin() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Tabs */}
-      <div className="tabs">
+      <div className="tabs hub-tabs">
         <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Cadastro de Embalagens</button>
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>

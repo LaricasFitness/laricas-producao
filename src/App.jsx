@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { ClipboardList, Truck, Package, CircleDollarSign, Settings, LogOut } from 'lucide-react'
+import { LogOut, ChevronDown } from 'lucide-react'
 import './App.css'
 import { fecharMesesPendentes } from './lib/cmv'
+import { MENU, subPadrao, rotuloSub } from './lib/menu'
 import Login from './pages/Login'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
@@ -9,27 +10,11 @@ import Admin from './pages/Admin'
 import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 
-const ALL_PAGES = [
-  { id: 'producao',      label: 'Produção',  Icon: ClipboardList },
-  { id: 'logistica',     label: 'Logística', Icon: Truck },
-  { id: 'estoque',       label: 'Estoque',   Icon: Package },
-  { id: 'precificacao',  label: 'Custos',    Icon: CircleDollarSign },
-  { id: 'admin',         label: 'Admin',     Icon: Settings },
-]
-
 const PERM_MAP = {
   dashboard:'estoque', pedidos:'estoque', compras:'estoque',
   embalagens:'estoque', insumos:'estoque',
   analise:'producao', log:'producao', planejamento:'producao', historico:'producao',
   }
-
-const TITLES = {
-  producao:    { title:'Produção',           sub:'Registro, planejamento, análise, log e histórico' },
-  logistica:   { title:'Logística LALAMOVE', sub:'Roteiros automáticos por zona + CSVs' },
-  estoque:       { title:'Estoque',            sub:'Situação, conferência, compras e pedidos — MP e embalagens' },
-  precificacao:  { title:'Custos',             sub:'Ficha de custo, CMV do mês, markup e margem por canal' },
-  admin:       { title:'Administração',      sub:'Embalagens, usuários e configurações' },
-}
 
 function temPermissao(abas, pageId) {
   return abas.includes(pageId) ||
@@ -43,16 +28,33 @@ export default function App() {
   })
   const [page, setPage] = useState('estoque')
   const [csvLogistica, setCsvLogistica] = useState(null)
+  const [subs, setSubs] = useState({})          // subtela escolhida em cada área
+  const [aberto, setAberto] = useState(null)    // área expandida no menu lateral
 
   // Fecha o CMV dos meses vencidos (a partir do dia 5) — sem botão, em segundo plano
   useEffect(() => { if (usuario) fecharMesesPendentes() }, [usuario])
 
+  // Celular: a faixa de abas rola até a subtela ativa
+  useEffect(() => {
+    document.querySelector('.hub-tabs .tab.active')?.scrollIntoView({ inline: 'center', block: 'nearest' })
+  }, [page, subs])
+
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('estoque') }} />
 
   const abas = usuario.abas_permitidas || []
-  const pages = ALL_PAGES.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
+  const pages = MENU.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
   const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
-  const { title, sub } = TITLES[pageAtual] || {}
+  const subAtual = subs[pageAtual] || subPadrao(pageAtual)
+  const setSub = (pageId, subId) => setSubs(p => ({ ...p, [pageId]: subId }))
+  const areaAtual = MENU.find(m => m.id === pageAtual)
+  const title = rotuloSub(pageAtual, subAtual) || areaAtual?.label
+  const sub = areaAtual?.label
+  const expandida = aberto ?? pageAtual
+
+  function abrirArea(id) {
+    if (id === pageAtual) { setAberto(expandida === id ? '' : id); return }  // mesma área: recolhe/expande
+    setPage(id); setAberto(null)
+  }
 
   function irLogistica(csv) { if (!temPermissao(abas,'logistica')) return; setCsvLogistica(csv); setPage('logistica') }
   function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
@@ -65,12 +67,26 @@ export default function App() {
           <div className="brand-sub">Produção</div>
         </div>
         <nav className="sidebar-nav">
-          {pages.map(({ id, label, Icon }) => (
-            <button key={id} className={`nav-btn${pageAtual===id?' active':''}`}
-              onClick={() => setPage(id)} title={label}>
-              <Icon size={19} strokeWidth={1.8} />
-              <span className="nav-label">{label}</span>
-            </button>
+          {pages.map(({ id, label, Icon, subs: itens }) => (
+            <div key={id} className="nav-group">
+              <button className={`nav-btn${pageAtual===id?' active':''}`}
+                onClick={() => abrirArea(id)} title={label} aria-expanded={expandida === id}>
+                <Icon size={19} strokeWidth={1.8} />
+                <span className="nav-label">{label}</span>
+                <ChevronDown size={15} className={`nav-chevron${expandida === id ? ' aberto' : ''}`} />
+              </button>
+              {expandida === id && (
+                <div className="nav-subs">
+                  {itens.map(s => (
+                    <button key={s.id}
+                      className={`nav-sub${pageAtual === id && subAtual === s.id ? ' active' : ''}`}
+                      onClick={() => { setPage(id); setSub(id, s.id); setAberto(null) }}>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </nav>
         <div className="sidebar-spacer" />
@@ -98,11 +114,11 @@ export default function App() {
           </div>
         </header>
         <div className="page">
-          {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} />}
-          {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} />}
-          {pageAtual==='estoque'       && <EstoqueHub />}
-          {pageAtual==='precificacao'  && <Precificacao />}
-          {pageAtual==='admin'      && <Admin />}
+          {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} sub={subAtual} onSub={id => setSub('producao', id)} />}
+          {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} sub={subAtual} onSub={id => setSub('logistica', id)} />}
+          {pageAtual==='estoque'       && <EstoqueHub sub={subAtual} onSub={id => setSub('estoque', id)} />}
+          {pageAtual==='precificacao'  && <Precificacao sub={subAtual} onSub={id => setSub('precificacao', id)} />}
+          {pageAtual==='admin'      && <Admin sub={subAtual} onSub={id => setSub('admin', id)} />}
         </div>
       </div>
     </div>

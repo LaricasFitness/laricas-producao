@@ -975,8 +975,11 @@ function RankingMargem({ data, reload, incluirOverhead }) {
 }
 
 // ── Componente principal ───────────────────────────────────────────────────────
-export default function Precificacao() {
-  const [aba, setAba] = useState('ficha')
+// sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
+export default function Precificacao({ sub, onSub }) {
+  const [abaLocal, setAbaLocal] = useState('ficha')
+  const aba = sub ?? abaLocal
+  const setAba = onSub ?? setAbaLocal
   const [incluirOverhead, setIncluirOverhead] = useState(false)
   const [snapshotKey, setSnapshotKey] = useState(0)
   const { data, loading, reload } = usePrecificacao()
@@ -1004,7 +1007,7 @@ export default function Precificacao() {
 
   return (
     <>
-      <div className="tabs" style={{marginBottom:0}}>
+      <div className="tabs hub-tabs" style={{marginBottom:0}}>
         <button className={`tab${aba==='ficha'?' active':''}`} onClick={()=>setAba('ficha')}>📊 Ficha de Custo</button>
         <button className={`tab${aba==='simulador'?' active':''}`} onClick={()=>setAba('simulador')}>💡 Markup e Canais</button>
         <button className={`tab${aba==='ranking'?' active':''}`} onClick={()=>setAba('ranking')}>🏆 Ranking de Margem</button>

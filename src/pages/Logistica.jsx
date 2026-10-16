@@ -163,11 +163,11 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops = {}
   const totalPedidos = stopsLalam.length + Object.values(outrasTransp).flat().length
 
   // Header
-  doc.setFillColor(82, 46, 100)
+  doc.setFillColor(58, 21, 50)
   doc.rect(0, 0, 210, 36, 'F')
-  doc.setTextColor(234, 183, 130)
+  doc.setTextColor(233, 189, 147)
   doc.setFontSize(16); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness — Conferência de Expedição', 14, 14)
+  doc.text('LARC — Conferência de Expedição', 14, 14)
   doc.setFontSize(9); doc.setFont(undefined, 'normal')
   doc.setTextColor(255, 255, 255)
   doc.text(`Data: ${dateStr}`, 14, 22)
@@ -261,7 +261,7 @@ function gerarPDFConferencia(routes, dateStr, csvRaw, datasAtivas, obsStops = {}
   for (let i=1; i<=pageCount; i++) {
     doc.setPage(i)
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
-    doc.text('Laricas Fitness — Conferência de Expedição', 14, 289)
+    doc.text('LARC — Conferência de Expedição', 14, 289)
     doc.text(`Pág ${i}/${pageCount}`, 185, 289)
   }
 
@@ -301,9 +301,9 @@ async function downloadAllCSVs(routes, dateStr) {
 function gerarPDFRoteiro(routes, dateStr) {
   const doc = new jsPDF()
   const total = routes.reduce((s,r)=>s+r.stops.length,0)
-  doc.setFillColor(82,46,100); doc.rect(0,0,210,32,'F')
-  doc.setTextColor(234,183,130); doc.setFontSize(16); doc.setFont(undefined,'bold')
-  doc.text('Laricas Fitness — Roteiro LALAMOVE', 14, 14)
+  doc.setFillColor(58,21,50); doc.rect(0,0,210,32,'F')
+  doc.setTextColor(233,189,147); doc.setFontSize(16); doc.setFont(undefined,'bold')
+  doc.text('LARC — Roteiro LALAMOVE', 14, 14)
   doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
   doc.text(`Data: ${dateStr} · ${routes.length} rotas · ${total} paradas`, 14, 22)
   doc.text(`Gerado: ${new Date().toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})}`, 14, 28)
@@ -377,7 +377,8 @@ function headerDiaLogistica(d) {
 }
 
 // ── Componente ────────────────────────────────────────────────────────────────
-export default function Logistica({ csvInicial }) {
+// sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
+export default function Logistica({ csvInicial, sub, onSub }) {
   const [datasDisponiveis, setDatasDisponiveis] = useState([])
   const [datasAtivas, setDatasAtivas] = useState([])
   const [step, setStep] = useState('upload')
@@ -585,10 +586,15 @@ export default function Logistica({ csvInicial }) {
   const pendingSugestoes = Object.keys(sugestoes).length>0
   const dateStr = datasAtivas.length === 1 ? datasAtivas[0] : datasAtivas.join(' + ')
   const totalParadas = routes.reduce((s,r)=>s+r.stops.length,0)
-  const [abaLog, setAbaLog] = useState('roteiro') // 'roteiro' | 'historico'
+  const [abaLocal, setAbaLocal] = useState('roteiro') // 'roteiro' | 'historico'
+  const abaLog = sub ?? abaLocal
+  const setAbaLog = onSub ?? setAbaLocal
   const [historico, setHistorico] = useState([])
   const [loadingHist, setLoadingHist] = useState(false)
   const [histAberto, setHistAberto] = useState(null)
+
+  // Histórico carrega na primeira vez que a aba abre (pelo menu ou pela aba)
+  useEffect(() => { if (abaLog === 'historico' && !historico.length) carregarHistorico() }, [abaLog])
 
   async function carregarHistorico() {
     setLoadingHist(true)
@@ -608,10 +614,10 @@ export default function Logistica({ csvInicial }) {
   return (
     <>
       {/* Tabs */}
-      <div className="tabs" style={{marginBottom:0}}>
+      <div className="tabs hub-tabs" style={{marginBottom:0}}>
         <button className={`tab${abaLog==='roteiro'?' active':''}`} onClick={()=>setAbaLog('roteiro')}>🗺️ Roteiro</button>
         <button className={`tab${abaLog==='historico'?' active':''}`}
-          onClick={()=>{ setAbaLog('historico'); if(!historico.length) carregarHistorico() }}>
+          onClick={()=>setAbaLog('historico')}>
           📋 Histórico
         </button>
       </div>

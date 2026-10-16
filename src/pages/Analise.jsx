@@ -535,9 +535,9 @@ export default function Analise() {
   function exportarPDF() {
     const doc = new jsPDF()
     const hoje2 = new Date()
-    doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 36, 'F')
-    doc.setTextColor(234, 183, 130); doc.setFontSize(14); doc.setFont(undefined, 'bold')
-    doc.text('Laricas Fitness — Relatório de Produção', 14, 16)
+    doc.setFillColor(58, 21, 50); doc.rect(0, 0, 210, 36, 'F')
+    doc.setTextColor(233, 189, 147); doc.setFontSize(14); doc.setFont(undefined, 'bold')
+    doc.text('LARC — Relatório de Produção', 14, 16)
     doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
     doc.text(`Período: ${new Date(ini+'T12:00:00').toLocaleDateString('pt-BR')} a ${new Date(fim+'T12:00:00').toLocaleDateString('pt-BR')} | Cat: ${catFiltro} | Resp: ${respFiltro}`, 14, 24)
     doc.text(`Gerado em ${hoje2.toLocaleString('pt-BR')}`, 14, 31)
@@ -551,7 +551,7 @@ export default function Analise() {
         head: [['Produto', 'SKU', 'Qtd produzida', '% do total']],
         body: ranking.map(r => [r.nome, r.codigo, fmt(r.total) + ' un', r.pct.toFixed(1) + '%']),
         styles: { fontSize: 9, cellPadding: 3 },
-        headStyles: { fillColor: [103, 63, 124], textColor: 255 },
+        headStyles: { fillColor: [90, 36, 80], textColor: 255 },
         alternateRowStyles: { fillColor: [245, 240, 248] },
         columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' } },
       })
@@ -563,11 +563,11 @@ export default function Analise() {
         head: [['Produto', 'Período atual', 'Período anterior', 'Variação']],
         body: tendencia.map(t => [t.nome, fmt(t.atual)+' un', fmt(t.anterior)+' un', t.delta !== null ? (t.delta>=0?'+':'')+t.delta.toFixed(1)+'%' : '—']),
         styles: { fontSize: 8, cellPadding: 3 },
-        headStyles: { fillColor: [82, 46, 100], textColor: 255 },
+        headStyles: { fillColor: [58, 21, 50], textColor: 255 },
       })
     }
     doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(150,150,150)
-    doc.text('Laricas Fitness — Sistema de Controle de Produção', 14, 285)
+    doc.text('LARC — Sistema de Controle de Produção', 14, 285)
     doc.save(`Producao_${ini}_${fim}.pdf`)
   }
 

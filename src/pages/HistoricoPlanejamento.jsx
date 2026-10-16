@@ -27,9 +27,9 @@ function gerarPDF(plan, itens) {
   const doc = new jsPDF()
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 
-  doc.setFillColor(82, 46, 100); doc.rect(0, 0, 210, 28, 'F')
-  doc.setTextColor(234, 183, 130); doc.setFontSize(15); doc.setFont(undefined, 'bold')
-  doc.text('Laricas Fitness', 14, 12)
+  doc.setFillColor(58, 21, 50); doc.rect(0, 0, 210, 28, 'F')
+  doc.setTextColor(233, 189, 147); doc.setFontSize(15); doc.setFont(undefined, 'bold')
+  doc.text('LARC', 14, 12)
   doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(255,255,255)
   doc.text(`Produção do dia — ${headerDia(plan.data_producao)}`, 14, 20)
   doc.text(`Reimpresso: ${agora}`, 130, 20)
@@ -49,7 +49,7 @@ function gerarPDF(plan, itens) {
     const totalCat = grupo.reduce((s, i) => s + i.quantidade_total, 0)
     body.push([{
       content: `${cat}  —  ${fmt(totalCat)} un`, colSpan: 2,
-      styles: { fillColor: [103,63,124], textColor: [255,255,255], fontStyle: 'bold', fontSize: 8, cellPadding: 3 }
+      styles: { fillColor: [90,36,80], textColor: [255,255,255], fontStyle: 'bold', fontSize: 8, cellPadding: 3 }
     }])
     for (const i of grupo) {
       body.push([
@@ -64,16 +64,16 @@ function gerarPDF(plan, itens) {
   autoTable(doc, {
     startY: 33, body,
     styles: { fontSize: 8, cellPadding: 2.5 },
-    alternateRowStyles: { fillColor: [248, 245, 252] },
+    alternateRowStyles: { fillColor: [249, 245, 242] },
     columnStyles: { 1: { cellWidth: 22, halign: 'center' } },
     margin: { left: 14, right: 14 },
   })
 
   const finalY = doc.lastAutoTable.finalY + 6
-  doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+  doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(58,21,50)
   doc.text(`Total geral: ${fmt(totalGeral)} unidades`, 14, finalY)
   doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(150,150,150)
-  doc.text('Laricas Fitness — Planejamento de Produção (reimpressão)', 14, 290)
+  doc.text('LARC — Planejamento de Produção (reimpressão)', 14, 290)
   doc.save(`Producao_${plan.data_producao}_reimp.pdf`)
 }
 
@@ -83,9 +83,9 @@ function gerarPDFCompletoHistorico(plan, itens) {
   const MARGIN = 14
   const PAGE_W = 297
 
-  doc.setFillColor(82,46,100); doc.rect(0,0,PAGE_W,38,'F')
-  doc.setTextColor(234,183,130); doc.setFontSize(18); doc.setFont(undefined,'bold')
-  doc.text('Laricas Fitness', MARGIN, 15)
+  doc.setFillColor(58,21,50); doc.rect(0,0,PAGE_W,38,'F')
+  doc.setTextColor(233,189,147); doc.setFontSize(18); doc.setFont(undefined,'bold')
+  doc.text('LARC', MARGIN, 15)
   doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
   doc.text(`Produção Completa — ${headerDia(plan.data_producao)}`, MARGIN, 25)
   doc.text(`Reimpresso: ${agora}`, MARGIN, 32)
@@ -107,7 +107,7 @@ function gerarPDFCompletoHistorico(plan, itens) {
         { content: i.quantidade_delivery > 0 ? fmt(i.quantidade_delivery) : '—', styles: { halign:'center' } },
         { content: fmt(i.quantidade_total), styles: { halign:'center', fontStyle:'bold' } },
       ]),
-      headStyles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold', fontSize:9 },
+      headStyles: { fillColor:[90,36,80], textColor:255, fontStyle:'bold', fontSize:9 },
       columnStyles: {
         0: { cellWidth:'auto' },
         1: { cellWidth:25, halign:'center' },
@@ -116,11 +116,11 @@ function gerarPDFCompletoHistorico(plan, itens) {
       },
       head: [[
         { content: cat + '  —  ' + fmt(totalCat) + ' un', colSpan: 4,
-          styles: { fillColor:[103,63,124], textColor:255, fontStyle:'bold', fontSize:9 } },
+          styles: { fillColor:[90,36,80], textColor:255, fontStyle:'bold', fontSize:9 } },
         ],
         ['Produto', 'Bling', 'Delivery', 'Total']
       ],
-      alternateRowStyles: { fillColor:[248,245,252] },
+      alternateRowStyles: { fillColor:[249,245,242] },
       styles: { fontSize:8, cellPadding:2.5 },
       margin: { left:MARGIN, right:MARGIN },
     })
@@ -129,10 +129,10 @@ function gerarPDFCompletoHistorico(plan, itens) {
   }
 
   const totalGeral = itens.reduce((s,i) => s + i.quantidade_total, 0)
-  doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(82,46,100)
+  doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(58,21,50)
   doc.text(`Total geral: ${fmt(totalGeral)} unidades`, MARGIN, Math.min(startY+6, 195))
   doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
-  doc.text('Laricas Fitness — Produção Completa (reimpressão)', MARGIN, 205)
+  doc.text('LARC — Produção Completa (reimpressão)', MARGIN, 205)
   doc.save(`Producao_Completa_${plan.data_producao}_reimp.pdf`)
 }
 
@@ -147,9 +147,9 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
   )
 
   if (!planosComCorreio.length) {
-    doc.setFillColor(82,46,100); doc.rect(0,0,210,14,'F')
-    doc.setTextColor(234,183,130); doc.setFontSize(9); doc.setFont(undefined,'bold')
-    doc.text('Laricas Fitness — Produção para CORREIOS', MARGIN, 9)
+    doc.setFillColor(58,21,50); doc.rect(0,0,210,14,'F')
+    doc.setTextColor(233,189,147); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text('LARC — Produção para CORREIOS', MARGIN, 9)
     doc.setTextColor(150,150,150); doc.setFontSize(11); doc.setFont(undefined,'italic')
     doc.text('Nenhum item de Correios encontrado nos planejamentos selecionados.', MARGIN, 40)
     doc.save('Producao_Envio_historico.pdf')
@@ -160,12 +160,12 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
     if (pageIdx > 0) doc.addPage()
     const itens = itensPorPlano[plan.id] || []
 
-    doc.setFillColor(82,46,100); doc.rect(0,0,210,14,'F')
-    doc.setTextColor(234,183,130); doc.setFontSize(9); doc.setFont(undefined,'bold')
-    doc.text('Laricas Fitness', MARGIN, 9)
+    doc.setFillColor(58,21,50); doc.rect(0,0,210,14,'F')
+    doc.setTextColor(233,189,147); doc.setFontSize(9); doc.setFont(undefined,'bold')
+    doc.text('LARC', MARGIN, 9)
     doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(255,255,255)
     doc.text(`Reimpresso: ${agora}`, 130, 9)
-    doc.setTextColor(82,46,100); doc.setFontSize(16); doc.setFont(undefined,'bold')
+    doc.setTextColor(58,21,50); doc.setFontSize(16); doc.setFont(undefined,'bold')
     doc.text(`Produção para Envio — ${headerDia(plan.data_producao)}`, MARGIN, 26)
 
     const body = []
@@ -177,7 +177,7 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
       const totalCat = grupo.reduce((s,i)=>s+(i.quantidade_correio||0),0)
       totalDia += totalCat
       body.push([{ content:`${cat}  —  ${fmt(totalCat)} un`, colSpan:2,
-        styles:{fillColor:[103,63,124],textColor:[255,255,255],fontStyle:'bold',cellPadding:2.5} }])
+        styles:{fillColor:[90,36,80],textColor:[255,255,255],fontStyle:'bold',cellPadding:2.5} }])
       for (const i of grupo)
         body.push([i.embalagens?.nome||'?', {content:fmt(i.quantidade_correio||0),styles:{halign:'center',fontStyle:'bold'}}])
     }
@@ -188,15 +188,15 @@ function gerarPDFCorreiosHistorico(planos, itensPorPlano) {
 
     autoTable(doc, { startY:33, body,
       styles:{fontSize,cellPadding:fontSize<7?1.5:2},
-      alternateRowStyles:{fillColor:[248,245,252]},
+      alternateRowStyles:{fillColor:[249,245,242]},
       columnStyles:{1:{cellWidth:22,halign:'center'}},
       margin:{left:MARGIN,right:MARGIN} })
 
     const finalY = doc.lastAutoTable.finalY + 4
-    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(82,46,100)
+    doc.setFont(undefined,'bold'); doc.setFontSize(11); doc.setTextColor(58,21,50)
     doc.text(`Total envio: ${fmt(totalDia)} unidades`, MARGIN, Math.min(finalY, PAGE_H-10))
     doc.setFont(undefined,'normal'); doc.setFontSize(7); doc.setTextColor(180,180,180)
-    doc.text('Laricas Fitness — Planejamento de Produção · Envio (reimpressão)', MARGIN, PAGE_H-5)
+    doc.text('LARC — Planejamento de Produção · Envio (reimpressão)', MARGIN, PAGE_H-5)
   })
 
   const datas = planosComCorreio.map(p=>p.data_producao)

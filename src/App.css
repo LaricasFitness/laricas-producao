@@ -99,7 +99,9 @@ body {
   color: rgba(255,255,255,.55); margin-top: 6px;
 }
 
-.sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; flex: 0 1 auto; scrollbar-width: none; }
+.sidebar-nav::-webkit-scrollbar { display: none; }
+.nav-group { display: flex; flex-direction: column; }
 
 .nav-btn {
   display: flex; align-items: center; gap: 12px;
@@ -114,7 +116,31 @@ body {
 .nav-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
 .nav-btn.active { background: rgba(255,255,255,0.11); color: #fff; font-weight: 600; }
 .nav-btn svg { flex-shrink: 0; }
-.nav-label { line-height: 1; }
+.nav-label { line-height: 1; flex: 1; }
+.nav-chevron { opacity: .5; transition: transform .2s; }
+.nav-chevron.aberto { transform: rotate(180deg); }
+
+/* Submenu: subtelas da área, embaixo dela */
+.nav-subs {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 8px 21px; padding-left: 12px;
+  border-left: 1px solid rgba(255,255,255,.14);
+}
+.nav-sub {
+  border: none; background: transparent; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: 13px; font-weight: 400;
+  color: rgba(255,255,255,.62); padding: 7px 10px; border-radius: var(--radius-sm);
+  position: relative; transition: background .15s, color .15s;
+}
+.nav-sub:hover { color: #fff; background: rgba(255,255,255,.05); }
+.nav-sub.active { color: #fff; font-weight: 600; background: rgba(255,255,255,.08); }
+.nav-sub.active::before {
+  content: ""; position: absolute; left: -13px; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px; background: var(--gold);
+}
+
+/* No desktop as subtelas ficam no menu lateral: as abas internas somem */
+@media (min-width: 769px) { .hub-tabs { display: none !important; } }
 
 .sidebar-spacer { flex: 1; }
 
@@ -460,7 +486,10 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
     box-shadow: 0 -4px 16px rgba(58,21,50,.18);
   }
   .sidebar-brand, .sidebar-spacer, .sidebar-user { display: none; }
-  .sidebar-nav { flex-direction: row; flex: 1; gap: 0; }
+  .sidebar-nav { flex-direction: row; flex: 1; gap: 0; overflow: visible; }
+  .nav-group { flex: 1; }
+  .nav-chevron, .nav-subs { display: none; }
+  .nav-label { flex: none; }
   .nav-btn {
     flex: 1; flex-direction: column; justify-content: center; gap: 4px;
     padding: 6px 2px; border-radius: 0; font-size: 10.5px; text-align: center;

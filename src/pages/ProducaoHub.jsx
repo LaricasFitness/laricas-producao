@@ -7,12 +7,15 @@ import HistoricoPlanejamento from './HistoricoPlanejamento'
 import LogGeral from './LogGeral'
 import Rendimentos from './Rendimentos'
 
-export default function ProducaoHub({ onIrLogistica }) {
-  const [sub, setSub] = useState('registro')
+// sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
+export default function ProducaoHub({ onIrLogistica, sub: subMenu, onSub }) {
+  const [subLocal, setSubLocal] = useState('registro')
+  const sub = subMenu ?? subLocal
+  const setSub = onSub ?? setSubLocal
 
   return (
     <>
-      <div className="tabs" style={{ marginBottom: 0 }}>
+      <div className="tabs hub-tabs" style={{ marginBottom: 0 }}>
         <button className={`tab${sub === 'registro' ? ' active' : ''}`} onClick={() => setSub('registro')}>
           📋 Registro
         </button>
