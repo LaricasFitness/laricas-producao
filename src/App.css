@@ -563,6 +563,14 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
   .page table, .modal table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
   .page table[style*="min-width"], .modal table[style*="min-width"] { min-width: 0 !important; }
   .page td, .page th { padding: 9px 10px; }
+  /* Células em uma linha (a tabela rola de lado); a 1ª coluna fica fixa para não perder a referência */
+  .page td, .page th, .modal td, .modal th { white-space: nowrap; }
+  .page td:first-child, .page th:first-child {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--white); white-space: normal; min-width: 96px; max-width: 42vw;
+    box-shadow: 1px 0 0 var(--gray-100);
+  }
+  .page td[colspan]:first-child { position: static; max-width: none; white-space: normal; }
 
   /* Grades com 4+ colunas iguais → 2 colunas */
   .page [style*="grid-template-columns: repeat(4"],
@@ -571,19 +579,29 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
   .modal [style*="grid-template-columns: repeat(4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
-  /* Grades com colunas em px (linhas "tipo tabela") → 2 colunas fluidas */
-  .page [style*="grid-template-columns"][style*="px"]:not([style*="minmax"]),
-  .modal [style*="grid-template-columns"][style*="px"]:not([style*="minmax"]) {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  /* Cards lado a lado (2 colunas) empilham; formulários em 2 colunas continuam */
+  .page [style*="grid-template-columns: 1fr 1fr"]:has(> .card),
+  .page [style*="grid-template-columns: repeat(2"]:has(> .card) {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
+  /* Grades com colunas fixas em px (linhas "tipo tabela") → 2 colunas fluidas.
+     A classe é posta por src/lib/gradesMobile.js, que olha só o valor das colunas. */
+  .page .grade-px, .modal .grade-px { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .page .grade-px > .grade-icone { display: none; }
 
   /* Linhas de botões/filtros: quebram em vez de vazar */
   .page [style*="display: flex"]:not([style*="column"]):not([style*="nowrap"]),
   .modal [style*="display: flex"]:not([style*="column"]):not([style*="nowrap"]) { flex-wrap: wrap; }
+  /* ...menos dentro de tabela: ali a tabela já rola de lado */
+  .page td [style*="display: flex"]:not([style*="column"]):not([style*="nowrap"]),
+  .modal td [style*="display: flex"]:not([style*="column"]):not([style*="nowrap"]) { flex-wrap: nowrap; }
 
   /* Campos dentro de linhas de filtro ocupam a linha em vez de largura fixa */
   .page [style*="display: flex"] > .form-input,
   .page [style*="display: flex"] > select { flex: 1 1 150px; min-width: 0; width: auto !important; }
+
+  /* Itens de grade/flex podem encolher abaixo do conteúdo (ex.: select com nome longo) */
+  .page [style*="display: grid"] > *, .modal [style*="display: grid"] > * { min-width: 0; }
 
   /* Nada maior que a tela */
   .page img, .page svg, .page canvas { max-width: 100%; }
@@ -591,11 +609,11 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
 }
 
 @media (max-width: 480px) {
-  /* Telas estreitas: grades de 3 colunas iguais empilham */
+  /* Telas estreitas: grades de 3 colunas iguais viram 2 */
   .page [style*="grid-template-columns: repeat(3"],
   .page [style*="grid-template-columns: 1fr 1fr 1fr"],
   .modal [style*="grid-template-columns: repeat(3"] {
-    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
   .kpi-value { font-size: 19px !important; }
   .nav-btn { font-size: 10px; }

@@ -3,6 +3,7 @@ import { LogOut, ChevronDown } from 'lucide-react'
 import './App.css'
 import { fecharMesesPendentes } from './lib/cmv'
 import { MENU, subPadrao, rotuloSub } from './lib/menu'
+import { observarGradesFixas } from './lib/gradesMobile'
 import Login from './pages/Login'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
@@ -33,6 +34,9 @@ export default function App() {
 
   // Fecha o CMV dos meses vencidos (a partir do dia 5) — sem botão, em segundo plano
   useEffect(() => { if (usuario) fecharMesesPendentes() }, [usuario])
+
+  // Celular: grades com colunas fixas em px ganham a classe .grade-px (ver App.css)
+  useEffect(() => observarGradesFixas(), [])
 
   // Celular: a faixa de abas rola até a subtela ativa
   useEffect(() => {
