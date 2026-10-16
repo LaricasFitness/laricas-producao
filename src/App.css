@@ -50,7 +50,6 @@
   --white:     #ffffff;
 
   --sidebar-w: 232px;
-  --bottom-nav-h: 0px;
   --radius-sm: 8px;
   --radius:    12px;
   --radius-lg: 18px;
@@ -139,8 +138,12 @@ body {
   width: 2px; border-radius: 2px; background: var(--gold);
 }
 
-/* No desktop as subtelas ficam no menu lateral: as abas internas somem */
-@media (min-width: 769px) { .hub-tabs { display: none !important; } }
+/* As subtelas ficam no menu (lateral no desktop, gaveta no celular): as abas internas somem */
+.hub-tabs { display: none !important; }
+
+/* Botão ☰ e fundo escuro da gaveta: só no celular */
+.menu-toggle { display: none; }
+.menu-fundo { display: none; }
 
 .sidebar-spacer { flex: 1; }
 
@@ -193,7 +196,6 @@ body {
   padding: 7px 12px; background: var(--white);
   border: 1px solid var(--gray-200); border-radius: var(--radius-sm);
 }
-.topbar-sair { display: none; }
 
 .page {
   flex: 1;
@@ -467,42 +469,38 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
 
 /* ═══════════════════════════════════════════════════════════════
    CELULAR (≤ 768 px)
-   Menu vira barra inferior; cabeçalho compacto com a marca.
+   Menu vira gaveta lateral aberta pelo ☰; cabeçalho compacto com a marca.
    Abaixo, a "rede de segurança": as telas usam muito estilo inline
    (grades e larguras fixas pensadas para desktop). Estas regras
    adaptam esses padrões sem precisar reescrever cada tela.
    ═══════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  :root { --sidebar-w: 0px; --bottom-nav-h: 62px; }
+  :root { --sidebar-w: 0px; }
 
   .app { flex-direction: column; }
 
-  /* Barra inferior */
+  /* Gaveta lateral (menu sanduíche): mesmo menu do desktop, com áreas e submenus */
   .sidebar {
-    position: fixed; left: 0; right: 0; bottom: 0;
-    width: 100%; height: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom));
-    padding: 0 4px env(safe-area-inset-bottom);
-    flex-direction: row; z-index: 50;
-    box-shadow: 0 -4px 16px rgba(58,21,50,.18);
+    position: fixed; top: 0; bottom: 0; left: 0;
+    width: min(86vw, 320px); height: 100%;
+    padding: calc(20px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
+    z-index: 300; box-shadow: var(--shadow-lg);
+    transform: translateX(-102%); transition: transform .25s ease;
   }
-  .sidebar-brand, .sidebar-spacer, .sidebar-user { display: none; }
-  .sidebar-nav { flex-direction: row; flex: 1; gap: 0; overflow: visible; }
-  .nav-group { flex: 1; }
-  .nav-chevron, .nav-subs { display: none; }
-  .nav-label { flex: none; }
-  .nav-btn {
-    flex: 1; flex-direction: column; justify-content: center; gap: 4px;
-    padding: 6px 2px; border-radius: 0; font-size: 10.5px; text-align: center;
-    color: rgba(255,255,255,.6);
+  .app.menu-aberto .sidebar { transform: none; }
+  .menu-fundo {
+    display: block; position: fixed; inset: 0; z-index: 290;
+    background: rgba(30,8,24,.45); opacity: 0; pointer-events: none; transition: opacity .25s;
   }
-  .nav-btn.active { background: transparent; color: #fff; }
-  .nav-btn.active svg { color: var(--gold); }
+  .app.menu-aberto .menu-fundo { opacity: 1; pointer-events: auto; }
+  .nav-btn { padding: 12px; font-size: 15px; }
+  .nav-sub { padding: 10px 10px; font-size: 14px; }
 
-  .main { height: 100%; padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom)); }
+  .main { height: 100%; }
 
   /* Cabeçalho compacto */
   .topbar {
-    min-height: 56px; padding: 10px 16px; gap: 10px;
+    min-height: 56px; padding: 10px 12px; gap: 8px;
     background: var(--white); border-bottom: 1px solid var(--gray-200);
   }
   .topbar-brand {
@@ -512,10 +510,12 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
   }
   .topbar-title { font-size: 16px; }
   .topbar-sub, .topbar-date { display: none; }
-  .topbar-sair {
-    display: inline-flex; color: var(--gray-500);
+  .menu-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border: none; background: transparent; cursor: pointer;
+    color: var(--purple-dark); border-radius: var(--radius-sm); flex-shrink: 0;
   }
-  .topbar-sair:hover { background: var(--gray-100); color: var(--gray-800); }
+  .menu-toggle:active { background: var(--gray-100); }
 
   .page { padding: 12px 12px 24px; gap: 12px; }
 
@@ -616,5 +616,4 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
   .kpi-value { font-size: 19px !important; }
-  .nav-btn { font-size: 10px; }
 }

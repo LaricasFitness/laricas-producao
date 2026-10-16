@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { LogOut, ChevronDown } from 'lucide-react'
+import { LogOut, ChevronDown, Menu } from 'lucide-react'
 import './App.css'
 import { fecharMesesPendentes } from './lib/cmv'
 import { MENU, subPadrao, rotuloSub } from './lib/menu'
@@ -31,6 +31,7 @@ export default function App() {
   const [csvLogistica, setCsvLogistica] = useState(null)
   const [subs, setSubs] = useState({})          // subtela escolhida em cada área
   const [aberto, setAberto] = useState(null)    // área expandida no menu lateral
+  const [menuAberto, setMenuAberto] = useState(false)  // gaveta do celular (☰)
 
   // Fecha o CMV dos meses vencidos (a partir do dia 5) — sem botão, em segundo plano
   useEffect(() => { if (usuario) fecharMesesPendentes() }, [usuario])
@@ -38,10 +39,15 @@ export default function App() {
   // Celular: grades com colunas fixas em px ganham a classe .grade-px (ver App.css)
   useEffect(() => observarGradesFixas(), [])
 
-  // Celular: a faixa de abas rola até a subtela ativa
+  // Celular: Esc fecha a gaveta do menu
   useEffect(() => {
-    document.querySelector('.hub-tabs .tab.active')?.scrollIntoView({ inline: 'center', block: 'nearest' })
-  }, [page, subs])
+    if (!menuAberto) return
+    const fechar = e => { if (e.key === 'Escape') setMenuAberto(false) }
+    const telaGrande = () => { if (window.innerWidth > 768) setMenuAberto(false) }  // girou/redimensionou
+    window.addEventListener('keydown', fechar)
+    window.addEventListener('resize', telaGrande)
+    return () => { window.removeEventListener('keydown', fechar); window.removeEventListener('resize', telaGrande) }
+  }, [menuAberto])
 
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('estoque') }} />
 
@@ -56,15 +62,21 @@ export default function App() {
   const expandida = aberto ?? pageAtual
 
   function abrirArea(id) {
-    if (id === pageAtual) { setAberto(expandida === id ? '' : id); return }  // mesma área: recolhe/expande
+    // Na gaveta do celular, tocar na área só abre/fecha os submenus (como menu de loja)
+    if (menuAberto || id === pageAtual) { setAberto(expandida === id ? '' : id); return }
     setPage(id); setAberto(null)
+  }
+
+  function abrirSub(id, subId) {
+    setPage(id); setSub(id, subId); setAberto(null); setMenuAberto(false)
   }
 
   function irLogistica(csv) { if (!temPermissao(abas,'logistica')) return; setCsvLogistica(csv); setPage('logistica') }
   function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
 
   return (
-    <div className="app">
+    <div className={`app${menuAberto ? ' menu-aberto' : ''}`}>
+      <div className="menu-fundo" onClick={() => setMenuAberto(false)} />
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-mark">LARC</div>
@@ -84,7 +96,7 @@ export default function App() {
                   {itens.map(s => (
                     <button key={s.id}
                       className={`nav-sub${pageAtual === id && subAtual === s.id ? ' active' : ''}`}
-                      onClick={() => { setPage(id); setSub(id, s.id); setAberto(null) }}>
+                      onClick={() => abrirSub(id, s.id)}>
                       {s.label}
                     </button>
                   ))}
@@ -105,6 +117,9 @@ export default function App() {
       </aside>
       <div className="main">
         <header className="topbar">
+          <button className="menu-toggle" onClick={() => { setAberto(null); setMenuAberto(true) }} title="Menu" aria-label="Abrir menu">
+            <Menu size={22} />
+          </button>
           <div className="topbar-brand">LARC</div>
           <div className="topbar-text">
             <div className="topbar-title">{title}</div>
@@ -114,7 +129,6 @@ export default function App() {
             <span className="topbar-date">
               {(d => d.charAt(0).toUpperCase() + d.slice(1))(new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'}))}
             </span>
-            <button className="icon-btn topbar-sair" onClick={sair} title="Sair"><LogOut size={18} /></button>
           </div>
         </header>
         <div className="page">
