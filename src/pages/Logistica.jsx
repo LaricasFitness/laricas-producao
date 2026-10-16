@@ -1056,9 +1056,9 @@ export default function Logistica({ csvInicial }) {
       return (
         <div style={{ background:'var(--white)', border:'1px solid var(--gray-200)', borderRadius:10, overflow:'visible', marginTop:12 }}>
           {/* Header da tela */}
-          <div style={{ background:'var(--purple-dark,#3d1f5e)', padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ background:'var(--purple-dark)', padding:'14px 20px', flexWrap:'wrap', gap:10, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
             <div>
-              <div style={{ color:'#eab782', fontWeight:800, fontSize:16 }}>Laricas Fitness — Conferência de Expedição</div>
+              <div style={{ color:'var(--gold)', fontWeight:800, fontSize:16 }}>Conferência de Expedição</div>
               <div style={{ color:'#fff', fontSize:12, marginTop:2 }}>Data: {dateStr} · Adicione observações e gere o PDF</div>
             </div>
             <div style={{ display:'flex', gap:8 }}>

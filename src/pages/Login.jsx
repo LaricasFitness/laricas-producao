@@ -43,28 +43,23 @@ export default function Login({ onLogin }) {
 
   return (
     <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'linear-gradient(135deg, var(--purple-dark) 0%, var(--purple) 100%)',
-      padding: 20,
+      minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'var(--purple-dark)',
+      padding: 20, overflowY: 'auto',
     }}>
       <div style={{
-        background: 'var(--white)', borderRadius: 16, padding: '40px 36px',
+        background: 'var(--white)', borderRadius: 18, padding: '40px 32px',
         width: '100%', maxWidth: 380,
-        boxShadow: '0 20px 60px rgba(42,31,40,0.3)',
+        boxShadow: '0 24px 60px rgba(20,5,16,0.35)',
       }}>
-        {/* Logo */}
+        {/* Marca */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{
-            width: 56, height: 56, background: 'var(--purple-dark)', borderRadius: 14,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            marginBottom: 14,
-          }}>
-            <span style={{ color: 'var(--gold)', fontSize: 26, fontWeight: 900 }}>L</span>
+          <div style={{ fontFamily: 'var(--font-brand)', fontSize: 40, fontWeight: 600, letterSpacing: '.04em',
+            color: 'var(--purple-dark)', lineHeight: 1 }}>
+            LARC
           </div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--purple-dark)', lineHeight: 1.2 }}>
-            Laricas Fitness
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--gray-400)', marginTop: 4 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.14em', textTransform: 'uppercase',
+            color: 'var(--gray-500)', marginTop: 10 }}>
             Sistema de Produção
           </div>
         </div>

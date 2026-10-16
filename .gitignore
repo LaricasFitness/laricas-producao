@@ -5,3 +5,6 @@ dist/
 # Variáveis de ambiente locais
 .env
 .env.local
+
+# Configuração local do Claude Code
+.claude/launch.json

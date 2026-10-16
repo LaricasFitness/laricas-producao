@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ClipboardList, Truck, Package, CircleDollarSign, Settings, LogOut } from 'lucide-react'
 import './App.css'
 import { fecharMesesPendentes } from './lib/cmv'
 import Login from './pages/Login'
@@ -9,11 +10,11 @@ import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 
 const ALL_PAGES = [
-  { id: 'producao',      label: 'Produção',      icon: '📋' },
-  { id: 'logistica',     label: 'Logística',     icon: '🚚' },
-  { id: 'estoque',       label: 'Estoque',       icon: '📥' },
-  { id: 'precificacao',  label: 'Custos',  icon: '💰' },
-  { id: 'admin',         label: 'Admin',         icon: '⚙️' },
+  { id: 'producao',      label: 'Produção',  Icon: ClipboardList },
+  { id: 'logistica',     label: 'Logística', Icon: Truck },
+  { id: 'estoque',       label: 'Estoque',   Icon: Package },
+  { id: 'precificacao',  label: 'Custos',    Icon: CircleDollarSign },
+  { id: 'admin',         label: 'Admin',     Icon: Settings },
 ]
 
 const PERM_MAP = {
@@ -59,32 +60,41 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="sidebar-logo"><span>L</span></div>
-        {pages.map(p => (
-          <button key={p.id} className={`nav-btn${pageAtual===p.id?' active':''}`}
-            onClick={() => setPage(p.id)} title={p.label}>
-            <span style={{ fontSize:18 }}>{p.icon}</span>
-            <span className="nav-label">{p.label}</span>
-          </button>
-        ))}
+        <div className="sidebar-brand">
+          <div className="brand-mark">LARC</div>
+          <div className="brand-sub">Produção</div>
+        </div>
+        <nav className="sidebar-nav">
+          {pages.map(({ id, label, Icon }) => (
+            <button key={id} className={`nav-btn${pageAtual===id?' active':''}`}
+              onClick={() => setPage(id)} title={label}>
+              <Icon size={19} strokeWidth={1.8} />
+              <span className="nav-label">{label}</span>
+            </button>
+          ))}
+        </nav>
         <div className="sidebar-spacer" />
-        <button className="nav-btn" onClick={sair} title="Sair">
-          <span style={{ fontSize:16 }}>↩️</span>
-          <span className="nav-label">Sair</span>
-        </button>
+        <div className="sidebar-user">
+          <div className="avatar">{(usuario.nome || '?').trim().charAt(0).toUpperCase()}</div>
+          <div className="user-info">
+            <div className="user-name">{usuario.nome}</div>
+            <div className="user-role">{usuario.perfil}</div>
+          </div>
+          <button className="icon-btn" onClick={sair} title="Sair"><LogOut size={16} /></button>
+        </div>
       </aside>
       <div className="main">
         <header className="topbar">
-          <div>
+          <div className="topbar-brand">LARC</div>
+          <div className="topbar-text">
             <div className="topbar-title">{title}</div>
             <div className="topbar-sub">{sub}</div>
           </div>
           <div className="topbar-right">
-            <span style={{ fontSize:12, color:'var(--gray-500)', fontWeight:600 }}>{usuario.nome}</span>
-            <span style={{ fontSize:11, color:'var(--gray-400)', marginLeft:4 }}>· {usuario.perfil}</span>
-            <span style={{ fontSize:12, color:'var(--gray-400)', marginLeft:12 }}>
-              {new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'})}
+            <span className="topbar-date">
+              {(d => d.charAt(0).toUpperCase() + d.slice(1))(new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'}))}
             </span>
+            <button className="icon-btn topbar-sair" onClick={sair} title="Sair"><LogOut size={18} /></button>
           </div>
         </header>
         <div className="page">

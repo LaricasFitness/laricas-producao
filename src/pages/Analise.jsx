@@ -110,7 +110,7 @@ function LineChart({ dados, height = 180 }) {
         {/* Area fill */}
         <polygon
           points={`20,${h - 10} ${polyline} ${w - 20},${h - 10}`}
-          fill="rgba(103,63,124,0.08)"
+          fill="rgba(90,36,80,0.08)"
         />
         {/* Line */}
         <polyline points={polyline} fill="none" stroke="var(--purple)" strokeWidth={2} strokeLinejoin="round" />
@@ -206,7 +206,7 @@ function Heatmap({ dados }) {
         const alpha = Math.max(0.07, pct)
         return (
           <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: '100%', height: 48, borderRadius: 6, background: `rgba(103,63,124,${alpha})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: '100%', height: 48, borderRadius: 6, background: `rgba(90,36,80,${alpha})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: pct > 0.5 ? '#fff' : 'var(--purple)' }}>{fmt(d.total)}</span>
             </div>
             <span style={{ fontSize: 11, color: 'var(--gray-500)', fontWeight: 600 }}>{dia}</span>
