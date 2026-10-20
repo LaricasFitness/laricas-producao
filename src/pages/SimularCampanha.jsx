@@ -10,7 +10,10 @@ import { RefreshCw, Save, Trash2, Plus } from 'lucide-react'
 //   margem          = receita líquida − CMV
 // O desconto da campanha SUBSTITUI o "desconto de campanhas" padrão do
 // canal (não soma). Margem % sobre a receita líquida, como no Ranking.
-// Volume: média diária produzida nos últimos 30 dias × dias × multiplicador.
+// Quantidades: a meta de faturamento é distribuída pelo mix histórico de
+// produção (últimos 90 dias, todos os canais): cada item recebe a fatia do mix
+// e o total é escalado para que Σ qtd × preço promo = meta. Quantidade
+// digitada fica fixa e o resto da meta é redistribuído entre os demais.
 // ═══════════════════════════════════════════════════════════════
 
 function fmt(n, d = 2) { return Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }) }
@@ -21,7 +24,8 @@ const MARGEM_ATENCAO = 0.15   // abaixo disso: laranja
 const corMargem = (mc, mg) => mc < 0 ? 'var(--danger)' : mg < MARGEM_ATENCAO ? 'var(--warning)' : 'var(--ok)'
 const num = v => { const x = parseFloat(v); return Number.isFinite(x) ? x : null }
 
-const NOVA = { nome: '', canal_id: '', dias: 7, multiplicador: 1 }
+const NOVA = { nome: '', canal_id: '', meta: '' }
+const DIAS_MIX = 90
 
 export default function SimularCampanha({ data, cmvDe }) {
   const canais = data.canais || []
@@ -30,7 +34,7 @@ export default function SimularCampanha({ data, cmvDe }) {
   const [campanhaId, setCampanhaId] = useState('')
   const [form, setForm] = useState({ ...NOVA, canal_id: canais[0]?.id || '' })
   const [itens, setItens] = useState({})          // sku → { desconto, qtd, preco } (strings dos inputs)
-  const [mediaDiaria, setMediaDiaria] = useState({})
+  const [mix, setMix] = useState({})              // sku → participação nas unidades produzidas
   const [sujo, setSujo] = useState(false)
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState('')
@@ -48,9 +52,9 @@ export default function SimularCampanha({ data, cmvDe }) {
     setCampanhas(rows || [])
   }
 
-  // Média diária produzida por SKU nos últimos 30 dias (produção real, sem auto-embalagem)
-  async function carregarVolume() {
-    const desde = new Date(); desde.setDate(desde.getDate() - 30)
+  // Mix: participação de cada SKU nas unidades produzidas (produção real, sem auto-embalagem)
+  async function carregarMix() {
+    const desde = new Date(); desde.setDate(desde.getDate() - DIAS_MIX)
     const codigoPorEmb = {}
     for (const p of data.produtos) codigoPorEmb[p.emb.id] = p.emb.codigo
     const total = {}
@@ -66,19 +70,20 @@ export default function SimularCampanha({ data, cmvDe }) {
       }
       if (!rows || rows.length < 1000) break
     }
-    const media = {}
-    for (const [sku, t] of Object.entries(total)) media[sku] = t / 30
-    setMediaDiaria(media)
+    const soma = Object.values(total).reduce((a, b) => a + b, 0)
+    const m = {}
+    if (soma > 0) for (const [sku, t] of Object.entries(total)) m[sku] = t / soma
+    setMix(m)
   }
 
-  useEffect(() => { carregarCampanhas(); carregarVolume() }, [])
+  useEffect(() => { carregarCampanhas(); carregarMix() }, [])
 
   async function abrirCampanha(id) {
     if (sujo && !window.confirm('Há alterações não salvas. Abrir outra campanha mesmo assim?')) return
     setCampanhaId(id); setMsg('')
     if (!id) { setForm({ ...NOVA, canal_id: canais[0]?.id || '' }); setItens({}); setSujo(false); return }
     const c = campanhas.find(x => x.id === id)
-    setForm({ nome: c.nome, canal_id: c.canal_id, dias: c.dias, multiplicador: c.multiplicador })
+    setForm({ nome: c.nome, canal_id: c.canal_id, meta: c.meta_faturamento ?? '' })
     const { data: rows } = await supabase.from('campanha_simulada_itens').select('*').eq('campanha_id', id)
     const m = {}
     for (const r of (rows || [])) m[r.sku_produto] = {
@@ -92,8 +97,7 @@ export default function SimularCampanha({ data, cmvDe }) {
     setSalvando(true); setMsg('')
     try {
       const cab = {
-        nome: form.nome.trim(), canal_id: form.canal_id,
-        dias: parseInt(form.dias) || 1, multiplicador: num(form.multiplicador) || 1,
+        nome: form.nome.trim(), canal_id: form.canal_id, meta_faturamento: num(form.meta),
         atualizado_em: new Date().toISOString(),
       }
       let id = campanhaId
@@ -143,23 +147,21 @@ export default function SimularCampanha({ data, cmvDe }) {
 
   const canal = canais.find(c => c.id === form.canal_id) || canais[0]
   const categorias = useMemo(() => [...new Set(data.produtos.map(p => p.emb.categoria).filter(Boolean))].sort(), [data])
-  const dias = parseInt(form.dias) || 0
-  const mult = num(form.multiplicador) || 1
+  const meta = num(form.meta) || 0
 
   const linhas = useMemo(() => {
     if (!canal) return []
     // Sem o desconto padrão do canal: o da campanha o substitui
     const pctCampanha = canal.taxa + canal.imposto + canal.comissao
-    return data.produtos.filter(p => p.cmvTotal > 0).map(p => {
+    const base = data.produtos.filter(p => p.cmvTotal > 0).map(p => {
       const sku = p.emb.codigo
       const it = itens[sku] || {}
       const cmv = cmvDe(p)
       const preco = num(it.preco) ?? (parseFloat(p.precosCanal?.[canal.id]) || null)
       const desc = num(it.desconto) || 0
-      const qtdBase = Math.round((mediaDiaria[sku] || 0) * dias)
-      const qtdAuto = Math.round((mediaDiaria[sku] || 0) * dias * mult)
-      const qtd = num(it.qtd) ?? qtdAuto
-      if (!preco) return { p, sku, cmv, preco: null, desc, qtd, qtdAuto, qtdBase, it }
+      const peso = mix[sku] || 0
+      const qtdFixa = num(it.qtd)
+      if (!preco) return { p, sku, cmv, preco: null, desc, peso, qtdFixa, it }
       const promo = preco * (1 - desc / 100)
       const recLiq = promo * (1 - pctCampanha) - canal.totalFixo
       const mc = recLiq - cmv
@@ -169,10 +171,21 @@ export default function SimularCampanha({ data, cmvDe }) {
       // Hoje, sem campanha (com o desconto padrão do canal)
       const recHoje = preco * (1 - canal.totalPct) - canal.totalFixo
       const mcHoje = recHoje - cmv
-      return { p, sku, cmv, preco, desc, promo, recLiq, mc, mg, descMax, qtd, qtdAuto, qtdBase, it,
-        mcHoje, mgHoje: recHoje > 0 ? mcHoje / recHoje : 0 }
+      return { p, sku, cmv, preco, desc, promo, recLiq, mc, mg, descMax, peso, qtdFixa, it,
+        mgHoje: recHoje > 0 ? mcHoje / recHoje : 0 }
+    })
+
+    // Distribui a meta pelo mix: N tal que Σ(peso × N × promo) + Σ(fixas × promo) = meta
+    const comPrecoBase = base.filter(l => l.preco)
+    const receitaFixa = comPrecoBase.filter(l => l.qtdFixa !== null).reduce((s, l) => s + l.qtdFixa * l.promo, 0)
+    const receitaPorUnidadeDeMix = comPrecoBase.filter(l => l.qtdFixa === null).reduce((s, l) => s + l.peso * l.promo, 0)
+    const N = meta > 0 && receitaPorUnidadeDeMix > 0 ? Math.max(0, meta - receitaFixa) / receitaPorUnidadeDeMix : 0
+
+    return base.map(l => {
+      const qtdAuto = l.preco ? Math.round(l.peso * N) : 0
+      return { ...l, qtdAuto, qtd: l.qtdFixa ?? qtdAuto }
     }).sort((a, b) => (a.p.emb.categoria || '').localeCompare(b.p.emb.categoria || '') || a.p.emb.nome.localeCompare(b.p.emb.nome))
-  }, [data, canal, itens, mediaDiaria, dias, mult, cmvDe])
+  }, [data, canal, itens, mix, meta, cmvDe])
 
   const visiveis = linhas.filter(l =>
     (filtroCat === 'Todas' || l.p.emb.categoria === filtroCat) &&
@@ -184,9 +197,9 @@ export default function SimularCampanha({ data, cmvDe }) {
     recLiq: t.recLiq + l.qtd * l.recLiq,
     mc: t.mc + l.qtd * l.mc,
     unid: t.unid + l.qtd,
-    mcHoje: t.mcHoje + l.qtdBase * l.mcHoje,
+    desconto: t.desconto + l.qtd * (l.preco - l.promo),
     prejuizo: t.prejuizo + (l.mc < 0 ? 1 : 0),
-  }), { receita: 0, recLiq: 0, mc: 0, unid: 0, mcHoje: 0, prejuizo: 0 })
+  }), { receita: 0, recLiq: 0, mc: 0, unid: 0, desconto: 0, prejuizo: 0 })
   const semPreco = linhas.filter(l => !l.preco).length
 
   if (!canal) return <div className="card card-pad">Cadastre os canais em Admin › Canais.</div>
@@ -213,13 +226,9 @@ export default function SimularCampanha({ data, cmvDe }) {
               {canais.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </div>
-          <div className="form-group" style={{ width: 90 }}>
-            <label className="form-label">Dias</label>
-            <input type="number" min={1} className="form-input" value={form.dias} onChange={e => set('dias', e.target.value)} />
-          </div>
-          <div className="form-group" style={{ width: 100 }}>
-            <label className="form-label" title="Volume esperado durante a campanha em relação ao normal">Volume ×</label>
-            <input type="number" min={0.1} step={0.1} className="form-input" value={form.multiplicador} onChange={e => set('multiplicador', e.target.value)} />
+          <div className="form-group" style={{ flex: '1 1 160px' }}>
+            <label className="form-label" title="Faturamento da campanha, já com desconto">Meta de faturamento (R$)</label>
+            <input type="number" min={0} step={100} className="form-input" placeholder="Ex.: 30000" value={form.meta} onChange={e => set('meta', e.target.value)} />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -234,18 +243,17 @@ export default function SimularCampanha({ data, cmvDe }) {
           <b>{canal.label}:</b> taxa {fmt(canal.taxa * 100, 1)}% · imposto {fmt(canal.imposto * 100, 1)}% · comissão {fmt(canal.comissao * 100, 1)}% ·
           custos por unidade {fmtR(canal.totalFixo)} (embalagem {fmtR(canal.embalagem)}, frete {fmtR(canal.frete)}, outros {fmtR(canal.outros)}).
           {canal.desconto > 0 && <> O desconto padrão do canal ({fmt(canal.desconto * 100, 1)}%) é <b>substituído</b> pelo desconto da campanha.</>}
-          {' '}Volume = média diária dos últimos 30 dias × {dias} dias × {fmt(mult, 1)}.
+          {' '}Quantidades: a meta é distribuída pelo mix de produção dos últimos {DIAS_MIX} dias (participação de cada item nas unidades produzidas).
         </div>
       </div>
 
       {/* Totais */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
         {[
-          ['Receita da campanha', fmtR(tot.receita), `${fmt(tot.unid, 0)} unidades`, 'var(--gray-800)'],
+          ['Faturamento', fmtR(tot.receita), meta > 0 ? `meta ${fmtR(meta)} (diferença por arredondamento)` : 'informe a meta acima', 'var(--gray-800)'],
+          ['Unidades a vender', fmt(tot.unid, 0), 'pelo mix histórico de produção', 'var(--gray-800)'],
           ['Margem total', fmtR(tot.mc), tot.recLiq > 0 ? `${fmtP(tot.mc / tot.recLiq)} da receita líquida` : '—', tot.mc < 0 ? 'var(--danger)' : 'var(--ok)'],
-          ['Mesmo período sem campanha', fmtR(tot.mcHoje), 'margem com preço cheio e volume normal', 'var(--gray-600)'],
-          ['Diferença', `${tot.mc - tot.mcHoje >= 0 ? '+' : '−'}${fmtR(Math.abs(tot.mc - tot.mcHoje))}`,
-            tot.mc >= tot.mcHoje ? 'a campanha rende mais' : 'a campanha rende menos', tot.mc >= tot.mcHoje ? 'var(--ok)' : 'var(--danger)'],
+          ['Desconto concedido', fmtR(tot.desconto), tot.receita > 0 ? `${fmtP(tot.desconto / (tot.receita + tot.desconto))} do preço cheio, em média` : '—', 'var(--warning)'],
         ].map(([l, v, s, c]) => (
           <div key={l} className="card card-pad" style={{ padding: 14 }}>
             <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{l}</div>
@@ -319,8 +327,9 @@ export default function SimularCampanha({ data, cmvDe }) {
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 600, color: l.desc > l.descMax ? 'var(--danger)' : 'var(--gray-600)' }}>{fmt(l.descMax, 1)}%</td>
                     <td style={{ textAlign: 'right' }}>
-                      <input type="number" min={0} className="qty-input" style={{ width: 70, fontSize: 13 }} placeholder={String(l.qtdAuto)}
+                      <input type="number" min={0} className="qty-input" style={{ width: 70, fontSize: 13 }} placeholder={meta > 0 ? String(l.qtdAuto) : '—'}
                         value={l.it.qtd ?? ''} onChange={e => setItem(l.sku, 'qtd', e.target.value)} />
+                      <div style={{ fontSize: 10, color: 'var(--gray-400)' }}>{l.peso > 0 ? `mix ${fmt(l.peso * 100, 1)}%` : 'sem histórico'}</div>
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 700, color: l.mc < 0 ? 'var(--danger)' : 'var(--gray-800)' }}>{fmtR(l.qtd * l.mc)}</td>
                   </> : <td colSpan={7} style={{ color: 'var(--gray-400)', fontSize: 12 }}>sem preço em {canal.label} — digite ao lado</td>}
@@ -333,7 +342,7 @@ export default function SimularCampanha({ data, cmvDe }) {
           Margem: <span style={{ color: 'var(--ok)', fontWeight: 700 }}>verde</span> ≥ {fmt(MARGEM_ATENCAO * 100, 0)}% ·{' '}
           <span style={{ color: 'var(--warning)', fontWeight: 700 }}>laranja</span> abaixo disso ·{' '}
           <span style={{ color: 'var(--danger)', fontWeight: 700 }}>vermelho</span> prejuízo. % sobre a receita líquida, como no Ranking de margem.
-          Qtd vazia usa a estimativa (cinza); digite para sobrescrever.
+          Qtd vazia usa a meta × mix (cinza); digitada, fica fixa e o restante da meta é redistribuído entre os outros itens.
         </div>
       </div>
     </div>

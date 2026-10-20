@@ -6,8 +6,7 @@ CREATE TABLE IF NOT EXISTS campanhas_simuladas (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   nome          text NOT NULL,
   canal_id      text NOT NULL,
-  dias          integer NOT NULL DEFAULT 7,       -- duração da campanha
-  multiplicador numeric NOT NULL DEFAULT 1,       -- volume extra esperado (2 = dobro)
+  meta_faturamento numeric,                       -- R$, já com desconto
   criado_em     timestamptz NOT NULL DEFAULT now(),
   atualizado_em timestamptz NOT NULL DEFAULT now()
 );
@@ -17,7 +16,7 @@ CREATE TABLE IF NOT EXISTS campanha_simulada_itens (
   campanha_id  uuid NOT NULL REFERENCES campanhas_simuladas(id) ON DELETE CASCADE,
   sku_produto  text NOT NULL,
   desconto_pct numeric,                           -- % sobre o preço do canal
-  qtd_estimada numeric,                           -- só quando digitada (senão o sistema estima)
+  qtd_estimada numeric,                           -- só quando digitada (senão sai da meta × mix)
   preco_base   numeric,                           -- só para produto sem preço cadastrado no canal
   UNIQUE (campanha_id, sku_produto)
 );
