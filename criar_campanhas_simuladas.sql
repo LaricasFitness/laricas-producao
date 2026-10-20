@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS campanha_simulada_itens (
   desconto_pct numeric,                           -- % sobre o preço do canal
   qtd_estimada numeric,                           -- só quando digitada (senão sai da meta × mix)
   preco_base   numeric,                           -- só para produto sem preço cadastrado no canal
+  ativo        boolean NOT NULL DEFAULT true,     -- false = fora da campanha
   UNIQUE (campanha_id, sku_produto)
 );
 
