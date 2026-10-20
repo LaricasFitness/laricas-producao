@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Save, Trash2, Plus } from 'lucide-react'
+import { RefreshCw, Save, Trash2, Plus, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════
 // Simular campanha de desconto (ex.: Black Friday).
@@ -27,6 +27,20 @@ const corMargem = (mc, mg) => mc < 0 ? 'var(--danger)' : mg < MARGEM_ATENCAO ? '
 const num = v => { const x = parseFloat(v); return Number.isFinite(x) ? x : null }
 
 const NOVA = { nome: '', canal_id: '', meta: '' }
+
+// Ordenação da tabela: valor de cada coluna (null = sem preço, vai sempre para o fim)
+const VALOR_COLUNA = {
+  produto:  l => l.p.emb.nome,
+  preco:    l => l.preco,
+  desconto: l => l.desc,
+  promo:    l => l.preco ? l.promo : null,
+  recLiq:   l => l.preco ? l.recLiq : null,
+  cmv:      l => l.cmv,
+  margem:   l => l.preco ? l.mg : null,
+  descMax:  l => l.preco ? l.descMax : null,
+  qtd:      l => l.preco ? l.qtd : null,
+  total:    l => l.preco ? l.qtd * l.mc : null,
+}
 const DIAS_MIX = 90
 
 export default function SimularCampanha({ data, cmvDe }) {
@@ -44,6 +58,11 @@ export default function SimularCampanha({ data, cmvDe }) {
   const [busca, setBusca] = useState('')
   const [lote, setLote] = useState({ acao: 'desconto', pct: '', cat: 'Todas' })
   const [verInativos, setVerInativos] = useState(false)
+  const [ordem, setOrdem] = useState({ col: null, dir: 'desc' })  // 1º clique ↓, 2º ↑, 3º volta ao padrão
+
+  function ordenarPor(col) {
+    setOrdem(o => o.col !== col ? { col, dir: 'desc' } : o.dir === 'desc' ? { col, dir: 'asc' } : { col: null, dir: 'desc' })
+  }
 
   const set = (k, v) => { setForm(p => ({ ...p, [k]: v })); setSujo(true) }
   const setItem = (sku, k, v) => { setItens(p => ({ ...p, [sku]: { ...p[sku], [k]: v } })); setSujo(true) }
@@ -200,6 +219,29 @@ export default function SimularCampanha({ data, cmvDe }) {
   const visiveis = linhas.filter(l => (verInativos || l.ativo) &&
     (filtroCat === 'Todas' || l.p.emb.categoria === filtroCat) &&
     (!busca || l.p.emb.nome.toLowerCase().includes(busca.toLowerCase())))
+  if (ordem.col) {
+    const val = VALOR_COLUNA[ordem.col], sinal = ordem.dir === 'asc' ? 1 : -1
+    visiveis.sort((a, b) => {
+      const va = val(a), vb = val(b)
+      if (va === null || va === undefined) return 1
+      if (vb === null || vb === undefined) return -1
+      return sinal * (typeof va === 'string' ? va.localeCompare(vb) : va - vb)
+    })
+  }
+
+  // Cabeçalho clicável com setinha
+  const Th = ({ col, children, title, esquerda }) => {
+    const ativa = ordem.col === col
+    const Icone = !ativa ? ChevronsUpDown : ordem.dir === 'desc' ? ChevronDown : ChevronUp
+    return (
+      <th title={title} onClick={() => ordenarPor(col)}
+        style={{ textAlign: esquerda ? 'left' : 'right', cursor: 'pointer', userSelect: 'none', color: ativa ? 'var(--purple)' : undefined }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+          {children}<Icone size={13} style={{ opacity: ativa ? 1 : .35 }} />
+        </span>
+      </th>
+    )
+  }
 
   const comPreco = linhas.filter(l => l.preco && l.ativo)
   const tot = comPreco.reduce((t, l) => ({
@@ -350,16 +392,16 @@ export default function SimularCampanha({ data, cmvDe }) {
         <div className="tbl-wrap">
           <table>
             <thead><tr>
-              <th title="Desmarque para tirar o produto da campanha">Produto</th>
-              <th style={{ textAlign: 'right' }}>Preço</th>
-              <th style={{ textAlign: 'right' }}>Desconto</th>
-              <th style={{ textAlign: 'right' }}>Preço promo</th>
-              <th style={{ textAlign: 'right' }} title="Preço promo − taxas, imposto, comissão e custos por unidade">Rec. líquida</th>
-              <th style={{ textAlign: 'right' }}>CMV</th>
-              <th style={{ textAlign: 'right' }}>Margem</th>
-              <th style={{ textAlign: 'right' }} title="Desconto em que a margem zera">Desc. máx.</th>
-              <th style={{ textAlign: 'right' }}>Qtd</th>
-              <th style={{ textAlign: 'right' }}>Margem total</th>
+              <Th col="produto" esquerda title="Desmarque para tirar o produto da campanha">Produto</Th>
+              <Th col="preco">Preço</Th>
+              <Th col="desconto">Desconto</Th>
+              <Th col="promo">Preço promo</Th>
+              <Th col="recLiq" title="Preço promo − taxas, imposto, comissão e custos por unidade">Rec. líquida</Th>
+              <Th col="cmv">CMV</Th>
+              <Th col="margem" title="Ordena pela margem %">Margem</Th>
+              <Th col="descMax" title="Desconto em que a margem zera">Desc. máx.</Th>
+              <Th col="qtd">Qtd</Th>
+              <Th col="total">Margem total</Th>
             </tr></thead>
             <tbody>
               {visiveis.map(l => (
