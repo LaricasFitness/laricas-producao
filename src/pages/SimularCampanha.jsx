@@ -209,7 +209,22 @@ export default function SimularCampanha({ data, cmvDe }) {
     unid: t.unid + l.qtd,
     desconto: t.desconto + l.qtd * (l.preco - l.promo),
     prejuizo: t.prejuizo + (l.mc < 0 ? 1 : 0),
-  }), { receita: 0, recLiq: 0, mc: 0, unid: 0, desconto: 0, prejuizo: 0 })
+    cmv: t.cmv + l.qtd * l.cmv,
+  }), { receita: 0, recLiq: 0, mc: 0, unid: 0, desconto: 0, prejuizo: 0, cmv: 0 })
+
+  // Cascata da campanha (como uma DRE): preço cheio → desconto → faturamento → deduções → CMV → margem
+  const cascata = canal ? [
+    ['Faturamento bruto (preço cheio)', tot.receita + tot.desconto, 'base'],
+    ['− Desconto da campanha', -tot.desconto, 'menos'],
+    ['= Faturamento (meta)', tot.receita, 'subtotal'],
+    [`− Imposto (${fmt(canal.imposto * 100, 1)}%)`, -tot.receita * canal.imposto, 'menos'],
+    [`− Taxa da plataforma (${fmt(canal.taxa * 100, 1)}%)`, -tot.receita * canal.taxa, 'menos'],
+    [`− Comissão (${fmt(canal.comissao * 100, 1)}%)`, -tot.receita * canal.comissao, 'menos'],
+    ['− Embalagem, frete e outros por unidade', -tot.unid * canal.totalFixo, 'menos'],
+    ['= Receita líquida', tot.recLiq, 'subtotal'],
+    ['− CMV', -tot.cmv, 'menos'],
+    ['= Margem da campanha', tot.mc, 'total'],
+  ].filter(([, v, t]) => t !== 'menos' || Math.abs(v) >= 0.005) : []
   const semPreco = linhas.filter(l => !l.preco && l.ativo).length
 
   if (!canal) return <div className="card card-pad">Cadastre os canais em Admin › Canais.</div>
@@ -272,6 +287,33 @@ export default function SimularCampanha({ data, cmvDe }) {
           </div>
         ))}
       </div>
+      {meta > 0 && tot.unid > 0 && (
+        <div className="card card-pad">
+          <div className="card-title">Resumo da campanha</div>
+          <div style={{ display: 'flex', flexDirection: 'column', maxWidth: 560 }}>
+            {cascata.map(([rot, v, tipo]) => {
+              const destaque = tipo === 'subtotal' || tipo === 'total' || tipo === 'base'
+              const base = tot.receita + tot.desconto
+              return (
+                <div key={rot} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 0',
+                  borderTop: tipo === 'subtotal' || tipo === 'total' ? '1px solid var(--gray-200)' : undefined,
+                  fontWeight: destaque ? 700 : 400, fontSize: tipo === 'total' ? 15 : 13,
+                  color: tipo === 'total' ? (v < 0 ? 'var(--danger)' : 'var(--ok)') : tipo === 'menos' ? 'var(--gray-600)' : 'var(--gray-800)' }}>
+                  <span>{rot}</span>
+                  <span style={{ whiteSpace: 'nowrap' }}>
+                    {v < 0 ? '−' : ''}{fmtR(Math.abs(v))}
+                    <span style={{ fontSize: 11, color: 'var(--gray-400)', fontWeight: 400, marginLeft: 8, display: 'inline-block', minWidth: 46, textAlign: 'right' }}>
+                      {base > 0 ? fmtP(Math.abs(v) / base) : ''}
+                    </span>
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gray-400)', marginTop: 6 }}>% sobre o faturamento bruto (preço cheio).</div>
+        </div>
+      )}
+
       {(tot.prejuizo > 0 || semPreco > 0) && (
         <div className="alert-banner warning" style={{ fontSize: 12 }}>
           {tot.prejuizo > 0 && <span>⚠️ {tot.prejuizo} produto(s) com prejuízo por unidade no desconto escolhido.</span>}
