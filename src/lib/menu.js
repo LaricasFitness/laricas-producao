@@ -47,6 +47,7 @@ export const MENU = [
       { id: 'preparacoes', label: 'Custo de preparações' },
       { id: 'overhead',    label: 'Overhead do mês' },
       { id: 'simular',     label: 'Criar produto' },
+      { id: 'campanha',    label: 'Simular campanha' },
     ],
   },
   {

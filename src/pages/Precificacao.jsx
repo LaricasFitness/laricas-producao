@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import ControleEstoque from './Estoque'
 import { CustoPreparacoes, OverheadMensal } from './MatPrimas'
+import SimularCampanha from './SimularCampanha'
 import { RefreshCw, ChevronDown, ChevronUp, Save } from 'lucide-react'
 
 const CANAIS_DEFAULT = [
@@ -1016,6 +1017,7 @@ export default function Precificacao({ sub, onSub }) {
         <button className={`tab${aba==='preparacoes'?' active':''}`} onClick={()=>setAba('preparacoes')}>🧪 Custo de Preparações</button>
         <button className={`tab${aba==='overhead'?' active':''}`} onClick={()=>setAba('overhead')}>🏭 Overhead do Mês</button>
         <button className={`tab${aba==='simular'?' active':''}`} onClick={()=>setAba('simular')}>➕ Criar Produto</button>
+        <button className={`tab${aba==='campanha'?' active':''}`} onClick={()=>setAba('campanha')}>🏷️ Simular Campanha</button>
       </div>
 
       {loading ? (
@@ -1067,6 +1069,8 @@ export default function Precificacao({ sub, onSub }) {
           {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
           {aba==='simular'   && <SimularProduto data={data} incluirOverhead={incluirOverhead} />}
+          {aba==='campanha'  && <SimularCampanha data={data}
+            cmvDe={p => cmvEfetivo(p.cmvTotalReal ?? p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)} />}
           {aba==='estoque'   && <ControleEstoque />}
           {aba==='preparacoes' && <CustoPreparacoes />}
           {aba==='overhead'    && <OverheadMensal />}
