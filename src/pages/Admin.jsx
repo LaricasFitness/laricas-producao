@@ -1169,7 +1169,7 @@ function AdminCanais() {
                   <div>
                     <div style={{ fontWeight:800, fontSize:14 }}>{c.label}</div>
                     <div style={{ fontSize:11, color:'var(--gray-400)' }}>
-                      Total deduções: <strong>{totalDeducoes(c).toFixed(1)}%</strong> · Fixos por pedido: <strong>R$ {totalFixos(c).toFixed(2)}</strong>
+                      Total deduções: <strong>{totalDeducoes(c).toFixed(1)}%</strong> · Fixos por unidade: <strong>R$ {totalFixos(c).toFixed(2)}</strong>
                     </div>
                   </div>
                   {!isEdit ? (
@@ -1214,11 +1214,12 @@ function AdminCanais() {
                     ))}
                   </div>
 
-                  <div style={{ fontSize:11, fontWeight:700, color:'var(--gray-400)', textTransform:'uppercase', marginBottom:8 }}>Custos fixos por pedido (R$)</div>
+                  <div style={{ fontSize:11, fontWeight:700, color:'var(--gray-400)', textTransform:'uppercase', marginBottom:4 }}>Custos fixos por unidade de produto (R$)</div>
+                  <div style={{ fontSize:11, color:'var(--gray-400)', marginBottom:8 }}>Descontados do preço de cada unidade. Para custos do pedido (sacola, frete), divida pela média de itens por pedido do canal.</div>
                   <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom: isEdit?14:0 }}>
                     {[
-                      { k:'custo_embalagem', label:'Embalagem/sacola' },
-                      { k:'custo_frete', label:'Frete médio' },
+                      { k:'custo_embalagem', label:'Embalagem/sacola por unidade' },
+                      { k:'custo_frete', label:'Frete médio por unidade' },
                       { k:'custo_outros', label:'Outros' },
                     ].map(f => (
                       <div key={f.k}>
