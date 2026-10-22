@@ -610,6 +610,7 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
   const [form, setForm] = useState({ ...prep })
   const [mps, setMps] = useState([])
   const [prepsDisponiveis, setPrepsDisponiveis] = useState([])
+  const [novaMP, setNovaMP] = useState(null)   // { idx, nome, unidade, categoria, salvando, erro } — cadastro rápido de MP
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const setIng = (idx, k, v) => setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => n === idx ? { ...i, [k]: v } : i) }))
   const addIng = () => setForm(p => ({ ...p, ingredientes: [...(p.ingredientes||[]), { ingrediente:'', quantidade:'', unidade:'g', materia_prima_id: null, sub_preparacao_id: null }] }))
@@ -632,6 +633,38 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
   const rendLiquido = rendBruto * (1 - perda / 100)
 
   const CATS_MP = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
+
+  // Cadastro rápido de matéria-prima a partir do ingrediente (mesmos campos de Estoque › Nova MP).
+  // O custo vem da primeira compra lançada; até lá a MP entra com custo zero.
+  function abrirNovaMP(idx) {
+    const ing = form.ingredientes[idx]
+    setNovaMP({ idx, nome: (ing.ingrediente || '').trim(), unidade: ['g','ml','un'].includes(ing.unidade) ? ing.unidade : 'g', categoria: 'Outros', salvando: false, erro: '' })
+  }
+  async function criarMP() {
+    const nome = novaMP.nome.trim()
+    if (!nome) { setNovaMP(p => ({ ...p, erro: 'Informe o nome.' })); return }
+    const existente = mps.find(m => m.nome.trim().toLowerCase() === nome.toLowerCase())
+    if (existente) { setIng(novaMP.idx, 'materia_prima_id', existente.id); setNovaMP(null); return }  // já existia: só vincula
+    setNovaMP(p => ({ ...p, salvando: true, erro: '' }))
+    const { data: mp, error } = await supabase.from('materias_primas')
+      .insert({ nome, categoria: novaMP.categoria, unidade: novaMP.unidade, estoque_minimo: 0, atualizado_em: new Date().toISOString() })
+      .select('id,nome,unidade,categoria').single()
+    if (error) { setNovaMP(p => ({ ...p, salvando: false, erro: 'Erro ao cadastrar: ' + error.message })); return }
+    setMps(p => [...p, mp].sort((a, b) => a.nome.localeCompare(b.nome)))
+    setIng(novaMP.idx, 'materia_prima_id', mp.id)
+    setNovaMP(null)
+  }
+
+  // Ingrediente sem vínculo não entra no custo nem baixa estoque: avisa antes de salvar
+  function salvarComAviso() {
+    const soltos = (form.ingredientes || []).filter(i => i.ingrediente?.trim() &&
+      (i.sub_preparacao_id === '' || (i.sub_preparacao_id == null && !i.materia_prima_id)))
+    const lista = soltos.map(i => '• ' + i.ingrediente.trim()).join('\n')
+    if (soltos.length && !window.confirm(
+      'Sem vínculo com matéria-prima ou sub-preparação:\n\n' + lista + '\n\n' +
+      'Esses ingredientes NÃO entram no custo da preparação e NÃO baixam estoque na produção.\n\nSalvar mesmo assim?')) return
+    onSalvar({ ...form, rendimento_estimado: rendBruto })
+  }
 
   return (
     <div className="modal-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
@@ -766,7 +799,34 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                           )
                         })}
                       </select>
-                      {ing.materia_prima_id && <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>}
+                      {ing.materia_prima_id
+                        ? <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>
+                        : <button type="button" className="btn btn-ghost btn-xs" style={{ color:'var(--purple)', whiteSpace:'nowrap' }}
+                            onClick={() => abrirNovaMP(idx)} title="Cadastrar esta matéria-prima e vincular">+ Nova MP</button>}
+                    </div>
+                  )}
+                  {/* Cadastro rápido de MP para este ingrediente */}
+                  {novaMP?.idx === idx && (
+                    <div style={{ marginTop:8, padding:10, borderRadius:8, background:'var(--purple-ghost)', border:'1px solid var(--purple-pale)', display:'flex', flexDirection:'column', gap:8 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:'var(--purple)' }}>Nova matéria-prima</div>
+                      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                        <input className="form-input" placeholder="Nome da matéria-prima" value={novaMP.nome} autoFocus
+                          onChange={e => setNovaMP(p => ({ ...p, nome: e.target.value }))} style={{ flex:'2 1 180px', fontSize:13 }} />
+                        <select className="form-input" value={novaMP.unidade} onChange={e => setNovaMP(p => ({ ...p, unidade: e.target.value }))} style={{ flex:'0 1 110px', fontSize:13 }}>
+                          <option value="g">gramas (g)</option><option value="ml">mililitros (ml)</option><option value="un">unidades (un)</option>
+                        </select>
+                        <select className="form-input" value={novaMP.categoria} onChange={e => setNovaMP(p => ({ ...p, categoria: e.target.value }))} style={{ flex:'1 1 130px', fontSize:13 }}>
+                          {CATS_MP.map(c => <option key={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      <div style={{ fontSize:11, color:'var(--gray-500)' }}>O custo vem da primeira compra lançada (Estoque › Compras). Até lá, entra com custo zero.</div>
+                      {novaMP.erro && <div style={{ fontSize:12, color:'var(--danger)' }}>{novaMP.erro}</div>}
+                      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setNovaMP(null)}>Cancelar</button>
+                        <button type="button" className="btn btn-primary btn-sm" onClick={criarMP} disabled={novaMP.salvando}>
+                          {novaMP.salvando ? <RefreshCw size={13} className="spin" /> : <Plus size={13} />} Cadastrar e vincular
+                        </button>
+                      </div>
                     </div>
                   )}
                   {/* Vínculo com Sub-preparação */}
@@ -800,7 +860,7 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" disabled={salvando || !form.nome || !form.codigo} onClick={() => onSalvar({ ...form, rendimento_estimado: rendBruto })}>
+          <button className="btn btn-primary" disabled={salvando || !form.nome || !form.codigo} onClick={salvarComAviso}>
             {salvando ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Salvar</>}
           </button>
         </div>
