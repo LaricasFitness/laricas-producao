@@ -634,6 +634,23 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
 
   const CATS_MP = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 
+  // Nome do ingrediente = busca de MP: digitar/escolher um nome igual ao de uma MP
+  // cadastrada já vincula (e traz a unidade dela). Texto que não bate com nenhuma
+  // desfaz o vínculo só quando o nome anterior era o da própria MP — assim nomes
+  // personalizados de fichas antigas continuam vinculados.
+  const normaliza = t => (t || '').trim().toLowerCase()
+  function digitarIngrediente(idx, valor) {
+    setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => {
+      if (n !== idx) return i
+      if (i.sub_preparacao_id != null) return { ...i, ingrediente: valor }
+      const mp = mps.find(m => normaliza(m.nome) === normaliza(valor))
+      if (mp) return { ...i, ingrediente: valor, materia_prima_id: mp.id, unidade: ['g','ml','un'].includes(mp.unidade) ? mp.unidade : i.unidade }
+      const atual = mps.find(m => m.id === i.materia_prima_id)
+      const eraNomeDaMP = atual && normaliza(atual.nome) === normaliza(i.ingrediente)
+      return { ...i, ingrediente: valor, materia_prima_id: eraNomeDaMP ? null : i.materia_prima_id }
+    }) }))
+  }
+
   // Cadastro rápido de matéria-prima a partir do ingrediente (mesmos campos de Estoque › Nova MP).
   // O custo vem da primeira compra lançada; até lá a MP entra com custo zero.
   function abrirNovaMP(idx) {
@@ -644,14 +661,15 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
     const nome = novaMP.nome.trim()
     if (!nome) { setNovaMP(p => ({ ...p, erro: 'Informe o nome.' })); return }
     const existente = mps.find(m => m.nome.trim().toLowerCase() === nome.toLowerCase())
-    if (existente) { setIng(novaMP.idx, 'materia_prima_id', existente.id); setNovaMP(null); return }  // já existia: só vincula
+    if (existente) { digitarIngrediente(novaMP.idx, existente.nome); setNovaMP(null); return }  // já existia: só vincula
     setNovaMP(p => ({ ...p, salvando: true, erro: '' }))
     const { data: mp, error } = await supabase.from('materias_primas')
       .insert({ nome, categoria: novaMP.categoria, unidade: novaMP.unidade, estoque_minimo: 0, atualizado_em: new Date().toISOString() })
       .select('id,nome,unidade,categoria').single()
     if (error) { setNovaMP(p => ({ ...p, salvando: false, erro: 'Erro ao cadastrar: ' + error.message })); return }
     setMps(p => [...p, mp].sort((a, b) => a.nome.localeCompare(b.nome)))
-    setIng(novaMP.idx, 'materia_prima_id', mp.id)
+    setForm(p => ({ ...p, ingredientes: p.ingredientes.map((i, n) => n === novaMP.idx
+      ? { ...i, ingrediente: mp.nome, materia_prima_id: mp.id, unidade: mp.unidade } : i) }))
     setNovaMP(null)
   }
 
@@ -743,14 +761,19 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                 Nenhum ingrediente cadastrado ainda — o rendimento bruto será 0
               </div>
             )}
+            <datalist id="lista-mps">
+              {mps.map(m => <option key={m.id} value={m.nome}>{m.categoria} · {m.unidade}</option>)}
+            </datalist>
             {(form.ingredientes||[]).map((ing, idx) => {
               const mpVinculada = mps.find(m => m.id === ing.materia_prima_id)
-              const isSubPrep = !!ing.sub_preparacao_id
+              const isSubPrep = ing.sub_preparacao_id != null   // '' = modo sub-preparação, ainda sem escolher
               return (
                 <div key={idx} style={{ marginBottom:8, border:'1px solid var(--gray-100)', borderRadius:6, padding:'8px 10px',
                   background: ing.sub_preparacao_id ? '#f0f0ff' : ing.materia_prima_id ? '#f0faf0' : '#fff' }}>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 60px auto', gap:6, marginBottom:6, alignItems:'center' }}>
-                    <input className="form-input" placeholder="Nome do ingrediente" value={ing.ingrediente||''} onChange={e => setIng(idx,'ingrediente',e.target.value)} style={{ fontSize:13 }} />
+                    <input className="form-input" list={isSubPrep ? undefined : 'lista-mps'} autoComplete="off"
+                      placeholder={isSubPrep ? 'Nome (opcional)' : 'Digite para buscar a matéria-prima…'}
+                      value={ing.ingrediente||''} onChange={e => digitarIngrediente(idx, e.target.value)} style={{ fontSize:13 }} />
                     <input type="number" className="form-input" placeholder="Qtd" value={ing.quantidade||''} onChange={e => setIng(idx,'quantidade',e.target.value)} style={{ fontSize:13 }} />
                     <select className="form-input" value={ing.unidade||'g'} onChange={e => setIng(idx,'unidade',e.target.value)} style={{ fontSize:13 }}>
                       <option value="g">g</option>
@@ -778,31 +801,18 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                       🧪 Sub-preparação
                     </button>
                   </div>
-                  {/* Vínculo com MP */}
+                  {/* Situação do vínculo com MP */}
                   {!isSubPrep && (
-                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                      <span style={{ fontSize:11, color:'var(--gray-400)', whiteSpace:'nowrap' }}>🔗 MP:</span>
-                      <select
-                        value={ing.materia_prima_id||''}
-                        onChange={e => setIng(idx,'materia_prima_id', e.target.value || null)}
-                        style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--gray-200)', borderRadius:5, outline:'none',
-                          background: ing.materia_prima_id ? '#f0faf0' : 'transparent',
-                          color: ing.materia_prima_id ? 'var(--ok)' : 'var(--gray-400)' }}>
-                        <option value="">— Sem vínculo de matéria-prima —</option>
-                        {CATS_MP.map(cat => {
-                          const grupo = mps.filter(m => m.categoria === cat)
-                          if (!grupo.length) return null
-                          return (
-                            <optgroup key={cat} label={cat}>
-                              {grupo.map(m => <option key={m.id} value={m.id}>{m.nome} ({m.unidade})</option>)}
-                            </optgroup>
-                          )
-                        })}
-                      </select>
-                      {ing.materia_prima_id
-                        ? <span style={{ fontSize:10, color:'var(--ok)', whiteSpace:'nowrap' }}>✓ vinculado</span>
-                        : <button type="button" className="btn btn-ghost btn-xs" style={{ color:'var(--purple)', whiteSpace:'nowrap' }}
-                            onClick={() => abrirNovaMP(idx)} title="Cadastrar esta matéria-prima e vincular">+ Nova MP</button>}
+                    <div style={{ display:'flex', alignItems:'center', gap:6, minHeight:24, fontSize:11 }}>
+                      {mpVinculada ? (
+                        <span style={{ color:'var(--ok)' }}>✓ vinculado a <b>{mpVinculada.nome}</b> ({mpVinculada.unidade})</span>
+                      ) : (ing.ingrediente||'').trim() ? (<>
+                        <span style={{ color:'var(--warning)' }}>Sem matéria-prima com esse nome — escolha uma da lista ou</span>
+                        <button type="button" className="btn btn-ghost btn-xs" style={{ color:'var(--purple)', whiteSpace:'nowrap' }}
+                          onClick={() => abrirNovaMP(idx)} title="Cadastrar esta matéria-prima e vincular">+ Nova MP</button>
+                      </>) : (
+                        <span style={{ color:'var(--gray-400)' }}>Comece a digitar e escolha a matéria-prima na lista</span>
+                      )}
                     </div>
                   )}
                   {/* Cadastro rápido de MP para este ingrediente */}
@@ -835,7 +845,12 @@ function ModalPreparacao({ prep, onClose, onSalvar, salvando, TIPOS, TIPO_LABEL 
                       <span style={{ fontSize:11, color:'var(--purple)', whiteSpace:'nowrap' }}>🧪 Prep:</span>
                       <select
                         value={ing.sub_preparacao_id||''}
-                        onChange={e => setIng(idx,'sub_preparacao_id', e.target.value || null)}
+                        onChange={e => {
+                          const id = e.target.value
+                          setIng(idx,'sub_preparacao_id', id)
+                          const prep = prepsDisponiveis.find(p => p.id === id)
+                          if (prep && !(ing.ingrediente||'').trim()) setIng(idx,'ingrediente', prep.nome)
+                        }}
                         style={{ flex:1, fontSize:11, padding:'3px 6px', border:'1px solid var(--purple)', borderRadius:5, outline:'none',
                           background: ing.sub_preparacao_id ? '#f0f0ff' : 'transparent',
                           color: ing.sub_preparacao_id ? 'var(--purple)' : 'var(--gray-400)' }}>
