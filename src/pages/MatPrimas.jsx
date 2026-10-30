@@ -1818,10 +1818,28 @@ export function EvolucaoPrecos() {
   const [mps, setMps] = useState([])
   const [compras, setCompras] = useState([])
   const [loading, setLoading] = useState(true)
-  const [mpSel, setMpSel] = useState('todas')
+  const [busca, setBusca] = useState('')
   const [catFiltro, setCatFiltro] = useState('Todas')
   const [alertasOnly, setAlertasOnly] = useState(false)
   const [compraSel, setCompraSel] = useState(null)
+  const [verTodas, setVerTodas] = useState({})   // mp.id → mostra todas as compras na tabela
+  const [escala, setEscala] = useState(() => {   // 'grande' = kg/L, 'cem' = 100 g/ml, 'base' = g/ml
+    try { return localStorage.getItem('precos_escala') || 'grande' } catch { return 'grande' }
+  })
+  function mudarEscala(v) {
+    setEscala(v)
+    try { localStorage.setItem('precos_escala', v) } catch { /* só preferência do aparelho */ }
+  }
+
+  // Preço guardado por g/ml/un → na escala escolhida (un fica sempre por unidade)
+  function naEscala(mp) {
+    const base = mp.unidade
+    if (base !== 'g' && base !== 'ml') return { f: 1, un: base, dec: 2 }
+    if (escala === 'base') return { f: 1, un: base, dec: 4 }
+    if (escala === 'cem') return { f: 100, un: `100 ${base}`, dec: 2 }
+    return { f: 1000, un: base === 'g' ? 'kg' : 'L', dec: 2 }
+  }
+  const precoFmt = (valor, mp) => { const e = naEscala(mp); return `R$ ${fmt(valor * e.f, e.dec)}` }
 
   async function load() {
     setLoading(true)
@@ -1877,11 +1895,11 @@ export function EvolucaoPrecos() {
   }
 
   // Filtra MPs
+  const semAcento = t => (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
   const cats = ['Todas', ...new Set(mps.map(m=>m.categoria))]
   let mpsFiltradas = mps.filter(m => {
     const matchCat = catFiltro==='Todas' || m.categoria===catFiltro
-    const matchSel = mpSel==='todas' || m.id===mpSel
-    if (!matchCat || !matchSel) return false
+    if (!matchCat || !semAcento(m.nome).includes(semAcento(busca))) return false
     if (alertasOnly) {
       const ult = ultimaCompra(m.id)
       const pm = pm60(m.id)
@@ -1937,15 +1955,18 @@ export function EvolucaoPrecos() {
 
       {/* Filtros */}
       <div className="card" style={{padding:'12px 20px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <input className="form-input" placeholder="Buscar insumo..." value={busca} onChange={e=>setBusca(e.target.value)} style={{flex:'1 1 220px',fontSize:13}} />
         <select className="form-input" value={catFiltro} onChange={e=>setCatFiltro(e.target.value)} style={{width:160,fontSize:13}}>
           {cats.map(c=><option key={c}>{c}</option>)}
         </select>
-        <select className="form-input" value={mpSel} onChange={e=>setMpSel(e.target.value)} style={{width:240,fontSize:13}}>
-          <option value="todas">Todos os insumos</option>
-          {mps.filter(m=>catFiltro==='Todas'||m.categoria===catFiltro).map(m=>(
-            <option key={m.id} value={m.id}>{m.nome}</option>
-          ))}
-        </select>
+        <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--gray-500)',whiteSpace:'nowrap'}}>
+          Ver preço por
+          <select className="form-input" value={escala} onChange={e=>mudarEscala(e.target.value)} style={{width:130,fontSize:13}}>
+            <option value="grande">kg / L</option>
+            <option value="cem">100 g / 100 ml</option>
+            <option value="base">g / ml</option>
+          </select>
+        </label>
         <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer',fontWeight:600,color:'var(--danger)'}}>
           <input type="checkbox" checked={alertasOnly} onChange={e=>setAlertasOnly(e.target.checked)} style={{accentColor:'var(--danger)'}}/>
           Apenas alertas 🚨
@@ -1958,7 +1979,8 @@ export function EvolucaoPrecos() {
       {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
         mpsFiltradas.length === 0 ? (
           <div className="card card-pad" style={{textAlign:'center',color:'var(--gray-300)'}}>
-            {alertasOnly ? 'Nenhum insumo com preço acima do PM nos últimos 60 dias' : 'Nenhum insumo com histórico de compras ainda'}
+            {alertasOnly ? 'Nenhum insumo com preço acima do PM nos últimos 60 dias'
+              : busca ? 'Nenhuma compra encontrada para essa busca' : 'Nenhum insumo com histórico de compras ainda'}
           </div>
         ) : (
           mpsFiltradas.map(mp => {
@@ -1972,6 +1994,9 @@ export function EvolucaoPrecos() {
 
             // Mini gráfico de barras com histórico
             const maxCusto = Math.max(...hist.map(c=>parseFloat(c.custo_unitario)||0))
+            const e = naEscala(mp)
+            const recentes = [...hist].reverse()
+            const linhasCompra = verTodas[mp.id] ? recentes : recentes.slice(0, 5)
 
             return (
               <div key={mp.id} className="card" style={{border: fInfo ? `2px solid ${fInfo.cor}` : undefined}}>
@@ -1985,13 +2010,13 @@ export function EvolucaoPrecos() {
                     {pm && (
                       <div style={{textAlign:'right'}}>
                         <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>PM 60 dias</div>
-                        <div style={{fontSize:16,fontWeight:800,color:'var(--gray-700)'}}>{fmtR(pm)}<span style={{fontSize:11}}>/{ mp.unidade}</span></div>
+                        <div style={{fontSize:16,fontWeight:800,color:'var(--gray-700)'}}>{precoFmt(pm, mp)}<span style={{fontSize:11}}>/{e.un}</span></div>
                       </div>
                     )}
                     {ultCusto && (
                       <div style={{textAlign:'right'}}>
                         <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Última compra</div>
-                        <div style={{fontSize:16,fontWeight:800,color:fInfo?.cor||'var(--gray-700)'}}>{fmtR(ultCusto)}<span style={{fontSize:11}}>/{mp.unidade}</span></div>
+                        <div style={{fontSize:16,fontWeight:800,color:fInfo?.cor||'var(--gray-700)'}}>{precoFmt(ultCusto, mp)}<span style={{fontSize:11}}>/{e.un}</span></div>
                       </div>
                     )}
                     {fInfo && (
@@ -2026,7 +2051,7 @@ export function EvolucaoPrecos() {
                           onMouseEnter={e => e.currentTarget.style.background = 'var(--purple-pale)'}
                           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                           <div style={{fontSize:9,color:'var(--gray-500)',marginBottom:2,fontWeight:isUlt?700:400}}>
-                            {fmtR(custo)}
+                            {precoFmt(custo, mp)}
                           </div>
                           <div style={{
                             width:36, height: Math.max(8, altPct*0.8),
@@ -2052,13 +2077,13 @@ export function EvolucaoPrecos() {
                   {pm && (
                     <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
                       <div style={{fontSize:11,padding:'3px 10px',background:'#e6f9f0',borderRadius:12,color:'#0a7c4e',fontWeight:700}}>
-                        💚 Econômico: abaixo de {fmtR(pm*0.95)}/{mp.unidade}
+                        💚 Econômico: abaixo de {precoFmt(pm*0.95, mp)}/{e.un}
                       </div>
                       <div style={{fontSize:11,padding:'3px 10px',background:'#f0faf0',borderRadius:12,color:'var(--ok)',fontWeight:700}}>
-                        ✅ Ideal: {fmtR(pm*0.95)} – {fmtR(pm*1.05)}/{mp.unidade}
+                        ✅ Ideal: {precoFmt(pm*0.95, mp)} – {precoFmt(pm*1.05, mp)}/{e.un}
                       </div>
                       <div style={{fontSize:11,padding:'3px 10px',background:'#fff0f0',borderRadius:12,color:'var(--danger)',fontWeight:700}}>
-                        🚨 Caro: acima de {fmtR(pm*1.05)}/{mp.unidade}
+                        🚨 Caro: acima de {precoFmt(pm*1.05, mp)}/{e.un}
                       </div>
                     </div>
                   )}
@@ -2066,6 +2091,53 @@ export function EvolucaoPrecos() {
                     <div style={{fontSize:11,color:'var(--gray-300)',fontStyle:'italic',marginTop:6}}>
                       Sem compras nos últimos 60 dias para calcular PM de referência
                     </div>
+                  )}
+
+                  {/* Últimas compras */}
+                  <div style={{fontSize:11,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase',margin:'14px 0 6px'}}>
+                    Últimas compras
+                  </div>
+                  <div className="tbl-wrap">
+                    <table style={{fontSize:12}}>
+                      <thead><tr>
+                        <th>Data</th>
+                        <th>Fornecedor</th>
+                        <th>NF</th>
+                        <th style={{textAlign:'right'}}>Quantidade</th>
+                        <th style={{textAlign:'right'}}>Preço / {e.un}</th>
+                        <th style={{textAlign:'right'}}>Total</th>
+                      </tr></thead>
+                      <tbody>
+                        {linhasCompra.map(c => {
+                          const qCompra = parseFloat(c.qtd_compra) || 0
+                          const emb = ehEmbalagem(c.unidade_compra) && c.unidade_compra && qCompra > 0
+                          return (
+                            <tr key={c.id} onClick={() => setCompraSel(c)} style={{cursor:'pointer'}} title="Clique para ver detalhes e editar">
+                              <td style={{whiteSpace:'nowrap'}}>{new Date(c.data_compra+'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                              <td style={{color:'var(--gray-500)'}}>{c.fornecedor||'—'}</td>
+                              <td style={{color:'var(--gray-400)'}}>{c.numero_nf||'—'}</td>
+                              <td style={{textAlign:'right'}}>
+                                {e.f > 1
+                                  ? `${fmt((parseFloat(c.quantidade)||0) / 1000, 2)} ${mp.unidade === 'g' ? 'kg' : 'L'}`
+                                  : `${fmt(c.quantidade, parseFloat(c.quantidade) % 1 ? 1 : 0)} ${mp.unidade}`}
+                                {emb && <div style={{fontSize:10,color:'var(--gray-400)'}}>{descreverEntrada(c, mp.unidade)}</div>}
+                              </td>
+                              <td style={{textAlign:'right',fontWeight:700,color:'var(--purple)'}}>
+                                {precoFmt(parseFloat(c.custo_unitario)||0, mp)}
+                                {emb && <div style={{fontSize:10,fontWeight:400,color:'var(--gray-400)'}}>{fmtR(parseFloat(c.custo_total)/qCompra)}/{c.unidade_compra}</div>}
+                              </td>
+                              <td style={{textAlign:'right',fontWeight:600}}>{fmtR(c.custo_total)}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {recentes.length > 5 && (
+                    <button className="btn btn-ghost btn-xs" style={{marginTop:6}}
+                      onClick={() => setVerTodas(p => ({ ...p, [mp.id]: !p[mp.id] }))}>
+                      {verTodas[mp.id] ? 'Ver só as 5 últimas' : `Ver todas as ${recentes.length} compras`}
+                    </button>
                   )}
                 </div>
               </div>
