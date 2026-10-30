@@ -4,6 +4,7 @@ import { Plus, RefreshCw, Save, Pencil, Upload, FileText } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { mesFechado, avisoMesFechado } from '../lib/cmv'
+import { perguntar } from '../lib/perguntar'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -46,26 +47,58 @@ async function recalcularCustoMP(mpId) {
   return preco
 }
 
-// Data da última contagem física da MP (conferência ou inventário), ou null
+// Última contagem física da MP (conferência ou inventário): { data, ts }, ou null
 async function ultimaContagemMP(mpId) {
   if (!mpId) return null
   const [{ data: c }, { data: i }] = await Promise.all([
-    supabase.from('conferencia_mp').select('data_conferencia').eq('materia_prima_id', mpId)
-      .order('data_conferencia', { ascending: false }).limit(1),
-    supabase.from('mp_inventarios').select('data_inventario').eq('materia_prima_id', mpId)
-      .order('data_inventario', { ascending: false }).limit(1),
+    supabase.from('conferencia_mp').select('data_conferencia, criado_em').eq('materia_prima_id', mpId)
+      .order('criado_em', { ascending: false }).limit(1),
+    supabase.from('mp_inventarios').select('data_inventario, criado_em').eq('materia_prima_id', mpId)
+      .order('criado_em', { ascending: false }).limit(1),
   ])
-  const datas = [c?.[0]?.data_conferencia, i?.[0]?.data_inventario].filter(Boolean).sort()
-  return datas.length ? datas[datas.length - 1] : null
+  const opcoes = [
+    c?.[0] && { data: c[0].data_conferencia, ts: c[0].criado_em },
+    i?.[0] && { data: i[0].data_inventario, ts: i[0].criado_em },
+  ].filter(Boolean).sort((a, b) => new Date(b.ts) - new Date(a.ts))
+  return opcoes[0] || null
 }
 
-// Quanto uma compra mexe no saldo: compra com data igual ou anterior à
-// última contagem já está refletida no número contado — somar (ou tirar,
-// ao excluir/editar) de novo distorceria o estoque.
-async function efeitoNoSaldo(mpId, qtd, dataCompra) {
-  const cont = await ultimaContagemMP(mpId)
-  return cont && dataCompra && dataCompra <= cont ? 0 : qtd
+// Quanto de uma compra lançada ainda está no saldo. A data da NF não diz quando a
+// mercadoria chegou, então o critério é o MOMENTO do lançamento: compra lançada antes
+// da última contagem foi absorvida por ela (o saldo virou o número contado).
+async function parcelaNoSaldo(compra) {
+  if (compra.entrou_no_saldo === false) return 0
+  const cont = await ultimaContagemMP(compra.materia_prima_id)
+  if (cont && new Date(compra.criado_em) <= new Date(cont.ts)) return 0
+  return parseFloat(compra.quantidade) || 0
 }
+
+// NF com data igual ou anterior à última contagem: só quem recebeu sabe se a mercadoria
+// já estava lá. Devolve o conjunto de MPs que NÃO somam ao saldo, ou null para voltar.
+async function perguntarSeJaContada(itens, dataCompra) {
+  const pendentes = []
+  for (const it of itens) {
+    const cont = await ultimaContagemMP(it.mp_id)
+    if (cont && dataCompra <= cont.data) pendentes.push({ ...it, contagem: cont.data })
+  }
+  if (!pendentes.length) return new Set()
+  const br = d => new Date(d + 'T12:00:00').toLocaleDateString('pt-BR')
+  const resp = await perguntar({
+    titulo: 'Essa mercadoria já tinha sido contada?',
+    texto: `A nota é de ${br(dataCompra)}, mas houve contagem física nesse dia ou depois. Quando contaram, esta mercadoria já estava no estoque?`,
+    itens: pendentes.map(p => `${p.nome} (contagem de ${br(p.contagem)})`),
+    opcoes: [
+      { valor: 'depois', rotulo: 'Não, chegou depois da contagem — somar ao estoque', classe: 'btn-primary' },
+      { valor: 'contada', rotulo: 'Sim, já estava na contagem — não somar' },
+      { valor: null, rotulo: 'Voltar' },
+    ],
+  })
+  if (resp === null) return null
+  return new Set(resp === 'contada' ? pendentes.map(p => p.mp_id) : [])
+}
+
+// Número da NF sem pontuação nem zeros à esquerda (000.074.478 = 74478)
+const nfNormal = n => String(n || '').replace(/\D/g, '').replace(/^0+/, '')
 
 // Avisa se a mesma MP + NF + quantidade já foi lançada. true = pode seguir
 async function confirmarSemDuplicata(itens) {
@@ -73,19 +106,17 @@ async function confirmarSemDuplicata(itens) {
   for (const it of itens) {
     if (!it.mp_id || !it.numero_nf) continue
     const { data } = await supabase.from('mp_compras')
-      .select('id, data_compra, criado_em, materias_primas(nome)')
-      .eq('materia_prima_id', it.mp_id).eq('numero_nf', it.numero_nf).eq('quantidade', it.quantidade)
-      .limit(1)
-    if (data?.length) dup.push(`• ${data[0].materias_primas?.nome} — NF ${it.numero_nf}, lançada em ${new Date(data[0].criado_em).toLocaleDateString('pt-BR')}`)
+      .select('id, numero_nf, data_compra, criado_em, materias_primas(nome)')
+      .eq('materia_prima_id', it.mp_id).eq('quantidade', it.quantidade)
+    const achada = (data || []).find(c => nfNormal(c.numero_nf) === nfNormal(it.numero_nf))
+    if (achada) dup.push(`• ${achada.materias_primas?.nome} — NF ${it.numero_nf}, data ${new Date(achada.data_compra + 'T12:00:00').toLocaleDateString('pt-BR')}, lançada em ${new Date(achada.criado_em).toLocaleDateString('pt-BR')}`)
   }
   if (!dup.length) return true
   return window.confirm(`Estas compras já foram lançadas com a mesma NF e quantidade:\n\n${dup.join('\n')}\n\nLançar de novo mesmo assim?`)
 }
 
 // Soma (ou subtrai) quantidade no estoque da MP.
-// Com dataCompra, respeita a última contagem (ver efeitoNoSaldo).
-async function ajustarEstoqueCompra(mpId, delta, dataCompra = null) {
-  if (dataCompra) delta = await efeitoNoSaldo(mpId, delta, dataCompra)
+async function ajustarEstoqueCompra(mpId, delta) {
   if (!mpId || !delta) return
   const { data: mp } = await supabase.from('materias_primas')
     .select('estoque_atual').eq('id', mpId).single()
@@ -232,8 +263,9 @@ const entradaVazia = base => ({ qtd: '', unidade: base || 'g', conteudo: '', uni
 
 // Exclui uma compra revertendo estoque e recalculando o preço
 async function excluirCompraMP(compra) {
+  const parcela = await parcelaNoSaldo(compra)
   await supabase.from('mp_compras').delete().eq('id', compra.id)
-  await ajustarEstoqueCompra(compra.materia_prima_id, -(parseFloat(compra.quantidade) || 0), compra.data_compra)
+  await ajustarEstoqueCompra(compra.materia_prima_id, -parcela)
   await recalcularCustoMP(compra.materia_prima_id)
 }
 
@@ -556,9 +588,12 @@ function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
     if (!await confirmarSemDuplicata(validos.map(([, v]) => ({
       mp_id: v.mp_id, numero_nf: nf.numero, quantidade: converterParaBase(v.entrada, baseDe(v.mp_id)),
     })))) return
+    const dataCompra = nf.data_emissao || new Date().toISOString().slice(0,10)
+    const foraDoSaldo = await perguntarSeJaContada(
+      validos.map(([, v]) => ({ mp_id: v.mp_id, nome: mps.find(m => m.id === v.mp_id)?.nome })), dataCompra)
+    if (!foraDoSaldo) return
     setSaving(true)
     try {
-      const dataCompra = nf.data_emissao || new Date().toISOString().slice(0,10)
       for (const [idx, v] of validos) {
         const item = nf.itens[parseInt(idx)]
         const qtd = converterParaBase(v.entrada, baseDe(v.mp_id))
@@ -571,9 +606,10 @@ function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
           numero_nf: nf.numero || null,
           observacao: `${item.descricao} — ${foto ? 'lido da foto da NF' : 'importado via XML'}`,
           ...camposEntrada(v.entrada),
+          ...(foraDoSaldo.has(v.mp_id) ? { entrou_no_saldo: false } : {}),
         })
         // Mesma regra de todos os outros lançamentos
-        await ajustarEstoqueCompra(v.mp_id, qtd, dataCompra)
+        if (!foraDoSaldo.has(v.mp_id)) await ajustarEstoqueCompra(v.mp_id, qtd)
         await recalcularCustoMP(v.mp_id)
       }
       await salvarVinculosNF(nf, validos.map(([idx, v]) => ({ ...v, descricao: nf.itens[parseInt(idx)].descricao })))
@@ -890,6 +926,8 @@ function ModalCompra({ mp, onClose, onSaved }) {
   async function salvar() {
     if (!valido) return
     if (!await confirmarSemDuplicata([{ mp_id: mp.id, numero_nf: form.numero_nf, quantidade: qtdBase }])) return
+    const foraDoSaldo = await perguntarSeJaContada([{ mp_id: mp.id, nome: mp.nome }], form.data_compra)
+    if (!foraDoSaldo) return
     setSaving(true)
     const qtd = qtdBase
     const custo = custoTotal
@@ -904,9 +942,10 @@ function ModalCompra({ mp, onClose, onSaved }) {
       numero_nf: form.numero_nf || null,
       observacao: form.observacao || null,
       ...camposEntrada(entrada),
+      ...(foraDoSaldo.has(mp.id) ? { entrou_no_saldo: false } : {}),
     })
 
-    await ajustarEstoqueCompra(mp.id, qtd, form.data_compra)
+    if (!foraDoSaldo.has(mp.id)) await ajustarEstoqueCompra(mp.id, qtd)
     await recalcularCustoMP(mp.id)
     setSaving(false)
     onSaved()
@@ -1274,6 +1313,9 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
     if (!await confirmarSemDuplicata(validos.map(it => ({
       mp_id: it.mp_id, numero_nf: form.numero_nf, quantidade: converterParaBase(it.entrada, baseDe(it)),
     })))) return
+    const foraDoSaldo = await perguntarSeJaContada(
+      validos.map(it => ({ mp_id: it.mp_id, nome: mps.find(m => m.id === it.mp_id)?.nome })), form.data_compra)
+    if (!foraDoSaldo) return
     setSaving(true)
     for (const it of validos) {
       const qtd = converterParaBase(it.entrada, baseDe(it))
@@ -1288,8 +1330,9 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         numero_nf: form.numero_nf||null,
         observacao: form.observacao||null,
         ...camposEntrada(it.entrada),
+        ...(foraDoSaldo.has(it.mp_id) ? { entrou_no_saldo: false } : {}),
       })
-      await ajustarEstoqueCompra(it.mp_id, qtd, form.data_compra)
+      if (!foraDoSaldo.has(it.mp_id)) await ajustarEstoqueCompra(it.mp_id, qtd)
       await recalcularCustoMP(it.mp_id)
     }
     setSaving(false)
@@ -1471,10 +1514,10 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
       //    quando parte da MP já foi consumida — o piso em zero do primeiro
       //    passo descarta estoque e o segundo não o recupera.
       //    Troca de MP: cada uma recebe seu próprio ajuste.
-      //    Lado anterior ou posterior à última contagem não mexe no saldo
-      //    (a contagem já reflete o físico) — ver efeitoNoSaldo.
-      const efAntigo = await efeitoNoSaldo(mpAntigo, qtdAnterior, compra.data_compra)
-      const efNovo = await efeitoNoSaldo(mpNovo, qtdNova, form.data_compra)
+      //    Compra já absorvida por uma contagem, ou que não somou, não mexe no
+      //    saldo: a contagem é que reflete o físico — ver parcelaNoSaldo.
+      const efAntigo = await parcelaNoSaldo(compra)
+      const efNovo = efAntigo > 0 ? qtdNova : 0
       if (trocouProduto) {
         await ajustarEstoqueCompra(mpAntigo, -efAntigo)
         await ajustarEstoqueCompra(mpNovo, efNovo)
@@ -1495,7 +1538,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 
   async function excluir() {
     if (await mesFechado(compra.data_compra)) { alert(avisoMesFechado(compra.data_compra)); return }
-    if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
+    if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra tiver sido lançada depois da última contagem física.`)) return
     setSaving(true)
     await excluirCompraMP(compra)
     setSaving(false)
@@ -1657,7 +1700,7 @@ export function HistoricoCompras() {
 
   async function excluirCompra(c) {
     if (await mesFechado(c.data_compra)) { alert(avisoMesFechado(c.data_compra)); return }
-    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra for posterior à última contagem física.`)) return
+    if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra tiver sido lançada depois da última contagem física.`)) return
     await excluirCompraMP(c)
     load()
   }

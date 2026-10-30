@@ -132,6 +132,11 @@ desperdício, rendimento pior que o cadastrado ou lançamento faltando.
 Pode ficar **negativo** de propósito: negativo sinaliza compra não lançada ou
 consumo a maior. Truncar em zero apagaria o rombo — foi um bug real.
 
+A **data da NF não diz quando a mercadoria chegou**. Compra com data igual ou
+anterior à última contagem pergunta se já estava contada; a resposta fica em
+`mp_compras.entrou_no_saldo`. Ao excluir ou editar, vale o momento do
+lançamento: compra lançada antes da contagem já foi absorvida por ela.
+
 **Embalagem** não guarda saldo. É recalculado por `calcularEstoqueCronologico()`
 a partir do último inventário, somando `recebimento_itens` e subtraindo
 `producao_diaria`. O campo `estoque_atual` de embalagens existe mas não é a

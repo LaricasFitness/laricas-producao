@@ -100,7 +100,7 @@ export async function carregarBase(ate) {
     buscarTudo(() => supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,ativo').order('id')),
     buscarTudo(() => supabase.from('conferencia_mp').select('materia_prima_id,data_conferencia,estoque_contado,criado_em').order('id')),
     buscarTudo(() => supabase.from('mp_inventarios').select('materia_prima_id,data_inventario,quantidade,criado_em').order('id')),
-    buscarTudo(() => supabase.from('mp_compras').select('id,materia_prima_id,quantidade,custo_total,data_compra,criado_em').order('id')),
+    buscarTudo(() => supabase.from('mp_compras').select('*').order('id')),
   ])
 
   const contagens = [
@@ -109,7 +109,7 @@ export async function carregarBase(ate) {
   ]
   const compras = comprasMP.map(c => {
     const q = parseFloat(c.quantidade) || 0, v = parseFloat(c.custo_total) || 0
-    return { item: c.materia_prima_id, data: c.data_compra, ts: c.criado_em, qtd: q, valor: v, unit: q > 0 ? v / q : null }
+    return { item: c.materia_prima_id, data: c.data_compra, ts: c.criado_em, qtd: q, valor: v, unit: q > 0 ? v / q : null, entrou: c.entrou_no_saldo !== false }
   })
 
   // Consumo registrado: só desde a contagem mais antiga (é o que o saldo calculado usa)
@@ -156,10 +156,10 @@ function estoqueEm(base, tipo, itemId, data) {
   if (!cont) return null
   if (cont.data === data) return { qtd: cont.qtd, origem: 'contagem' }
 
-  // Compra com data igual à da contagem já está no número contado (mesma regra
-  // de efeitoNoSaldo em MatPrimas.jsx); consumo registrado depois da contagem
-  // no mesmo dia ainda mexe no saldo. Pode ficar negativo de propósito.
-  const ent = (base.compras[tipo][itemId] || []).filter(x => x.data > cont.data && x.data <= data).reduce((s, x) => s + x.qtd, 0)
+  // Compra soma se foi lançada depois da contagem e entrou no saldo (a data da NF
+  // não diz quando chegou — mesma regra de parcelaNoSaldo em MatPrimas.jsx); consumo
+  // registrado depois da contagem no mesmo dia ainda mexe no saldo. Pode ficar negativo.
+  const ent = (base.compras[tipo][itemId] || []).filter(x => x.entrou && x.ts > cont.ts && x.data <= data).reduce((s, x) => s + x.qtd, 0)
   const sai = (base.saidas[tipo][itemId] || []).filter(x => x.data > cont.data && x.data <= data ||
     (x.data === cont.data && x.ts > cont.ts)).reduce((s, x) => s + x.qtd, 0)
   return { qtd: cont.qtd + ent - sai, origem: 'calculado' }
