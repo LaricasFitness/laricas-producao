@@ -162,7 +162,10 @@ function estoqueEm(base, tipo, itemId, data) {
   const ent = (base.compras[tipo][itemId] || []).filter(x => x.entrou && x.ts > cont.ts && x.data <= data).reduce((s, x) => s + x.qtd, 0)
   const sai = (base.saidas[tipo][itemId] || []).filter(x => x.data > cont.data && x.data <= data ||
     (x.data === cont.data && x.ts > cont.ts)).reduce((s, x) => s + x.qtd, 0)
-  return { qtd: cont.qtd + ent - sai, origem: 'calculado' }
+  // Contagem feita até 3 dias antes (ex.: sexta, com o fim do mês no sábado) vale como
+  // contagem de fechamento: o movimento dos dias seguintes já está somado acima.
+  const dias = (new Date(data + 'T12:00:00') - new Date(cont.data + 'T12:00:00')) / 86400000
+  return { qtd: cont.qtd + ent - sai, origem: dias <= 3 ? 'contagem' : 'calculado' }
 }
 
 // PEPS: a quantidade em estoque vale o preço das compras mais recentes até a data

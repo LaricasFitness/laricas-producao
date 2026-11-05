@@ -2,6 +2,7 @@ import { useState } from 'react'
 import Dashboard from './Dashboard'
 import Pedidos from './Pedidos'
 import Compras from './Compras'
+import ValorEstoque from './ValorEstoque'
 import { ConferenciaEstoque } from './Embalagens'
 import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsumo } from './MatPrimas'
 
@@ -10,6 +11,7 @@ import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsu
 // 'opcoes' = o que a aba alterna. Conferência e Compras de embalagem já
 // listam rótulo e filme juntos na própria tela, então não precisam separar.
 const ABAS = [
+  { id:'valor',      label:'💰 Valor do estoque', sub:'Quanto há em R$ no estoque de matéria-prima, mês a mês, e a conferência', opcoes:[] },
   { id:'situacao',   label:'📊 Situação',    sub:'Estoque atual, mínimos e alertas',              opcoes:['mp','rotulo','emb'] },
   { id:'conferencia',label:'🔍 Conferência',  sub:'Contagem física e impacto no estoque',          opcoes:['mp','pack'] },
   { id:'compras',    label:'🛒 Compras',      sub:'Lançamento de compras, notas e recebimentos',   opcoes:['mp','pack'] },
@@ -70,6 +72,7 @@ export default function EstoqueHub({ sub, onSub }) {
       {aba === 'precos'      && <EvolucaoPrecos />}
       {aba === 'consumo'     && <HistoricoConsumo />}
       {aba === 'pedidos'     && <Pedidos />}
+      {aba === 'valor'       && <ValorEstoque />}
     </div>
   )
 }

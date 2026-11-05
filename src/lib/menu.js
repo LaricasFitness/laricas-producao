@@ -29,6 +29,7 @@ export const MENU = [
     id: 'estoque', label: 'Estoque', Icon: Package,
     subs: [
       { id: 'situacao',    label: 'Situação' },
+      { id: 'valor',       label: 'Valor do estoque' },
       { id: 'conferencia', label: 'Conferência' },
       { id: 'compras',     label: 'Compras' },
       { id: 'precos',      label: 'Preços' },
