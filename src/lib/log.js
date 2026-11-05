@@ -62,7 +62,7 @@ export async function reverterAcao(logEntry) {
       const itens = dados_anteriores?.itens || []
       for (const item of itens) {
         const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', item.embalagem_id).single()
-        if (emb) await supabase.from('embalagens').update({ estoque_atual: Math.max(0, (emb.estoque_atual||0) - item.quantidade_recebida) }).eq('id', item.embalagem_id)
+        if (emb) await supabase.from('embalagens').update({ estoque_atual: (emb.estoque_atual||0) - item.quantidade_recebida }).eq('id', item.embalagem_id)
       }
       const { data: rec } = await supabase.from('recebimentos').select('pedido_id').eq('id', registro_id).maybeSingle()
       await supabase.from('recebimentos').delete().eq('id', registro_id)

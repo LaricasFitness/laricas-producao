@@ -68,9 +68,10 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
   const oks       = data.filter(d => d.status === 'ok')
   const semDados  = data.filter(d => d.status === 'sem-dados')
   const precisam  = data.filter(d => d.qtdPedido > 0)
+  const negativos = data.filter(d => d.negativo)
 
   const filtered = data
-    .filter(d => filtro === 'todos' || d.status === filtro)
+    .filter(d => filtro === 'todos' || (filtro === 'negativo' ? d.negativo : d.status === filtro))
     .filter(d => filtroCategoria === 'todas' || d.categoria === filtroCategoria)
 
   const valorTotalEstoque = filtered.reduce((s, d) => s + (d.valorEstoque || 0), 0)
@@ -94,6 +95,12 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
           <div className="kpi-value" style={{ color: 'var(--ok)' }}>{oks.length}</div>
           <div className="kpi-detail">estoque suficiente</div>
         </div>
+        <div className="kpi danger" style={{ cursor: negativos.length ? 'pointer' : 'default' }}
+          onClick={() => negativos.length && setFiltro(f => f === 'negativo' ? 'todos' : 'negativo')}>
+          <div className="kpi-label">Estoque negativo</div>
+          <div className="kpi-value" style={{ color: negativos.length ? 'var(--danger)' : 'var(--ok)' }}>{negativos.length}</div>
+          <div className="kpi-detail">{negativos.length ? 'clique para ver' : 'nenhum item negativo'}</div>
+        </div>
         <div className="kpi neutral">
           <div className="kpi-label">📦 Embalagens ativas</div>
           <div className="kpi-value">{data.length}</div>
@@ -111,6 +118,16 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
       </div>
 
       {/* Alertas */}
+      {negativos.length > 0 && (
+        <div className="alert-banner danger">
+          <span>⚠️</span>
+          <div>
+            <strong>{negativos.length} item(ns) com estoque negativo:</strong>{' '}
+            {negativos.map(e => `${e.nome} (${e.estoque_atual.toLocaleString('pt-BR')})`).join(', ')}.
+            {' '}Negativo indica recebimento não lançado, consumo acima da ficha ou contagem antiga — confira e lance o que faltar.
+          </div>
+        </div>
+      )}
       {criticos.length > 0 && (
         <div className="alert-banner danger">
           <span>🚨</span>
@@ -150,7 +167,7 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
                 {categorias.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             )}
-            {[['todos','Todas'], ['critico','Críticas'], ['atencao','Atenção'], ['ok','OK']].map(([v, l]) => (
+            {[['todos','Todas'], ['critico','Críticas'], ['atencao','Atenção'], ['ok','OK'], ...(negativos.length ? [['negativo','Negativas']] : [])].map(([v, l]) => (
               <button key={v} className={`btn btn-xs ${filtro === v ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setFiltro(v)}>{l}</button>
             ))}
@@ -184,7 +201,7 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
               <tbody>
                 {filtered.map(emb => {
                   const cfg = statusCfg(emb.status)
-                  const pct = emb.minimoIdeal > 0 ? (emb.estoque_atual / emb.minimoIdeal) * 100 : 100
+                  const pct = emb.minimoIdeal > 0 ? Math.max(0, emb.estoque_atual / emb.minimoIdeal) * 100 : 100
                   return (
                     <tr key={emb.id} className={`row-${cfg.cls}`}>
                       <td>
@@ -192,7 +209,10 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
                         <div className="text-xs text-muted" style={{ fontFamily: 'monospace' }}>{emb.codigo}</div>
                       </td>
                       <td><span className={`pill ${cfg.cls}`}>{cfg.icon} {cfg.label}</span></td>
-                      <td className="fw-bold">{(emb.estoque_atual || 0).toLocaleString('pt-BR')} un</td>
+                      <td className="fw-bold" style={{ color: emb.negativo ? 'var(--danger)' : undefined }}>
+                        {(emb.estoque_atual || 0).toLocaleString('pt-BR')} un
+                        {emb.negativo && <div style={{ fontSize: 10, fontWeight: 600 }}>negativo</div>}
+                      </td>
                       <td style={{ fontSize: 12 }}>
                         {emb.valorEstoque > 0
                           ? <span style={{ color: 'var(--purple)', fontWeight: 600 }}>

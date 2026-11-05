@@ -234,7 +234,7 @@ export function ConferenciaEstoque({ onSalvo }) {
                           </div>
                           <div style={{textAlign:'right'}}>
                             <div style={{fontSize:10,color:'var(--gray-400)',fontWeight:700,textTransform:'uppercase'}}>Sistema</div>
-                            <div style={{fontWeight:700,fontSize:14}}>{fmt(e.estoque_sistema)}</div>
+                            <div style={{fontWeight:700,fontSize:14,color:e.estoque_sistema<0?'var(--danger)':undefined}}>{fmt(e.estoque_sistema)}</div>
                           </div>
                           <div>
                             <input type="number" min={0}

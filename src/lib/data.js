@@ -159,7 +159,9 @@ export async function calcularEstoqueCronologico(embalagemId, dataRef) {
     })
     .reduce((s, r) => s + r.quantidade, 0)
 
-  return Math.max(0, base + entradas - saidas)
+  // Pode ficar negativo de propósito, como a matéria-prima: negativo sinaliza
+  // recebimento não lançado ou consumo acima da ficha. Travar em zero escondia o rombo.
+  return base + entradas - saidas
 }
 export async function carregarStatusCompleto(tipo = null) {
   const embs = await carregarEmbalagenEstoque(tipo)
@@ -184,10 +186,10 @@ export async function carregarStatusCompleto(tipo = null) {
 
     // Valor em estoque = estoque * custo unitário
     const custoUnit = emb.custo_unitario || 0
-    const valorEstoque = estoque * custoUnit
+    const valorEstoque = Math.max(0, estoque) * custoUnit   // negativo não vale dinheiro
 
     const minimoIdeal = Math.ceil(mediaPonderada * dias * (1 + margem))
-    const diasRestantes = mediaPonderada > 0 ? Math.floor(estoque / mediaPonderada) : null
+    const diasRestantes = mediaPonderada > 0 ? Math.max(0, Math.floor(estoque / mediaPonderada)) : null
     const falta = Math.max(0, minimoIdeal - estoque)
     const minG = emb.unidade_minima_grafica || 100
     const qtdPedido = falta > 0 ? Math.ceil(falta / minG) * minG : 0
@@ -197,7 +199,7 @@ export async function carregarStatusCompleto(tipo = null) {
         : media90d < mediaPonderada * 0.9 ? 'down' : 'flat'
       : 'flat'
 
-    const status = estoque === 0 ? 'critico'
+    const status = estoque <= 0 ? 'critico'
       : diasRestantes !== null && diasRestantes <= dias * 0.5 ? 'critico'
       : diasRestantes !== null && diasRestantes <= dias ? 'atencao'
       : diasRestantes !== null ? 'ok'
@@ -211,6 +213,7 @@ export async function carregarStatusCompleto(tipo = null) {
       valorEstoque,
       custoUnit,
       minimoIdeal, diasRestantes, qtdPedido, tendencia, status, dias,
+      negativo: estoque < 0,
     })
   }
   return result
