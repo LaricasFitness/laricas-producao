@@ -115,6 +115,45 @@ async function confirmarSemDuplicata(itens) {
   return window.confirm(`Estas compras já foram lançadas com a mesma NF e quantidade:\n\n${dup.join('\n')}\n\nLançar de novo mesmo assim?`)
 }
 
+// Pega erro de digitação antes de gravar: preço por kg/L/un ou quantidade muito
+// diferentes das últimas 5 compras do insumo. Sem histórico, não alerta.
+// itens: [{ mp_id, nome, unidade, quantidade (na unidade base), custo_total }]; ignorarId = compra em edição
+const LIMITE_PRECO = 0.30, LIMITE_QTD = 3
+const mediana = v => { const a = [...v].sort((x, y) => x - y), m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2 }
+async function confirmarValoresNormais(itens, ignorarId = null) {
+  const avisos = []
+  for (const it of itens) {
+    const qtd = parseFloat(it.quantidade) || 0, custo = parseFloat(it.custo_total) || 0
+    if (!it.mp_id || qtd <= 0) continue
+    const { data } = await supabase.from('mp_compras').select('id, quantidade, custo_total')
+      .eq('materia_prima_id', it.mp_id).order('data_compra', { ascending: false }).limit(6)
+    const hist = (data || []).filter(c => c.id !== ignorarId && parseFloat(c.quantidade) > 0).slice(0, 5)
+    if (!hist.length) continue
+    const grande = it.unidade === 'g' || it.unidade === 'ml'
+    const f = grande ? 1000 : 1, un = it.unidade === 'g' ? 'kg' : it.unidade === 'ml' ? 'L' : (it.unidade || 'un')
+    const precoRef = mediana(hist.map(c => parseFloat(c.custo_total) / parseFloat(c.quantidade)))
+    const qtdRef = mediana(hist.map(c => parseFloat(c.quantidade)))
+    if (custo > 0 && precoRef > 0) {
+      const dif = custo / qtd / precoRef - 1
+      if (Math.abs(dif) > LIMITE_PRECO) avisos.push(
+        `${it.nome}: preço R$ ${fmt(custo / qtd * f, 2)}/${un} — nas últimas compras, R$ ${fmt(precoRef * f, 2)}/${un} (${dif > 0 ? '+' : ''}${fmt(dif * 100, 0)}%)`)
+    }
+    if (qtdRef > 0 && (qtd > qtdRef * LIMITE_QTD || qtd < qtdRef / LIMITE_QTD)) avisos.push(
+      `${it.nome}: quantidade ${fmt(qtd / f, grande ? 2 : 0)} ${un} — costuma vir ${fmt(qtdRef / f, grande ? 2 : 0)} ${un}`)
+  }
+  if (!avisos.length) return true
+  const resp = await perguntar({
+    titulo: 'Confira antes de lançar',
+    texto: 'Estes valores estão bem diferentes das últimas compras. Pode ser erro de digitação (vírgula, unidade, valor total × unitário):',
+    itens: avisos,
+    opcoes: [
+      { valor: false, rotulo: 'Voltar e corrigir', classe: 'btn-primary' },
+      { valor: true, rotulo: 'Está certo — lançar assim' },
+    ],
+  })
+  return resp === true
+}
+
 // Soma (ou subtrai) quantidade no estoque da MP.
 async function ajustarEstoqueCompra(mpId, delta) {
   if (!mpId || !delta) return
@@ -588,6 +627,10 @@ function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
     if (!await confirmarSemDuplicata(validos.map(([, v]) => ({
       mp_id: v.mp_id, numero_nf: nf.numero, quantidade: converterParaBase(v.entrada, baseDe(v.mp_id)),
     })))) return
+    if (!await confirmarValoresNormais(validos.map(([idx, v]) => ({
+      mp_id: v.mp_id, nome: mps.find(m => m.id === v.mp_id)?.nome, unidade: baseDe(v.mp_id),
+      quantidade: converterParaBase(v.entrada, baseDe(v.mp_id)), custo_total: custos[parseInt(idx)],
+    })))) return
     const dataCompra = nf.data_emissao || new Date().toISOString().slice(0,10)
     const foraDoSaldo = await perguntarSeJaContada(
       validos.map(([, v]) => ({ mp_id: v.mp_id, nome: mps.find(m => m.id === v.mp_id)?.nome })), dataCompra)
@@ -926,6 +969,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
   async function salvar() {
     if (!valido) return
     if (!await confirmarSemDuplicata([{ mp_id: mp.id, numero_nf: form.numero_nf, quantidade: qtdBase }])) return
+    if (!await confirmarValoresNormais([{ mp_id: mp.id, nome: mp.nome, unidade: mp.unidade, quantidade: qtdBase, custo_total: custoTotal }])) return
     const foraDoSaldo = await perguntarSeJaContada([{ mp_id: mp.id, nome: mp.nome }], form.data_compra)
     if (!foraDoSaldo) return
     setSaving(true)
@@ -1313,6 +1357,10 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
     if (!await confirmarSemDuplicata(validos.map(it => ({
       mp_id: it.mp_id, numero_nf: form.numero_nf, quantidade: converterParaBase(it.entrada, baseDe(it)),
     })))) return
+    if (!await confirmarValoresNormais(validos.map(it => ({
+      mp_id: it.mp_id, nome: mps.find(m => m.id === it.mp_id)?.nome, unidade: baseDe(it),
+      quantidade: converterParaBase(it.entrada, baseDe(it)), custo_total: parseFloat(it.custo_total),
+    })))) return
     const foraDoSaldo = await perguntarSeJaContada(
       validos.map(it => ({ mp_id: it.mp_id, nome: mps.find(m => m.id === it.mp_id)?.nome })), form.data_compra)
     if (!foraDoSaldo) return
@@ -1494,6 +1542,8 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
     for (const d of [compra.data_compra, form.data_compra]) {
       if (await mesFechado(d)) { setErro(avisoMesFechado(d)); return }
     }
+    if (!await confirmarValoresNormais([{ mp_id: mpNovo, nome: mpNovoInfo?.nome || compra.materias_primas?.nome,
+      unidade: baseNova, quantidade: qtdNova, custo_total: custoNovo }], compra.id)) return
     setSaving(true); setErro('')
     try {
       // 1) Atualiza o lançamento primeiro — o recálculo de preço lê mp_compras
