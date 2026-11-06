@@ -968,6 +968,10 @@ export default function Planejamento({ onIrLogistica }) {
   const [novoExtra, setNovoExtra] = useState({ nome: '', cat: ORDEM_CATS[0], qtd: '', data: '' })
   const [sugestoes, setSugestoes] = useState([])
   const [sugestoesCadastrando, setSugestoeCadastrando] = useState(null) // [{id, sku, nome, qtd, data, cat, confirmado}]
+  // Produto que é montado com outro (ex.: Lets Poke Bites = 1,5 MINI Doce de Leite):
+  // { codigo: { para, fator, nome, nomePara } } — vem de embalagens.planejar_como/planejar_fator
+  const [conversoes, setConversoes] = useState({})
+  const [convertidos, setConvertidos] = useState([]) // resumo da última importação
   const fileRef = useRef()
 
   useEffect(() => {
@@ -976,6 +980,16 @@ export default function Planejamento({ onIrLogistica }) {
       .eq('visivel_producao', true)
       .order('categoria').order('nome')
       .then(({ data }) => { setEmbalagens(data || []); setLoading(false) })
+    // select('*'): funciona antes e depois do SQL que cria planejar_como/planejar_fator
+    supabase.from('embalagens').select('*').eq('ativo', true).then(({ data }) => {
+      const todos = data || [], map = {}
+      for (const e of todos) {
+        const para = (e.planejar_como || '').trim(), fator = parseFloat(e.planejar_fator)
+        if (!e.codigo || !para || !(fator > 0) || para === e.codigo) continue
+        map[e.codigo] = { para, fator, nome: e.nome, nomePara: todos.find(x => x.codigo === para)?.nome || para }
+      }
+      setConversoes(map)
+    })
     // Carrega fichas técnicas
     Promise.all([
       supabase.from('preparacoes').select('*').eq('ativo', true).order('tipo').order('nome'),
@@ -994,15 +1008,29 @@ export default function Planejamento({ onIrLogistica }) {
       const parsed = parsearCSV(texto)
       const novosBling = {}
       const novosCorreio = {} // { data: { sku: qtd } } — só pedidos Correio
+      const resumoConv = {}   // { codigo: { vendidos, viraram } }
       for (const { sku, qtd, data, transportadora, servico } of parsed) {
         if (!novosBling[data]) novosBling[data] = {}
-        novosBling[data][sku] = (novosBling[data][sku] || 0) + qtd
+        // Produção planeja o item base (ex.: Lets Poke → MINI × 1,5); o Correio
+        // continua com o produto vendido, que é o que vai na caixa.
+        const conv = conversoes[sku]
+        const skuProd = conv ? conv.para : sku
+        const qtdProd = conv ? qtd * conv.fator : qtd
+        novosBling[data][skuProd] = (novosBling[data][skuProd] || 0) + qtdProd
+        if (conv) {
+          const r = resumoConv[sku] || (resumoConv[sku] = { ...conv, vendidos: 0 })
+          r.vendidos += qtd
+        }
         // Identifica envio postal por Transportadora OU Serviço
         if (ehEnvio(transportadora, servico)) {
           if (!novosCorreio[data]) novosCorreio[data] = {}
           novosCorreio[data][sku] = (novosCorreio[data][sku] || 0) + qtd
         }
       }
+      // Fração (ex.: 3 × 1,5 = 4,5) arredonda para cima, por dia
+      for (const d of Object.keys(novosBling))
+        for (const s of Object.keys(novosBling[d])) novosBling[d][s] = Math.ceil(novosBling[d][s] - 1e-9)
+      setConvertidos(Object.values(resumoConv))
       setDiasCorreio(novosCorreio)
 
       // Conta pedidos distintos por data usando o parser robusto
@@ -1040,7 +1068,7 @@ export default function Planejamento({ onIrLogistica }) {
       // Agrupa por SKU: soma qtd por data, guarda nome do produto
       const skuMap = {} // { sku: { data: { qtd, nome } } }
       for (const { sku, qtd, data, nome } of parsed) {
-        if (skusCadastrados.has(sku)) continue
+        if (skusCadastrados.has(sku) || conversoes[sku]) continue
         if (!skuMap[sku]) skuMap[sku] = {}
         if (!skuMap[sku][data]) skuMap[sku][data] = { qtd: 0, nome: nome || '' }
         skuMap[sku][data].qtd += qtd
@@ -1073,7 +1101,7 @@ export default function Planejamento({ onIrLogistica }) {
 
   function limpar() {
     setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({}); setDiasCorreio({})
-    setSugestoes([]); setItensExtras([])
+    setSugestoes([]); setItensExtras([]); setConvertidos([])
   }
 
   const [previsaoDelivery, setPrevisaoDelivery] = useState({}) // { sku: { seg: n, ter: n, ... } }
@@ -1284,6 +1312,19 @@ export default function Planejamento({ onIrLogistica }) {
                 </span>
               ) : null
             })()}
+          </div>
+        )}
+
+        {temDados && convertidos.length > 0 && (
+          <div className="alert-banner info" style={{ marginTop: 14 }}>
+            🔁 Convertido para a produção:{' '}
+            {convertidos.map(c => (
+              <span key={c.nome} style={{ display: 'inline-block', marginRight: 12 }}>
+                <b>{c.vendidos}</b> {c.nome} → <b>{(c.vendidos * c.fator).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</b> {c.nomePara}
+                {' '}(× {c.fator.toLocaleString('pt-BR')})
+              </span>
+            ))}
+            <span style={{ color: 'var(--gray-500)' }}> — soma em todas as datas do arquivo; por dia, fração arredonda para cima.</span>
           </div>
         )}
 

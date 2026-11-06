@@ -12,6 +12,12 @@ const CATEGORIAS = [
 
 function ModalEmb({ emb, onClose, onSaved }) {
   const isNew = !emb?.id
+  // Rótulos para "no planejamento, produzir como"
+  const [rotulos, setRotulos] = useState([])
+  useEffect(() => {
+    supabase.from('embalagens').select('codigo, nome, categoria').eq('tipo', 'rotulo').eq('ativo', true)
+      .order('categoria').order('nome').then(({ data }) => setRotulos((data || []).filter(r => r.codigo)))
+  }, [])
   const [f, setF] = useState({
     codigo: emb?.codigo || '',
     nome: emb?.nome || '',
@@ -25,6 +31,8 @@ function ModalEmb({ emb, onClose, onSaved }) {
     ativo: emb?.ativo ?? true,
     visivel_producao: emb?.visivel_producao ?? true,
     visivel_estoque: emb?.visivel_estoque ?? true,
+    planejar_como: emb?.planejar_como || '',
+    planejar_fator: emb?.planejar_fator ?? '',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
@@ -50,7 +58,11 @@ function ModalEmb({ emb, onClose, onSaved }) {
       dias_producao: parseInt(f.dias_producao),
       estoque_atual: parseInt(f.estoque_atual || 0),
       unidade_minima_grafica: parseInt(f.unidade_minima_grafica),
+      planejar_como: f.planejar_como || null,
+      planejar_fator: f.planejar_como ? (parseFloat(String(f.planejar_fator).replace(',', '.')) || 1) : null,
     }
+    // Antes do SQL que cria as colunas, não manda campos que o banco não conhece
+    if (!('planejar_como' in (emb || {})) && !payload.planejar_como) { delete payload.planejar_como; delete payload.planejar_fator }
     const { data: savedRows, error } = isNew
       ? await supabase.from('embalagens').insert(payload).select()
       : await supabase.from('embalagens').update(payload).eq('id', emb.id).select()
@@ -156,6 +168,30 @@ function ModalEmb({ emb, onClose, onSaved }) {
                 <option value={0.20}>20%</option>
               </select>
             </div>
+          </div>
+          <div style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)', borderRadius: 8, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
+              Planejamento da produção
+            </div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">Produzir como</label>
+                <select className="form-input" value={f.planejar_como}
+                  onChange={e => { set('planejar_como', e.target.value); if (e.target.value && !f.planejar_fator) set('planejar_fator', 1) }}>
+                  <option value="">— o próprio produto —</option>
+                  {rotulos.filter(r => r.codigo !== f.codigo).map(r => <option key={r.codigo} value={r.codigo}>{r.nome} ({r.categoria})</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Quantas unidades por unidade vendida</label>
+                <input type="number" min={0} step={0.1} className="form-input" value={f.planejar_fator}
+                  disabled={!f.planejar_como} onChange={e => set('planejar_fator', e.target.value)} placeholder="ex: 1,5" />
+              </div>
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+              Para produto montado com outro: no planejamento, cada venda dele vira essa quantidade do produto escolhido
+              (fração arredonda para cima por dia). Ex.: Lets Poke Bites 45g = 1,5 MINI Doce de Leite.
+            </span>
           </div>
           <div style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)', borderRadius: 8, padding: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gray-500)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
