@@ -6,6 +6,7 @@ import autoTable from 'jspdf-autotable'
 import { mesFechado, avisoMesFechado } from '../lib/cmv'
 import { perguntar } from '../lib/perguntar'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
+import { BotaoCadeado, conferido, descreverConferencia, erroCadeado } from '../lib/cadeado'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -304,7 +305,8 @@ const entradaVazia = base => ({ qtd: '', unidade: base || 'g', conteudo: '', uni
 // Exclui uma compra revertendo estoque e recalculando o preço
 async function excluirCompraMP(compra) {
   const parcela = await parcelaNoSaldo(compra)
-  await supabase.from('mp_compras').delete().eq('id', compra.id)
+  const { error } = await supabase.from('mp_compras').delete().eq('id', compra.id)
+  if (error) throw error
   await ajustarEstoqueCompra(compra.materia_prima_id, -parcela)
   await recalcularCustoMP(compra.materia_prima_id)
 }
@@ -1485,6 +1487,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
 
 // ── Modal editar compra ───────────────────────────────────────────────────────
 function ModalEditarCompra({ compra, onClose, onSaved }) {
+  const travado = conferido(compra)
   const baseOrig = compra.materias_primas?.unidade || 'g'
   // Reabre a compra na mesma forma em que foi lançada; sem registro, usa a unidade base
   const [entrada, setEntrada] = useState(compra.unidade_compra ? {
@@ -1583,7 +1586,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
       setSaving(false)
       onSaved()
     } catch (e) {
-      setErro('Erro ao salvar: ' + (e.message || e)); setSaving(false)
+      setErro(erroCadeado(e) || 'Erro ao salvar: ' + (e.message || e)); setSaving(false)
     }
   }
 
@@ -1591,7 +1594,8 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
     if (await mesFechado(compra.data_compra)) { alert(avisoMesFechado(compra.data_compra)); return }
     if (!window.confirm(`Excluir esta compra de ${compra.materias_primas?.nome}?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra tiver sido lançada depois da última contagem física.`)) return
     setSaving(true)
-    await excluirCompraMP(compra)
+    try { await excluirCompraMP(compra) }
+    catch (e) { setErro(erroCadeado(e) || 'Erro ao excluir: ' + (e.message || e)); setSaving(false); return }
     setSaving(false)
     onSaved()
   }
@@ -1612,6 +1616,12 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={saving}>✕</button>
         </div>
         <div className="modal-body">
+          {travado && (
+            <div className="alert-banner ok" style={{marginBottom:14}}>
+              🔒 {descreverConferencia(compra)}. Lançamento fechado: não pode ser editado nem excluído.
+              Um administrador pode abrir o cadeado em Estoque › Compras.
+            </div>
+          )}
 
           {/* Resumo do lançamento original */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:14}}>
@@ -1707,11 +1717,11 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
           )}
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost btn-sm" onClick={excluir} disabled={saving}
+          <button className="btn btn-ghost btn-sm" onClick={excluir} disabled={saving||travado}
             style={{color:'var(--danger)',marginRight:'auto'}}>Excluir compra</button>
-          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>{travado ? 'Fechar' : 'Cancelar'}</button>
           <button className="btn btn-primary" onClick={salvar}
-            disabled={saving||!entradaOk||!form.custo_total||!form.materia_prima_id}>
+            disabled={saving||travado||!entradaOk||!form.custo_total||!form.materia_prima_id}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Salvar alterações</>}
           </button>
         </div>
@@ -1765,9 +1775,11 @@ export function HistoricoCompras() {
   useEffect(()=>{ load() },[mes])
 
   async function excluirCompra(c) {
+    if (conferido(c)) { alert(descreverConferencia(c) + '. Abra o cadeado antes de excluir.'); return }
     if (await mesFechado(c.data_compra)) { alert(avisoMesFechado(c.data_compra)); return }
     if (!window.confirm(`Excluir compra de ${c.materias_primas?.nome} (${fmt(c.quantidade,1)} ${c.materias_primas?.unidade} — ${fmtR(c.custo_total)})?\n\nO preço médio será recalculado. O saldo em estoque só é ajustado se a compra tiver sido lançada depois da última contagem física.`)) return
-    await excluirCompraMP(c)
+    try { await excluirCompraMP(c) }
+    catch (e) { alert(erroCadeado(e) || 'Erro ao excluir: ' + (e.message || e)) }
     load()
   }
 
@@ -1818,7 +1830,7 @@ export function HistoricoCompras() {
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Custo unit.</th>
                   <th style={{padding:'9px 10px',textAlign:'right'}}>Total</th>
                   <th style={{padding:'9px 10px',textAlign:'left'}}>NF</th>
-                  <th style={{padding:'9px 10px',width:70}}></th>
+                  <th style={{padding:'9px 10px',width:100}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1844,15 +1856,18 @@ export function HistoricoCompras() {
                     <td style={{padding:'9px 10px',textAlign:'right',fontWeight:700,color:'var(--purple)'}}>{fmtR(c.custo_total)}</td>
                     <td style={{padding:'9px 10px',fontSize:12,color:'var(--gray-400)'}}>{c.numero_nf||'—'}</td>
                     <td style={{padding:'9px 10px',textAlign:'center'}}>
-                      <div style={{display:'flex',gap:4,justifyContent:'center'}}>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>setEditModal(c)}
-                          title="Editar" style={{fontSize:11}}>
-                          <Pencil size={11}/>
-                        </button>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
-                          style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
-                          ✕
-                        </button>
+                      <div style={{display:'flex',gap:4,justifyContent:'flex-end'}}>
+                        {!conferido(c) && <>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>setEditModal(c)}
+                            title="Editar" style={{fontSize:11}}>
+                            <Pencil size={11}/>
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
+                            style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
+                            ✕
+                          </button>
+                        </>}
+                        <BotaoCadeado tabela="mp_compras" registro={c} onMudou={load} />
                       </div>
                     </td>
                   </tr>

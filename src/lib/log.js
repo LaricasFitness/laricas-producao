@@ -59,6 +59,9 @@ export async function reverterAcao(logEntry) {
       await supabase.from('pedidos_grafica').delete().eq('id', registro_id)
     }
     else if (acao === 'recebimento') {
+      // Cadeado fechado: não desfaz (o estoque seria baixado e o registro ficaria)
+      const { data: atual } = await supabase.from('recebimentos').select('*').eq('id', registro_id).maybeSingle()
+      if (atual?.conferido_em) return { ok: false, erro: 'Recebimento conferido (cadeado fechado). Peça a um administrador para abrir o cadeado antes de desfazer.' }
       const itens = dados_anteriores?.itens || []
       for (const item of itens) {
         const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', item.embalagem_id).single()

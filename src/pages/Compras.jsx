@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
+import { BotaoCadeado, conferido, erroCadeado } from '../lib/cadeado'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -262,14 +263,15 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
     if (!fil.length) { alert('Adicione pelo menos um item.'); return }
     setSaving(true)
     try {
-      // Atualiza cabeçalho
-      await supabase.from('recebimentos').update({
+      // Atualiza cabeçalho (se o banco recusar — cadeado fechado — não mexe nos itens)
+      const { error: errCab } = await supabase.from('recebimentos').update({
         fornecedor_id: fornecedorId || null,
         numero_nf: nf || null,
         data_recebimento: dataRec,
         observacao: obs || null,
         valor_total: totalGeral || null,
       }).eq('id', recebimento.id)
+      if (errCab) throw errCab
 
       // Recria itens (delete + insert)
       await supabase.from('recebimento_itens').delete().eq('recebimento_id', recebimento.id)
@@ -288,7 +290,7 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
       if (recebimento.pedido_id) await atualizarStatusPedido(recebimento.pedido_id)
 
       onSaved()
-    } catch(e) { alert('Erro: ' + e.message) }
+    } catch(e) { alert(erroCadeado(e) || 'Erro: ' + e.message) }
     setSaving(false)
   }
 
@@ -764,11 +766,14 @@ export default function Compras() {
                           })()}
                         </td>
                         <td style={{ padding: '10px 14px' }}>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <button className="btn btn-ghost btn-xs" title="Editar"
-                              onClick={e => { e.stopPropagation(); setEditando(r) }}>
-                              <Pencil size={12}/>
-                            </button>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                            {!conferido(r) && (
+                              <button className="btn btn-ghost btn-xs" title="Editar"
+                                onClick={e => { e.stopPropagation(); setEditando(r) }}>
+                                <Pencil size={12}/>
+                              </button>
+                            )}
+                            <BotaoCadeado tabela="recebimentos" registro={r} onMudou={load} />
                             {exp ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
                           </div>
                         </td>
