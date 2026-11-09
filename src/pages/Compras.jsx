@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { registrarAcao } from '../lib/log'
+import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -523,9 +524,23 @@ export default function Compras() {
   const [showModal, setShowModal] = useState(false)
   const [expandido, setExpandido] = useState(null)
   const [editando, setEditando] = useState(null)
+  // Busca por NF: procura em todas as datas, não só no período escolhido
+  const [buscaTxt, setBuscaTxt] = useState('')
+  const [todosComNF, setTodosComNF] = useState(null) // carregados na 1ª busca
+  const busca = lerBuscaNF(buscaTxt)
+
+  useEffect(() => {
+    if (!busca || todosComNF) return
+    supabase.from('recebimentos')
+      .select('*, fornecedor:fornecedor_id(id,razao_social,nome_fantasia), recebimento_itens(*, embalagens(nome, codigo, tipo))')
+      .not('numero_nf', 'is', null)
+      .order('data_recebimento', { ascending: false })
+      .then(({ data }) => setTodosComNF(data || []))
+  }, [!!busca, todosComNF])
 
   async function load() {
     setLoading(true)
+    setTodosComNF(null) // recarrega a busca depois de editar/excluir
     const [{ data: recs }, { data: peds }, { data: embs }, { data: forns }] = await Promise.all([
       supabase.from('recebimentos')
         .select('*, fornecedor:fornecedor_id(id,razao_social,nome_fantasia), recebimento_itens(*, embalagens(nome, codigo, tipo))')
@@ -545,7 +560,8 @@ export default function Compras() {
   useEffect(() => { load() }, [ini, fim])
 
   // Filtra recebimentos
-  const recFiltrados = recebimentos.filter(r => {
+  const base = busca ? (todosComNF || []).filter(r => nfCombina(r.numero_nf, busca)) : recebimentos
+  const recFiltrados = base.filter(r => {
     if (filtroForn && r.fornecedor_id !== filtroForn) return false
     if (filtroTipo === 'todos') return true
     return (r.recebimento_itens || []).some(i => {
@@ -577,6 +593,14 @@ export default function Compras() {
           <div className="form-group">
             <label className="form-label">Até</label>
             <input type="date" className="form-input" value={fim} onChange={e => setFim(e.target.value)} />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Nota fiscal</label>
+            <input className="form-input" value={buscaTxt} placeholder="🔎 Nº da NF ou bipe o código de barras"
+              onChange={e => setBuscaTxt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') e.target.select() }}
+              style={{ width: 250, fontSize: 13 }} />
           </div>
 
           {/* Filtro fornecedor */}
@@ -616,7 +640,7 @@ export default function Compras() {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
         <div className="card card-pad kpi">
-          <div className="kpi-label">Total comprado no período</div>
+          <div className="kpi-label">{busca ? 'Total das notas encontradas' : 'Total comprado no período'}</div>
           <div className="kpi-value" style={{ color: 'var(--purple)' }}>{fmtR(totalPeriodo)}</div>
         </div>
         <div className="card card-pad kpi">
@@ -638,13 +662,21 @@ export default function Compras() {
         </div>
       </div>
 
+      {busca && (
+        <div className="alert-banner info">
+          🔎 {descreverBuscaNF(busca)} — em todas as datas (o período acima não vale na busca)
+          {todosComNF && <b>· {recFiltrados.length} {recFiltrados.length === 1 ? 'recebimento' : 'recebimentos'}</b>}
+          <button className="btn btn-ghost btn-xs" style={{ marginLeft: 'auto' }} onClick={() => setBuscaTxt('')}>Limpar busca</button>
+        </div>
+      )}
+
       {/* Lista de recebimentos */}
       <div className="card">
-        {loading ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : (
+        {(loading || (busca && !todosComNF)) ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : (
           recFiltrados.length === 0 ? (
             <div className="empty card-pad">
               <div className="empty-icon">📦</div>
-              <div className="empty-title">Nenhum recebimento no período</div>
+              <div className="empty-title">{busca ? 'Nenhum recebimento com essa nota fiscal' : 'Nenhum recebimento no período'}</div>
               <div className="empty-sub">Ajuste os filtros ou registre um novo recebimento</div>
             </div>
           ) : (

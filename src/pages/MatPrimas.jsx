@@ -5,6 +5,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { mesFechado, avisoMesFechado } from '../lib/cmv'
 import { perguntar } from '../lib/perguntar'
+import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -1729,9 +1730,24 @@ export function HistoricoCompras() {
   const [fotoModal, setFotoModal] = useState(false)
   const [compraModal, setCompraModal] = useState(false)
   const [editModal, setEditModal] = useState(null) // compra a editar
+  // Busca por NF: procura em todas as datas, não só no mês escolhido
+  const [buscaTxt, setBuscaTxt] = useState('')
+  const [todasComNF, setTodasComNF] = useState(null) // carregadas na 1ª busca
+  const busca = lerBuscaNF(buscaTxt)
+
+  useEffect(() => {
+    if (!busca || todasComNF) return
+    supabase.from('mp_compras')
+      .select('*, materias_primas(nome,unidade,categoria)')
+      .not('numero_nf', 'is', null)
+      .order('data_compra',{ascending:false})
+      .order('criado_em',{ascending:false})
+      .then(({ data }) => setTodasComNF(data || []))
+  }, [!!busca, todasComNF])
 
   async function load() {
     setLoading(true)
+    setTodasComNF(null) // recarrega a busca depois de editar/excluir
     const ini = mes+'-01'
     const fim = new Date(mes.slice(0,4), mes.slice(5,7), 0).toISOString().slice(0,10)
     const [{ data: comprasData }, { data: mpsData }] = await Promise.all([
@@ -1755,7 +1771,8 @@ export function HistoricoCompras() {
     load()
   }
 
-  const totalMes = compras.reduce((s,c)=>s+(parseFloat(c.custo_total)||0),0)
+  const lista = busca ? (todasComNF || []).filter(c => nfCombina(c.numero_nf, busca)) : compras
+  const totalMes = lista.reduce((s,c)=>s+(parseFloat(c.custo_total)||0),0)
 
   return (
     <div className="card">
@@ -1766,16 +1783,30 @@ export function HistoricoCompras() {
       <div style={{padding:'12px 20px',borderBottom:'1px solid var(--gray-200)',display:'flex',gap:8,alignItems:'center'}}>
         <div style={{fontWeight:800,fontSize:15}}>📦 Histórico de Compras</div>
         <div style={{flex:1}}/>
-        <input type="month" className="form-input" value={mes} onChange={e=>setMes(e.target.value)} style={{width:160,fontSize:13}} />
+        <input className="form-input" value={buscaTxt} placeholder="🔎 Nº da NF ou bipe o código de barras"
+          onChange={e => setBuscaTxt(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') e.target.select() }}
+          style={{ width: 250, fontSize: 13 }} />
+        <input type="month" className="form-input" value={mes} onChange={e=>setMes(e.target.value)} disabled={!!busca}
+          title={busca ? 'A busca por NF procura em todos os meses' : undefined} style={{width:160,fontSize:13,opacity:busca?.5:1}} />
         <button className="btn btn-ghost btn-sm" onClick={()=>setXmlModal(true)}><Upload size={13}/> Importar XML</button>
         <button className="btn btn-ghost btn-sm" onClick={()=>setCompraModal(true)}><Plus size={13}/> Registrar manual</button>
         <button className="btn btn-primary btn-sm" onClick={()=>setFotoModal(true)}>📷 Lançar pela foto da NF</button>
         <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
       </div>
-      {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
+      {busca && (
+        <div className="alert-banner info" style={{margin:'12px 20px 0'}}>
+          🔎 {descreverBuscaNF(busca)} — em todos os meses
+          {todasComNF && <b>· {lista.length} {lista.length===1?'item':'itens'}</b>}
+          <button className="btn btn-ghost btn-xs" style={{marginLeft:'auto'}} onClick={()=>setBuscaTxt('')}>Limpar busca</button>
+        </div>
+      )}
+      {(loading || (busca && !todasComNF)) ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
         <>
-          {compras.length===0 ? (
-            <div style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>Nenhuma compra registrada neste mês</div>
+          {lista.length===0 ? (
+            <div style={{padding:32,textAlign:'center',color:'var(--gray-300)'}}>
+              {busca ? 'Nenhuma compra com essa nota fiscal' : 'Nenhuma compra registrada neste mês'}
+            </div>
           ) : (
             <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
               <thead>
@@ -1791,7 +1822,7 @@ export function HistoricoCompras() {
                 </tr>
               </thead>
               <tbody>
-                {compras.map((c,i)=>(
+                {lista.map((c,i)=>(
                   <tr key={c.id} style={{borderTop:'1px solid var(--gray-100)',background:i%2===0?'#fff':'#fafafa'}}>
                     <td style={{padding:'9px 14px',color:'var(--gray-500)',fontSize:12}}>
                       {new Date(c.data_compra+'T12:00:00').toLocaleDateString('pt-BR')}
@@ -1829,7 +1860,7 @@ export function HistoricoCompras() {
               </tbody>
               <tfoot>
                 <tr style={{borderTop:'2px solid var(--gray-200)',background:'var(--gray-50)'}}>
-                  <td colSpan={5} style={{padding:'9px 14px',fontWeight:800}}>Total do mês</td>
+                  <td colSpan={5} style={{padding:'9px 14px',fontWeight:800}}>{busca ? 'Total da busca' : 'Total do mês'}</td>
                   <td style={{padding:'9px 10px',textAlign:'right',fontWeight:800,color:'var(--purple)'}}>{fmtR(totalMes)}</td>
                   <td colSpan={2}/>
                 </tr>
