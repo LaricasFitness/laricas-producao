@@ -8,3 +8,6 @@ dist/
 
 # Configuração local do Claude Code
 .claude/launch.json
+
+# Exportações do Bling (dados financeiros): ficam só neste computador
+dados_bling/
