@@ -40,8 +40,7 @@ export const MENU = [
   {
     id: 'precificacao', label: 'Custos', Icon: CircleDollarSign,
     subs: [
-      { id: 'ficha',       label: 'Ficha de custo' },
-      { id: 'simulador',   label: 'Markup e canais' },
+      { id: 'ficha',       label: 'Ficha do produto' },
       { id: 'ranking',     label: 'Ranking de margem' },
       { id: 'evolucao',    label: 'Evolução do CMV' },
       { id: 'estoque',     label: 'CMV do mês' },

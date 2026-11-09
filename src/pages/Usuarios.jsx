@@ -5,7 +5,7 @@ import { Plus, Pencil, RefreshCw, Save, Key } from 'lucide-react'
 const TODAS_ABAS = [
   { id: 'producao',      label: '📋 Produção',  desc: 'Registro, planejamento, análise, log e histórico' },
   { id: 'estoque',       label: '📥 Estoque',   desc: 'Situação, conferência, compras, preços, consumo e pedidos à gráfica' },
-  { id: 'precificacao',  label: '💰 Custos',    desc: 'Ficha de custo, CMV do mês, preparações, overhead, markup e margem' },
+  { id: 'precificacao',  label: '💰 Custos',    desc: 'Ficha do produto (custo, preço e margem por canal), CMV do mês, preparações, overhead e ranking de margem' },
   { id: 'logistica',     label: '🚚 Logística', desc: 'Roteiros por zona e CSVs' },
   { id: 'admin',         label: '⚙️ Admin',     desc: 'Cadastros, configurações e acessos' },
 ]
