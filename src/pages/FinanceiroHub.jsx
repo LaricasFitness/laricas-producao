@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen } from 'lucide-react'
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
-  resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura,
+  resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura, conferir, mesVencimento,
 } from '../lib/dre'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
@@ -51,9 +51,8 @@ export default function FinanceiroHub({ sub: subMenu, onSub }) {
 async function carregarAno(ano) {
   const ini = `${ano}-01-01`, fim = `${ano}-12-31`
   const [contas, caixa, receitas, mapaDB, cmvRows] = await Promise.all([
-    buscarTudo(() => supabase.from('dre_contas_competencia')
-      .select('id, competencia, nome, categoria, observacoes, valor, situacao')
-      .gte('competencia', ini).lte('competencia', fim).order('competencia')),
+    buscarTudo(() => supabase.from('dre_contas_competencia').select('*')
+      .gte('competencia', `${ano - 1}-12-01`).lte('competencia', fim).order('competencia')),
     buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor').like('mes', `${ano}-%`)),
     buscarTudo(() => supabase.from('dre_receita_competencia').select('mes, linha, valor').like('mes', `${ano}-%`)),
     buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
@@ -61,7 +60,22 @@ async function carregarAno(ano) {
   ])
   const cmvSistema = {}
   for (const r of cmvRows) cmvSistema[r.mes] = (cmvSistema[r.mes] || 0) + (Number(r.cmv_valor) || 0)
-  return { contas, caixa, receitas, mapaDB, cmvSistema }
+  // dre_mes (conferência e cadeado) existe a partir do financeiro_dre_2.sql
+  let mesInfo = [], semTabelaMes = false
+  try { mesInfo = await buscarTudo(() => supabase.from('dre_mes').select('*').like('mes', `${ano}-%`)) }
+  catch (e) { if (semTabela(e)) semTabelaMes = true; else throw e }
+  return { contas, caixa, receitas, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
+}
+
+// Meses fechados usam os valores guardados no cadeado
+function aplicarFechados(vivo, dados, visao) {
+  const porMes = { ...vivo.porMes }, extras = { ...vivo.extras }
+  for (const r of dados.mesInfo) {
+    if (r.visao !== visao || !r.fechado_em || !r.valores || !(r.mes in porMes)) continue
+    porMes[r.mes] = r.valores
+    extras[r.mes] = { ...(r.extras || {}), fechado: true, temCaixa: true }
+  }
+  return { ...vivo, porMes, extras }
 }
 
 // ── DRE ───────────────────────────────────────────────────────────────────────
@@ -84,11 +98,12 @@ function TelaDRE({ irImportar }) {
   useEffect(() => { carregar() }, [ano])
 
   const todosMeses = Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, '0')}`)
-  const dre = useMemo(() => dados && montarDRE({ visao, meses: todosMeses, ...dados }), [dados, visao, ano])
+  const vivo = useMemo(() => dados && montarDRE({ visao, meses: todosMeses, ...dados }), [dados, visao, ano])
+  const dre = useMemo(() => vivo && aplicarFechados(vivo, dados, visao), [vivo])
 
   // Meses com dado na visão escolhida
   const meses = !dre ? [] : todosMeses.filter(m => visao === 'competencia'
-    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m)
+    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m) || dre.extras[m].fechado
     : dre.extras[m].temCaixa)
 
   const estrutura = Object.fromEntries(meses.map(m => [m, calcularEstrutura(dre.porMes[m])]))
@@ -163,7 +178,11 @@ function TelaDRE({ irImportar }) {
               <thead>
                 <tr style={{ background: 'var(--gray-50)', borderBottom: '2px solid var(--gray-200)' }}>
                   <th style={{ padding: '8px 14px', textAlign: 'left', minWidth: 260 }}>{visao === 'competencia' ? 'Competência' : 'Caixa'} {ano}</th>
-                  {meses.map(m => <th key={m} style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{rotuloMes(m)}</th>)}
+                  {meses.map(m => (
+                    <th key={m} style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} title={dre.extras[m].fechado ? 'Mês fechado (cadeado)' : undefined}>
+                      {dre.extras[m].fechado && <Lock size={11} style={{ verticalAlign: -1, marginRight: 3, color: 'var(--ok)' }} />}{rotuloMes(m)}
+                    </th>
+                  ))}
                   <th style={{ padding: '8px 10px', textAlign: 'right' }}>Total</th>
                   <th style={{ padding: '8px 14px 8px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>% receita</th>
                 </tr>
@@ -241,6 +260,10 @@ function TelaDRE({ irImportar }) {
             </div>
           </div>
         </>
+      )}
+
+      {!carregando && dre && meses.length > 0 && (
+        <Conferencia visao={visao} meses={meses} dados={dados} dre={vivo} onMudou={carregar} />
       )}
 
       {detalhe && dados && (
@@ -357,17 +380,29 @@ function ImportarCompetencia({ onImportou }) {
   async function importar() {
     setSalvando(true); setMsg(null)
     try {
-      for (const m of prev.meses) {
+      // Mês fechado (cadeado) não é substituído
+      const { data: fech, error: eF } = await supabase.from('dre_mes').select('mes').eq('visao', 'competencia').not('fechado_em', 'is', null)
+      const fechados = new Set(eF ? [] : (fech || []).map(r => r.mes))
+      const meses = prev.meses.filter(m => !fechados.has(m))
+      let contas = prev.contas.filter(c => !fechados.has(c.competencia.slice(0, 7)))
+      // Antes do financeiro_dre_2.sql as colunas de data não existem
+      const { error: eCol } = await supabase.from('dre_contas_competencia').select('data_baixa').limit(1)
+      if (eCol) contas = contas.map(({ vencimento, data_baixa, ...c }) => c)
+      for (const m of meses) {
         const fim = new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()
         const { error } = await supabase.from('dre_contas_competencia').delete()
           .gte('competencia', `${m}-01`).lte('competencia', `${m}-${fim}`)
         if (error) throw error
       }
-      for (let i = 0; i < prev.contas.length; i += 500) {
-        const { error } = await supabase.from('dre_contas_competencia').insert(prev.contas.slice(i, i + 500))
+      for (let i = 0; i < contas.length; i += 500) {
+        const { error } = await supabase.from('dre_contas_competencia').insert(contas.slice(i, i + 500))
         if (error) throw error
       }
-      setMsg({ tipo: 'ok', txt: `${prev.contas.length} contas importadas (${prev.meses.length} meses substituídos).` })
+      const pulados = prev.meses.filter(m => fechados.has(m))
+      const semBaixa = !prev.contas.some(c => c.data_baixa)
+      setMsg({ tipo: 'ok', txt: `${contas.length} contas importadas (${meses.length} meses substituídos).`
+        + (pulados.length ? ` Meses fechados não foram alterados: ${pulados.map(rotuloMes).join(', ')}.` : '')
+        + (semBaixa ? ' O arquivo não tem a coluna de data de pagamento: a data de baixa fica em branco.' : '') })
       setPrev(null); onImportou()
     } catch (e) { setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL : 'Erro ao importar: ' + (e.message || e) }) }
     setSalvando(false)
@@ -378,7 +413,8 @@ function ImportarCompetencia({ onImportou }) {
       <div style={{ fontWeight: 800, fontSize: 14 }}>Despesas por competência</div>
       <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
         Bling › Financeiro › Relatórios › <b>Contas a pagar por competência</b> › Visualizar › Exportar (CSV).
-        Pode exportar tudo: cada mês do arquivo substitui o que já estava no sistema.
+        Pode exportar tudo: cada mês do arquivo substitui o que já estava no sistema (menos os meses fechados).
+        Para ter a data de baixa de cada conta, inclua no relatório do Bling (Configurar › +) a coluna de data de pagamento.
       </div>
       <CampoArquivo rotulo="Escolher arquivo" onTexto={ler} />
       {prev && (
@@ -411,6 +447,8 @@ function ImportarBalancete({ onImportou }) {
   async function importar() {
     setSalvando(true); setMsg(null)
     try {
+      const { data: fech } = await supabase.from('dre_mes').select('fechado_em').eq('mes', prev.mes).eq('visao', 'caixa').maybeSingle()
+      if (fech?.fechado_em) throw new Error(`${rotuloMes(prev.mes)} está fechado no caixa (cadeado). Abra o cadeado antes de importar de novo.`)
       const { error: e1 } = await supabase.from('dre_caixa').delete().eq('mes', prev.mes)
       if (e1) throw e1
       // Mesma categoria repetida no arquivo (raro): soma
@@ -421,6 +459,8 @@ function ImportarBalancete({ onImportou }) {
       }
       const { error: e2 } = await supabase.from('dre_caixa').insert(Object.values(porChave))
       if (e2) throw e2
+      if (prev.totais['Saldo final'] != null) // para a conferência com o saldo dos bancos
+        await supabase.from('dre_mes').upsert({ mes: prev.mes, visao: 'caixa', saldo_final_bling: prev.totais['Saldo final'], atualizado_em: new Date().toISOString() }, { onConflict: 'mes,visao' })
       setMsg({ tipo: 'ok', txt: `Balancete de ${rotuloMes(prev.mes)} importado.` })
       setPrev(null); onImportou()
     } catch (e) { setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL : 'Erro ao importar: ' + (e.message || e) }) }
@@ -460,9 +500,12 @@ function ReceitaCompetencia() {
   const [valores, setValores] = useState({})
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
+  const [fechado, setFechado] = useState(false)
 
   useEffect(() => {
     setMsg(null)
+    supabase.from('dre_mes').select('fechado_em').eq('mes', mes).eq('visao', 'competencia').maybeSingle()
+      .then(({ data }) => setFechado(!!data?.fechado_em))
     supabase.from('dre_receita_competencia').select('linha, valor').eq('mes', mes).then(({ data, error }) => {
       if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return }
       setValores(Object.fromEntries((data || []).map(r => [r.linha, String(r.valor).replace('.', ',')])))
@@ -491,16 +534,18 @@ function ReceitaCompetencia() {
         {RECEITAS.map(l => (
           <div key={l} className="form-group" style={{ margin: 0 }}>
             <label className="form-label" style={{ fontSize: 12 }}>{LINHAS[l].nome}</label>
-            <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''}
+            <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''} disabled={fechado}
               onChange={e => setValores(v => ({ ...v, [l]: e.target.value }))} style={{ textAlign: 'right' }} />
           </div>
         ))}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13 }}>Total: <b>R$ {fmt(total)}</b></div>
-        <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>
-          {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Salvar receita de {rotuloMes(mes)}
-        </button>
+        {fechado
+          ? <span style={{ fontSize: 12, color: 'var(--ok)' }}><Lock size={12} style={{ verticalAlign: -2 }} /> {rotuloMes(mes)} fechado na DRE: abra o cadeado para alterar.</span>
+          : <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>
+              {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Salvar receita de {rotuloMes(mes)}
+            </button>}
         {msg && <div className={`alert-banner ${msg.tipo}`} style={{ padding: '6px 10px' }}>{msg.txt}</div>}
       </div>
     </div>
@@ -519,7 +564,7 @@ function Classificar() {
     setErro('')
     try {
       const [contas, caixa, mapaDB] = await Promise.all([
-        buscarTudo(() => supabase.from('dre_contas_competencia').select('competencia, nome, categoria, observacoes, valor, situacao')),
+        buscarTudo(() => supabase.from('dre_contas_competencia').select('*')),
         buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor')),
         buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
       ])
@@ -644,6 +689,7 @@ function Classificar() {
 
 // O que entra em cada linha da DRE: categorias (e fornecedores, quando classificados
 // um a um) com o total e, na competência, as contas de cada uma. Dá para trocar a linha aqui.
+const dataCurta = d => d ? new Date(d.slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR') : ''
 const ORDEM_LINHAS = [...ESTRUTURA.filter(e => e.tipo === 'grupo').flatMap(e => e.linhas), 'ignorar']
 const LIMITE_CONTAS = 300
 
@@ -752,12 +798,21 @@ function MapaPorLinha({ dados, seletor }) {
                     <tr key={it.k + '-contas'}>
                       <td colSpan={4} style={{ padding: '0 16px 10px 52px' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: 'var(--gray-50)', borderRadius: 6 }}>
+                          <thead>
+                            <tr style={{ color: 'var(--gray-400)', fontSize: 11 }}>
+                              {['Competência', 'Vencimento', 'Baixa', 'Fornecedor', 'Observação', 'Situação', 'Valor'].map((h, i) => (
+                                <th key={h} style={{ padding: '4px 8px', textAlign: i === 6 ? 'right' : 'left', fontWeight: 600 }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
                           <tbody>
                             {contas.slice(0, LIMITE_CONTAS).map((c, i) => (
                               <tr key={i} style={{ borderTop: i ? '1px solid var(--gray-100)' : 'none' }}>
+                                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: 'var(--gray-600)' }}>{dataCurta(c.competencia)}</td>
                                 <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: 'var(--gray-500)' }}>
-                                  {c.competencia ? new Date(c.competencia + 'T12:00:00').toLocaleDateString('pt-BR') : ''}
+                                  {c.vencimento ? dataCurta(c.vencimento) : (mesVencimento(c) ? rotuloMes(mesVencimento(c)) : '—')}
                                 </td>
+                                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: c.data_baixa ? 'var(--ok)' : 'var(--gray-300)' }}>{c.data_baixa ? dataCurta(c.data_baixa) : '—'}</td>
                                 <td style={{ padding: '4px 8px' }}>{c.nome}</td>
                                 <td style={{ padding: '4px 8px', color: 'var(--gray-500)' }}>{c.observacoes}</td>
                                 <td style={{ padding: '4px 8px', color: 'var(--gray-400)', whiteSpace: 'nowrap' }}>{c.situacao}</td>
@@ -765,7 +820,7 @@ function MapaPorLinha({ dados, seletor }) {
                               </tr>
                             ))}
                             {contas.length > LIMITE_CONTAS && (
-                              <tr><td colSpan={5} style={{ padding: '4px 8px', color: 'var(--gray-400)' }}>
+                              <tr><td colSpan={7} style={{ padding: '4px 8px', color: 'var(--gray-400)' }}>
                                 Mostrando {LIMITE_CONTAS} de {contas.length}. Escolha um mês para ver menos.
                               </td></tr>
                             )}
@@ -784,6 +839,116 @@ function MapaPorLinha({ dados, seletor }) {
       <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--gray-400)', borderTop: '1px solid var(--gray-100)' }}>
         Clique no nome da linha para abrir ou fechar e na categoria para ver as contas. Para mover uma categoria (ou um fornecedor) de linha, escolha a nova linha e clique em "Salvar" no topo deste quadro.
       </div>
+    </div>
+  )
+}
+
+// ── Conferência e cadeado do mês ─────────────────────────────────────────────
+const ICONE = { ok: '✓', aviso: '!', erro: '✕', info: 'i' }
+const COR = { ok: 'var(--ok)', aviso: 'var(--warning)', erro: 'var(--danger)', info: 'var(--gray-500)' }
+
+function ehAdmin() {
+  try { return JSON.parse(sessionStorage.getItem('usuario'))?.perfil === 'admin' } catch { return false }
+}
+
+function Conferencia({ visao, meses, dados, dre, onMudou }) {
+  const [mes, setMes] = useState(meses[meses.length - 1] || '')
+  const [abertos, setAbertos] = useState(() => new Set())
+  const [saldoTxt, setSaldoTxt] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [msg, setMsg] = useState(null)
+  useEffect(() => { if (!meses.includes(mes)) setMes(meses[meses.length - 1] || '') }, [meses.join()])
+
+  const info = dados.mesInfo.find(r => r.mes === mes && r.visao === visao) || null
+  useEffect(() => {
+    setSaldoTxt(info?.saldo_bancos != null ? String(info.saldo_bancos).replace('.', ',') : '')
+    setMsg(null); setAbertos(new Set())
+  }, [mes, visao, info?.saldo_bancos])
+
+  if (!mes) return null
+  if (dados.semTabelaMes) return (
+    <div className="alert-banner info">Conferência e cadeado do mês: aplique o arquivo financeiro_dre_2.sql no Supabase para ativar.</div>
+  )
+
+  const fechado = !!info?.fechado_em
+  const testes = conferir({ visao, mes, dados, dre, mesInfo: info })
+  const problemas = testes.filter(t => t.status === 'erro' || t.status === 'aviso').length
+  const num = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : null }
+
+  async function gravar(campos, ok) {
+    setSalvando(true); setMsg(null)
+    const { error } = await supabase.from('dre_mes').upsert({ mes, visao, ...campos, atualizado_em: new Date().toISOString() }, { onConflict: 'mes,visao' })
+    setSalvando(false)
+    if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? 'Aplique o arquivo financeiro_dre_2.sql no Supabase.' : error.message }); return }
+    setMsg({ tipo: 'ok', txt: ok }); onMudou()
+  }
+
+  function fechar() {
+    const aviso = problemas ? `\n\nAtenção: a conferência ainda mostra ${problemas} ponto(s) a verificar.` : ''
+    if (!window.confirm(`Fechar ${rotuloMes(mes)} na DRE por ${visao === 'competencia' ? 'competência' : 'caixa'}?\n\nOs valores do mês ficam guardados como estão: reimportar ou reclassificar não muda mais este mês. Só um administrador reabre.${aviso}`)) return
+    gravar({ valores: dre.porMes[mes], extras: dre.extras[mes], fechado_em: new Date().toISOString(), fechado_por: usuarioNome() }, `${rotuloMes(mes)} fechado.`)
+  }
+  function reabrir() {
+    if (!ehAdmin()) { alert('Só um administrador pode abrir o cadeado.'); return }
+    if (!window.confirm(`Abrir o cadeado de ${rotuloMes(mes)}? O mês volta a usar os dados importados e a classificação atual.`)) return
+    gravar({ valores: null, extras: null, fechado_em: null, fechado_por: null }, `${rotuloMes(mes)} reaberto.`)
+  }
+
+  return (
+    <div className="card">
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderBottom: '1px solid var(--gray-100)' }}>
+        <div style={{ flex: '1 1 240px' }}>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Conferência do mês · {visao === 'competencia' ? 'competência' : 'caixa'}</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+            {fechado
+              ? `🔒 Fechado${info.fechado_por ? ` por ${info.fechado_por}` : ''} em ${new Date(info.fechado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}. A conferência abaixo usa os dados atuais.`
+              : problemas ? `${problemas} ponto(s) para verificar antes de fechar.` : 'Tudo certo para fechar o mês.'}
+          </div>
+        </div>
+        <select className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 130, fontSize: 13 }}>
+          {[...meses].reverse().map(m => <option key={m} value={m}>{rotuloMes(m)}</option>)}
+        </select>
+        {fechado
+          ? <button className="btn btn-ghost btn-sm" onClick={reabrir} disabled={salvando}><LockOpen size={13} /> Abrir cadeado</button>
+          : <button className="btn btn-primary btn-sm" onClick={fechar} disabled={salvando}><Lock size={13} /> Fechar mês</button>}
+      </div>
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ margin: 12 }}>{msg.txt}</div>}
+      <div style={{ padding: '6px 0' }}>
+        {testes.map((t, i) => {
+          const aberto = abertos.has(i)
+          const temItens = t.itens?.length > 0
+          return (
+            <div key={i} style={{ padding: '7px 16px', borderTop: i ? '1px solid var(--gray-100)' : 'none' }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: temItens ? 'pointer' : 'default' }}
+                onClick={() => temItens && setAbertos(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })}>
+                <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, fontWeight: 800, color: '#fff', background: COR[t.status] }}>{ICONE[t.status]}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--gray-800)' }}>
+                    {t.titulo}{temItens && <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}> · {aberto ? 'esconder' : 'ver'}</span>}
+                  </div>
+                  {t.detalhe && <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{t.detalhe}</div>}
+                </div>
+              </div>
+              {aberto && (
+                <ul style={{ margin: '6px 0 0 28px', padding: 0, listStyle: 'none', fontSize: 12, color: 'var(--gray-600)' }}>
+                  {t.itens.slice(0, 60).map((it, k) => <li key={k} style={{ padding: '2px 0' }}>{it}</li>)}
+                  {t.itens.length > 60 && <li style={{ color: 'var(--gray-400)' }}>… e mais {t.itens.length - 60}</li>}
+                </ul>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {visao === 'caixa' && (
+        <div style={{ padding: '10px 16px', borderTop: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13 }}>Soma dos saldos dos bancos em {rotuloMes(mes)} (último dia):</span>
+          <input className="form-input" inputMode="decimal" placeholder="0,00" value={saldoTxt} disabled={fechado}
+            onChange={e => setSaldoTxt(e.target.value)} style={{ width: 140, textAlign: 'right', fontSize: 13 }} />
+          <button className="btn btn-ghost btn-sm" disabled={salvando || fechado || num(saldoTxt) == null}
+            onClick={() => gravar({ saldo_bancos: num(saldoTxt) }, 'Saldo dos bancos salvo.')}><Save size={13} /> Salvar</button>
+        </div>
+      )}
     </div>
   )
 }

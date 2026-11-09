@@ -26,8 +26,9 @@ export const LINHAS = {
   ded_impostos:   { nome: 'Impostos sobre vendas (DAS)',          sinal: -1 },
   ded_descontos:  { nome: 'Descontos e devoluções',               sinal: -1 },
   cmv:            { nome: 'CMV (matéria-prima + embalagem do produto)', sinal: -1 },
+  cmv_envio:      { nome: 'Embalagem de envio',                   sinal: -1 },
   custo_producao: { nome: 'Outros custos de produção',            sinal: -1 },
-  dv_comercial:   { nome: 'Comercial (frete, embalagem de envio, taxas, comissão)', sinal: -1 },
+  dv_comercial:   { nome: 'Comercial (frete, taxas, comissão)', sinal: -1 },
   dv_marketing:   { nome: 'Marketing (tráfego, ativação, influenciadores)',        sinal: -1 },
   dv_operacional: { nome: 'Operacional (limpeza, manutenção, consumíveis)',        sinal: -1 },
   dv_administrativo: { nome: 'Administrativo',                    sinal: -1 },
@@ -53,7 +54,7 @@ export const ESTRUTURA = [
   { tipo: 'grupo', id: 'receita',    nome: 'Receita bruta', linhas: [...RECEITAS, 'rec_nao_class'] },
   { tipo: 'grupo', id: 'deducao',    nome: '(−) Deduções da receita', linhas: ['ded_impostos', 'ded_descontos'] },
   { tipo: 'total', id: 'rec_liquida', nome: '= Receita líquida' },
-  { tipo: 'grupo', id: 'custo',      nome: '(−) Custo dos produtos', linhas: ['cmv', 'custo_producao'] },
+  { tipo: 'grupo', id: 'custo',      nome: '(−) Custo dos produtos', linhas: ['cmv', 'cmv_envio', 'custo_producao'] },
   { tipo: 'total', id: 'lucro_bruto', nome: '= Lucro bruto' },
   { tipo: 'grupo', id: 'variavel',   nome: '(−) Despesas variáveis', linhas: ['dv_comercial', 'dv_marketing', 'dv_operacional', 'dv_administrativo', 'nao_class'] },
   { tipo: 'total', id: 'margem',     nome: '= Margem de contribuição' },
@@ -73,7 +74,7 @@ export const AMBIGUAS = ['Prestador de Serviço', 'Salario Pessoal', 'Outros', '
 export const MAPA_PADRAO = {
   competencia: {
     'CMV - Matéria Prima': 'cmv', 'CMV - Embalagens Produto': 'cmv',
-    'CMV - Embalagens Envio': 'dv_comercial', 'CMV - Aux. Operação': 'custo_producao',
+    'CMV - Embalagens Envio': 'cmv_envio', 'CMV - Aux. Operação': 'custo_producao',
     'Impostos sobre vendas': 'ded_impostos', 'Descontos concedidos': 'ded_descontos',
     // DV Comercial
     'Frete': 'dv_comercial', 'Fretes e seguros': 'dv_comercial', 'Testes': 'dv_comercial',
@@ -174,6 +175,7 @@ export function lerContasCompetencia(texto) {
   const col = nome => cab.findIndex(h => h.startsWith(nome))
   const ix = {
     venc: col('data de vencimento'), comp: col('competência'), nome: col('nome'),
+    baixa: cab.findIndex(h => /pagamento|baixa|liquida|quita/.test(h)),
     cat: col('descrição'), obs: col('observações'), valor: col('valor'), sit: col('situação'),
   }
   if (ix.comp < 0 || ix.valor < 0 || ix.cat < 0) {
@@ -191,6 +193,8 @@ export function lerContasCompetencia(texto) {
       observacoes: ix.obs >= 0 ? (r[ix.obs] || '').trim() : '',
       valor: numBR(r[ix.valor]),
       situacao: ix.sit >= 0 ? (r[ix.sit] || '').trim() : '',
+      vencimento: ix.venc >= 0 ? dataBR(r[ix.venc]) : null,
+      data_baixa: ix.baixa >= 0 ? dataBR(r[ix.baixa]) : null,
     })
   }
   return contas
@@ -282,6 +286,104 @@ export function calcularEstrutura(valores) {
       const v = e.linhas.reduce((s, l) => s + (LINHAS[l].sinal || 0) * (valores[l] || 0), 0)
       out[e.id] = v; acumulado += v
     } else out[e.id] = acumulado
+  }
+  return out
+}
+
+// ── Conferência do mês ────────────────────────────────────────────────────────
+// Testes que mostram se as datas e os lançamentos do mês estão certos.
+// status: ok | aviso | erro | info
+const mesAnterior = m => { const d = new Date(+m.slice(0, 4), +m.slice(5, 7) - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+const mesNum = m => +m.slice(0, 4) * 12 + +m.slice(5, 7)
+// Mês de vencimento da conta: data completa ou "MM/AAAA" do relatório
+export const mesVencimento = c => c.vencimento ? c.vencimento.slice(0, 7)
+  : (/^\d{2}\/\d{4}$/.test(c.vencimento_mes || '') ? `${c.vencimento_mes.slice(3)}-${c.vencimento_mes.slice(0, 2)}` : null)
+const brl = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const SEM_BAIXA = ['Atrasada', 'Parcial', 'Vencendo hoje'] // 'Em aberto' com vencimento passado o Bling já mostra como Atrasada
+
+export function conferir({ visao, mes, dados, dre, mesInfo }) {
+  const out = []
+  const doMes = dados.contas.filter(c => c.competencia.startsWith(mes))
+  const linhaDe = c => resolverLinha('competencia', c.categoria, c.nome, dados.mapaDB)
+
+  if (visao === 'competencia') {
+    const ex = dre.extras[mes] || {}
+    const receita = RECEITAS.reduce((s, l) => s + (dre.porMes[mes]?.[l] || 0), 0)
+    out.push(receita > 0
+      ? { status: 'ok', titulo: `Receita digitada: ${brl(receita)}` }
+      : { status: 'erro', titulo: 'Receita do mês não digitada', detalhe: 'Digite em Importar e classificar › Receita por competência.' })
+
+    const sem = doMes.filter(c => !linhaDe(c))
+    out.push(sem.length
+      ? { status: 'aviso', titulo: `${sem.length} conta(s) sem linha na DRE (${brl(sem.reduce((s, c) => s + Number(c.valor), 0))})`,
+          itens: sem.map(c => `${c.categoria || '(sem categoria)'} · ${c.nome} · ${brl(c.valor)}`) }
+      : { status: 'ok', titulo: 'Todas as contas do mês estão classificadas' })
+
+    // Contas fixas: o que tinha no mês anterior e sumiu, ou apareceu mais vezes
+    const ant = mesAnterior(mes)
+    const fixas = m => {
+      const mapa = new Map()
+      for (const c of dados.contas.filter(c => c.competencia.startsWith(m))) {
+        const l = linhaDe(c)
+        if (!l || !(l.startsWith('df_') || l === 'ded_impostos')) continue
+        const k = `${c.nome} · ${c.categoria}`
+        mapa.set(k, (mapa.get(k) || 0) + 1)
+      }
+      return mapa
+    }
+    const fa = fixas(ant), fm = fixas(mes)
+    if (!fa.size) out.push({ status: 'info', titulo: 'Contas fixas: sem mês anterior importado para comparar' })
+    else {
+      const faltam = [...fa.keys()].filter(k => !fm.has(k))
+      const dobradas = [...fm.entries()].filter(([k, n]) => fa.has(k) && n > fa.get(k)).map(([k, n]) => `${k} (${n}× neste mês, ${fa.get(k)}× no anterior)`)
+      out.push(faltam.length || dobradas.length
+        ? { status: 'aviso', titulo: `Contas fixas diferentes do mês anterior: ${faltam.length} faltando, ${dobradas.length} a mais`,
+            detalhe: 'Pode ser normal (contrato novo ou encerrado). Se não for, a competência de alguma conta está no mês errado.',
+            itens: [...faltam.map(k => 'Faltando: ' + k), ...dobradas.map(k => 'A mais: ' + k)] }
+        : { status: 'ok', titulo: 'Contas fixas iguais ao mês anterior' })
+    }
+
+    // Competência muito longe do vencimento
+    const longe = doMes.filter(c => { const v = mesVencimento(c); if (!v) return false; const d = mesNum(v) - mesNum(mes); return d >= 3 || d <= -2 })
+    out.push(longe.length
+      ? { status: 'aviso', titulo: `${longe.length} conta(s) com vencimento muito distante da competência`,
+          detalhe: 'Vencimento 3+ meses depois ou 2+ meses antes. Confira se a data de competência está certa.',
+          itens: longe.map(c => `${c.nome} · ${c.categoria} · vence ${mesVencimento(c)} · ${brl(c.valor)}`) }
+      : { status: 'ok', titulo: 'Competência perto do vencimento em todas as contas' })
+
+    out.push(ex.cmvFonte === 'sistema'
+      ? { status: 'info', titulo: `CMV do fechamento do sistema: ${brl(dre.porMes[mes]?.cmv)}`,
+          detalhe: `Compras de MP e embalagem do produto lançadas no Bling: ${brl(ex.cmvCompras)}.` }
+      : { status: 'aviso', titulo: 'CMV pelas compras do mês', detalhe: 'Mês sem fechamento de CMV no sistema.' })
+  } else {
+    const temCaixa = dados.caixa.some(c => c.mes === mes)
+    out.push(temCaixa ? { status: 'ok', titulo: 'Balancete do mês importado' }
+      : { status: 'erro', titulo: 'Balancete do mês não importado' })
+
+    const semCls = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia' &&
+      !resolverLinha(c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa', c.categoria, '', dados.mapaDB))
+    out.push(semCls.length
+      ? { status: 'aviso', titulo: `${semCls.length} categoria(s) sem linha na DRE`, itens: semCls.map(c => `${c.categoria} · ${brl(c.valor)}`) }
+      : { status: 'ok', titulo: 'Todas as categorias do balancete estão classificadas' })
+
+    // Contas vencidas até o fim do mês e ainda sem baixa no Bling
+    const pend = dados.contas.filter(c => { const v = mesVencimento(c); return SEM_BAIXA.includes(c.situacao) && !!v && v <= mes })
+    out.push(pend.length
+      ? { status: 'aviso', titulo: `${pend.length} conta(s) vencida(s) sem baixa no Bling (${brl(pend.reduce((s, c) => s + Number(c.valor), 0))})`,
+          detalhe: 'Se já foram pagas, falta dar baixa no Bling com a data do pagamento: elas não estão nas saídas do caixa.',
+          itens: pend.map(c => `${c.situacao} · vence ${mesVencimento(c) || '?'} · ${c.nome} · ${brl(c.valor)}`) }
+      : { status: 'ok', titulo: 'Nenhuma conta vencida sem baixa' })
+
+    const sb = mesInfo?.saldo_final_bling, bancos = mesInfo?.saldo_bancos
+    if (sb == null) out.push({ status: 'info', titulo: 'Saldo final do balancete não disponível', detalhe: 'Importe o balancete de novo para guardar o saldo final.' })
+    else if (bancos == null) out.push({ status: 'aviso', titulo: `Saldo final no Bling: ${brl(sb)}`, detalhe: 'Digite abaixo a soma dos saldos dos bancos no último dia do mês para conferir.' })
+    else {
+      const dif = Number(bancos) - Number(sb)
+      out.push(Math.abs(dif) < 1
+        ? { status: 'ok', titulo: `Saldo dos bancos bate com o Bling (${brl(sb)})` }
+        : { status: 'erro', titulo: `Saldo dos bancos difere do Bling em ${brl(dif)}`,
+            detalhe: `Bancos ${brl(bancos)} × Bling ${brl(sb)}. Falta baixa, a data de alguma baixa está errada ou há lançamento duplicado.` })
+    }
   }
   return out
 }
