@@ -10,6 +10,7 @@ import Logistica from './pages/Logistica'
 import Admin from './pages/Admin'
 import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
+import FinanceiroHub from './pages/FinanceiroHub'
 
 const PERM_MAP = {
   dashboard:'estoque', pedidos:'estoque', compras:'estoque',
@@ -136,6 +137,7 @@ export default function App() {
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} sub={subAtual} onSub={id => setSub('logistica', id)} />}
           {pageAtual==='estoque'       && <EstoqueHub sub={subAtual} onSub={id => setSub('estoque', id)} />}
           {pageAtual==='precificacao'  && <Precificacao sub={subAtual} onSub={id => setSub('precificacao', id)} />}
+          {pageAtual==='financeiro'    && <FinanceiroHub sub={subAtual} onSub={id => setSub('financeiro', id)} />}
           {pageAtual==='admin'      && <Admin sub={subAtual} onSub={id => setSub('admin', id)} />}
         </div>
       </div>

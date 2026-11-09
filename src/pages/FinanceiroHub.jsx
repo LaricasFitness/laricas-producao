@@ -1,0 +1,676 @@
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { supabase } from '../supabase'
+import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X } from 'lucide-react'
+import {
+  LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
+  resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura,
+} from '../lib/dre'
+
+// Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
+// Regras e desenho da DRE em src/lib/dre.js.
+
+const fmt = (n, d = 2) => Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmtPct = n => `${fmt(n * 100, 1)}%`
+const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+const rotuloMes = m => `${MESES[+m.slice(5, 7) - 1]}/${m.slice(2, 4)}`
+const AVISO_SQL = 'As tabelas da DRE ainda não existem no banco: aplique o arquivo financeiro_dre.sql no Supabase.'
+const semTabela = e => /does not exist|relation .* not exist|42P01|schema cache/i.test(e?.message || '') || e?.code === '42P01'
+
+function usuarioNome() {
+  try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || null } catch { return null }
+}
+
+// Supabase devolve no máximo 1000 linhas por consulta
+async function buscarTudo(montar) {
+  const out = []
+  for (let de = 0; ; de += 1000) {
+    const { data, error } = await montar().range(de, de + 999)
+    if (error) throw error
+    out.push(...(data || []))
+    if (!data || data.length < 1000) return out
+  }
+}
+
+export default function FinanceiroHub({ sub: subMenu, onSub }) {
+  const [subLocal, setSubLocal] = useState('dre')
+  const sub = subMenu ?? subLocal
+  const setSub = onSub ?? setSubLocal
+  return (
+    <>
+      <div className="tabs hub-tabs" style={{ marginBottom: 0 }}>
+        <button className={`tab${sub === 'dre' ? ' active' : ''}`} onClick={() => setSub('dre')}>📋 DRE</button>
+        <button className={`tab${sub === 'importar' ? ' active' : ''}`} onClick={() => setSub('importar')}>⬆️ Importar e classificar</button>
+      </div>
+      {sub === 'dre' && <TelaDRE irImportar={() => setSub('importar')} />}
+      {sub === 'importar' && <TelaImportar />}
+    </>
+  )
+}
+
+// ── Dados ─────────────────────────────────────────────────────────────────────
+async function carregarAno(ano) {
+  const ini = `${ano}-01-01`, fim = `${ano}-12-31`
+  const [contas, caixa, receitas, mapaDB, cmvRows] = await Promise.all([
+    buscarTudo(() => supabase.from('dre_contas_competencia')
+      .select('id, competencia, nome, categoria, observacoes, valor, situacao')
+      .gte('competencia', ini).lte('competencia', fim).order('competencia')),
+    buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor').like('mes', `${ano}-%`)),
+    buscarTudo(() => supabase.from('dre_receita_competencia').select('mes, linha, valor').like('mes', `${ano}-%`)),
+    buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
+    buscarTudo(() => supabase.from('fechamento_cmv').select('mes, cmv_valor').like('mes', `${ano}-%`)),
+  ])
+  const cmvSistema = {}
+  for (const r of cmvRows) cmvSistema[r.mes] = (cmvSistema[r.mes] || 0) + (Number(r.cmv_valor) || 0)
+  return { contas, caixa, receitas, mapaDB, cmvSistema }
+}
+
+// ── DRE ───────────────────────────────────────────────────────────────────────
+function TelaDRE({ irImportar }) {
+  const anoAtual = new Date().getFullYear()
+  const [ano, setAno] = useState(anoAtual)
+  const [visao, setVisao] = useState('competencia')
+  const [dados, setDados] = useState(null)
+  const [erro, setErro] = useState('')
+  const [carregando, setCarregando] = useState(true)
+  const [abertos, setAbertos] = useState(() => new Set(ESTRUTURA.filter(e => e.tipo === 'grupo').map(e => e.id)))
+  const [detalhe, setDetalhe] = useState(null) // { mes, linha }
+
+  async function carregar() {
+    setCarregando(true); setErro('')
+    try { setDados(await carregarAno(ano)) }
+    catch (e) { setErro(semTabela(e) ? AVISO_SQL : 'Erro ao carregar: ' + (e.message || e)); setDados(null) }
+    setCarregando(false)
+  }
+  useEffect(() => { carregar() }, [ano])
+
+  const todosMeses = Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, '0')}`)
+  const dre = useMemo(() => dados && montarDRE({ visao, meses: todosMeses, ...dados }), [dados, visao, ano])
+
+  // Meses com dado na visão escolhida
+  const meses = !dre ? [] : todosMeses.filter(m => visao === 'competencia'
+    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m)
+    : dre.extras[m].temCaixa)
+
+  const estrutura = Object.fromEntries(meses.map(m => [m, calcularEstrutura(dre.porMes[m])]))
+  const totalLinha = l => meses.reduce((s, m) => s + (dre.porMes[m][l] || 0), 0)
+  const totalEst = id => meses.reduce((s, m) => s + estrutura[m][id], 0)
+  const receitaTotal = totalEst('receita')
+  const semReceita = visao === 'competencia' ? meses.filter(m => !dre.extras[m].temReceita) : []
+  const cmvCompras = visao === 'competencia' ? meses.filter(m => dre.extras[m].cmvFonte === 'compras') : []
+
+  const alternar = id => setAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const celula = (v, extra) => (
+    <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: v < 0 ? 'var(--gray-700)' : 'var(--gray-800)', ...extra }}>
+      {Math.abs(v) < 0.005 ? <span style={{ color: 'var(--gray-300)' }}>—</span> : fmt(v)}
+    </td>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[['competencia', 'Competência'], ['caixa', 'Caixa']].map(([v, l]) => (
+            <button key={v} className={`btn btn-sm ${visao === v ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setVisao(v)}>{l}</button>
+          ))}
+        </div>
+        <select className="form-input" value={ano} onChange={e => setAno(+e.target.value)} style={{ width: 100, fontSize: 13 }}>
+          {[anoAtual + 1, anoAtual, anoAtual - 1, anoAtual - 2].map(a => <option key={a}>{a}</option>)}
+        </select>
+        <div style={{ flex: 1, fontSize: 12, color: 'var(--gray-400)', minWidth: 200 }}>
+          {visao === 'competencia'
+            ? 'Despesas pela data de competência (Bling); receita digitada; CMV do fechamento do sistema.'
+            : 'Entradas e saídas pagas no mês, pelo Balancete do Bling.'}
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={carregar} title="Recarregar"><RefreshCw size={13} /></button>
+      </div>
+
+      {erro && <div className="alert-banner danger">{erro}</div>}
+      {carregando && <div className="loading"><RefreshCw size={14} className="spin" /></div>}
+
+      {!carregando && dre && !meses.length && (
+        <div className="card card-pad" style={{ textAlign: 'center', color: 'var(--gray-500)' }}>
+          Nenhum dado de {ano} na visão de {visao === 'competencia' ? 'competência' : 'caixa'}.{' '}
+          <button className="btn btn-primary btn-sm" onClick={irImportar}><Upload size={13} /> Importar do Bling</button>
+        </div>
+      )}
+
+      {!carregando && dre && meses.length > 0 && (
+        <>
+          {(semReceita.length > 0 || dre.pendentes.length > 0 || cmvCompras.length > 0) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {semReceita.length > 0 && (
+                <div className="alert-banner warning">
+                  Receita por competência não digitada em: <b>{semReceita.map(rotuloMes).join(', ')}</b>.
+                  <button className="btn btn-ghost btn-xs" onClick={irImportar}>Digitar receita</button>
+                </div>
+              )}
+              {dre.pendentes.length > 0 && (
+                <div className="alert-banner warning">
+                  {dre.pendentes.length} categoria(s) sem linha na DRE (R$ {fmt(dre.pendentes.reduce((s, p) => s + p.valor, 0))} em "sem classificação").
+                  <button className="btn btn-ghost btn-xs" onClick={irImportar}>Classificar</button>
+                </div>
+              )}
+              {cmvCompras.length > 0 && (
+                <div className="alert-banner info">
+                  CMV de {cmvCompras.map(rotuloMes).join(', ')} pelas compras lançadas no Bling: o fechamento de CMV do sistema só existe a partir de set/26.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="card" style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 600 }}>
+              <thead>
+                <tr style={{ background: 'var(--gray-50)', borderBottom: '2px solid var(--gray-200)' }}>
+                  <th style={{ padding: '8px 14px', textAlign: 'left', minWidth: 260 }}>{visao === 'competencia' ? 'Competência' : 'Caixa'} {ano}</th>
+                  {meses.map(m => <th key={m} style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{rotuloMes(m)}</th>)}
+                  <th style={{ padding: '8px 10px', textAlign: 'right' }}>Total</th>
+                  <th style={{ padding: '8px 14px 8px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>% receita</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ESTRUTURA.map(e => {
+                  const total = totalEst(e.id)
+                  const pct = receitaTotal ? fmtPct(total / receitaTotal) : '—'
+                  if (e.tipo === 'total') return (
+                    <tr key={e.id} style={{ background: e.destaque ? 'var(--purple-pale)' : 'var(--gray-50)', borderTop: '1px solid var(--gray-200)', borderBottom: '1px solid var(--gray-200)' }}>
+                      <td style={{ padding: '8px 14px', fontWeight: 800 }}>{e.nome}</td>
+                      {meses.map(m => celula(estrutura[m][e.id], { fontWeight: 800 }))}
+                      {celula(total, { fontWeight: 800 })}
+                      <td style={{ padding: '6px 14px 6px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--gray-500)' }}>{pct}</td>
+                    </tr>
+                  )
+                  const aberto = abertos.has(e.id)
+                  const linhas = e.linhas.filter(l => totalLinha(l) > 0.005 || (l === 'cmv' && visao === 'competencia'))
+                  return [
+                    <tr key={e.id} style={{ borderTop: '1px solid var(--gray-100)', cursor: 'pointer' }} onClick={() => alternar(e.id)}>
+                      <td style={{ padding: '7px 14px', fontWeight: 700 }}>
+                        {aberto ? <ChevronDown size={13} style={{ verticalAlign: -2 }} /> : <ChevronRight size={13} style={{ verticalAlign: -2 }} />} {e.nome}
+                      </td>
+                      {meses.map(m => celula(estrutura[m][e.id], { fontWeight: 700 }))}
+                      {celula(total, { fontWeight: 700 })}
+                      <td style={{ padding: '6px 14px 6px 10px', textAlign: 'right', color: 'var(--gray-500)' }}>{pct}</td>
+                    </tr>,
+                    ...(aberto ? linhas.flatMap(l => {
+                      const L = LINHAS[l]
+                      const row = (
+                        <tr key={e.id + l} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                          <td style={{ padding: '5px 14px 5px 34px', color: L.alerta ? 'var(--danger)' : 'var(--gray-600)' }}>{L.nome}</td>
+                          {meses.map(m => {
+                            const v = (L.sinal || 1) * (dre.porMes[m][l] || 0)
+                            const marca = l === 'cmv' && visao === 'competencia' && dre.extras[m].cmvFonte === 'compras'
+                            return (
+                              <td key={m} onClick={() => setDetalhe({ mes: m, linha: l })} title="Ver lançamentos"
+                                style={{ padding: '5px 10px', textAlign: 'right', whiteSpace: 'nowrap', cursor: 'pointer', color: L.alerta ? 'var(--danger)' : 'var(--gray-600)' }}>
+                                {Math.abs(v) < 0.005 ? <span style={{ color: 'var(--gray-300)' }}>—</span> : fmt(v)}
+                                {marca && Math.abs(v) >= 0.005 && <sup style={{ color: 'var(--warning)' }}>*</sup>}
+                              </td>
+                            )
+                          })}
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--gray-600)' }}>{fmt((L.sinal || 1) * totalLinha(l))}</td>
+                          <td style={{ padding: '5px 14px 5px 10px', textAlign: 'right', color: 'var(--gray-400)' }}>
+                            {receitaTotal ? fmtPct((L.sinal || 1) * totalLinha(l) / receitaTotal) : '—'}
+                          </td>
+                        </tr>
+                      )
+                      if (l !== 'cmv' || visao !== 'competencia') return [row]
+                      return [row, (
+                        <tr key={e.id + l + 'memo'}>
+                          <td style={{ padding: '2px 14px 6px 48px', fontSize: 11, color: 'var(--gray-400)' }}>
+                            compras de MP e embalagem lançadas no Bling (comparação)
+                          </td>
+                          {meses.map(m => (
+                            <td key={m} style={{ padding: '2px 10px 6px', textAlign: 'right', fontSize: 11, color: 'var(--gray-400)' }}>
+                              {dre.extras[m].cmvCompras ? fmt(dre.extras[m].cmvCompras) : '—'}
+                            </td>
+                          ))}
+                          <td style={{ padding: '2px 10px 6px', textAlign: 'right', fontSize: 11, color: 'var(--gray-400)' }}>
+                            {fmt(meses.reduce((s, m) => s + (dre.extras[m].cmvCompras || 0), 0))}
+                          </td>
+                          <td />
+                        </tr>
+                      )]
+                    }) : []),
+                  ]
+                })}
+              </tbody>
+            </table>
+            <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--gray-400)', borderTop: '1px solid var(--gray-100)' }}>
+              Clique numa linha para abrir ou fechar o grupo e num valor para ver os lançamentos.
+              {visao === 'competencia' && ' * CMV pelas compras do mês (sem fechamento de CMV no sistema).'}
+            </div>
+          </div>
+        </>
+      )}
+
+      {detalhe && dados && (
+        <ModalDetalhe {...detalhe} visao={visao} dados={dados} extras={dre.extras[detalhe.mes]} onClose={() => setDetalhe(null)} />
+      )}
+    </div>
+  )
+}
+
+function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
+  const L = LINHAS[linha]
+  let itens = []
+  if (visao === 'competencia') {
+    itens = dados.contas.filter(c => c.competencia.startsWith(mes)).filter(c => {
+      const l = resolverLinha('competencia', c.categoria, c.nome, dados.mapaDB)
+      return linha === 'nao_class' ? !l : l === linha
+    }).map(c => ({ a: c.nome, b: c.categoria, c: c.observacoes, valor: Number(c.valor), d: c.situacao }))
+    if (RECEITAS.includes(linha)) itens = dados.receitas.filter(r => r.mes === mes && r.linha === linha)
+      .map(r => ({ a: 'Digitado na tela', b: '', c: '', valor: Number(r.valor) }))
+  } else {
+    itens = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia').filter(c => {
+      const l = resolverLinha(c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa', c.categoria, '', dados.mapaDB)
+      return (linha === 'nao_class' || linha === 'rec_nao_class') ? !l : l === linha
+    }).map(c => ({ a: c.categoria, b: c.tipo, c: 'total do mês no Balancete', valor: Number(c.valor) }))
+  }
+  itens.sort((x, y) => y.valor - x.valor)
+  const total = itens.reduce((s, i) => s + i.valor, 0)
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 760, maxHeight: '88vh', overflowY: 'auto' }}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">{L.nome} · {rotuloMes(mes)}</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>{visao === 'competencia' ? 'Competência' : 'Caixa'} · {itens.length} lançamento(s) · R$ {fmt(total)}</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}><X size={14} /></button>
+        </div>
+        <div className="modal-body">
+          {linha === 'cmv' && visao === 'competencia' && (
+            <div className="alert-banner info" style={{ marginBottom: 10 }}>
+              {extras.cmvFonte === 'sistema'
+                ? 'O valor da DRE é o CMV do fechamento do sistema (estoque inicial + compras − estoque final). Abaixo, as compras do mês só para comparação.'
+                : 'Mês sem fechamento de CMV no sistema: a DRE usa as compras abaixo.'}
+            </div>
+          )}
+          {!itens.length ? <div style={{ color: 'var(--gray-400)' }}>Nenhum lançamento.</div> : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <tbody>
+                {itens.map((i, k) => (
+                  <tr key={k} style={{ borderTop: k ? '1px solid var(--gray-100)' : 'none' }}>
+                    <td style={{ padding: '6px 8px' }}>
+                      <div style={{ fontWeight: 600 }}>{i.a}</div>
+                      {(i.b || i.c) && <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{[i.b, i.c].filter(Boolean).join(' · ')}</div>}
+                    </td>
+                    <td style={{ padding: '6px 8px', fontSize: 11, color: 'var(--gray-400)' }}>{i.d || ''}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>R$ {fmt(i.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Importar e classificar ───────────────────────────────────────────────────
+function TelaImportar() {
+  const [versao, setVersao] = useState(0) // recarrega a classificação depois de importar
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <ImportarCompetencia onImportou={() => setVersao(v => v + 1)} />
+        <ImportarBalancete onImportou={() => setVersao(v => v + 1)} />
+      </div>
+      <ReceitaCompetencia />
+      <Classificar key={versao} />
+    </div>
+  )
+}
+
+function CampoArquivo({ onTexto, rotulo }) {
+  const ref = useRef()
+  return (
+    <>
+      <button className="btn btn-ghost btn-sm" onClick={() => ref.current?.click()}><Upload size={13} /> {rotulo}</button>
+      <input ref={ref} type="file" accept=".csv,.txt" style={{ display: 'none' }}
+        onChange={e => {
+          const f = e.target.files?.[0]; e.target.value = ''
+          if (!f) return
+          const r = new FileReader()
+          r.onload = () => onTexto(String(r.result), f.name)
+          r.readAsText(f, 'utf-8')
+        }} />
+    </>
+  )
+}
+
+function ImportarCompetencia({ onImportou }) {
+  const [prev, setPrev] = useState(null)
+  const [msg, setMsg] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  function ler(texto, nome) {
+    setMsg(null)
+    try {
+      const contas = lerContasCompetencia(texto)
+      const meses = [...new Set(contas.map(c => c.competencia.slice(0, 7)))].sort()
+      setPrev({ contas, meses, nome, total: contas.reduce((s, c) => s + c.valor, 0) })
+    } catch (e) { setPrev(null); setMsg({ tipo: 'danger', txt: e.message }) }
+  }
+
+  async function importar() {
+    setSalvando(true); setMsg(null)
+    try {
+      for (const m of prev.meses) {
+        const fim = new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()
+        const { error } = await supabase.from('dre_contas_competencia').delete()
+          .gte('competencia', `${m}-01`).lte('competencia', `${m}-${fim}`)
+        if (error) throw error
+      }
+      for (let i = 0; i < prev.contas.length; i += 500) {
+        const { error } = await supabase.from('dre_contas_competencia').insert(prev.contas.slice(i, i + 500))
+        if (error) throw error
+      }
+      setMsg({ tipo: 'ok', txt: `${prev.contas.length} contas importadas (${prev.meses.length} meses substituídos).` })
+      setPrev(null); onImportou()
+    } catch (e) { setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL : 'Erro ao importar: ' + (e.message || e) }) }
+    setSalvando(false)
+  }
+
+  return (
+    <div className="card card-pad">
+      <div style={{ fontWeight: 800, fontSize: 14 }}>Despesas por competência</div>
+      <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
+        Bling › Financeiro › Relatórios › <b>Contas a pagar por competência</b> › Visualizar › Exportar (CSV).
+        Pode exportar tudo: cada mês do arquivo substitui o que já estava no sistema.
+      </div>
+      <CampoArquivo rotulo="Escolher arquivo" onTexto={ler} />
+      {prev && (
+        <div style={{ marginTop: 10, fontSize: 13 }}>
+          <div><b>{prev.contas.length}</b> contas · {rotuloMes(prev.meses[0])} a {rotuloMes(prev.meses[prev.meses.length - 1])} · R$ {fmt(prev.total)}</div>
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={importar} disabled={salvando}>
+            {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Importar
+          </button>
+        </div>
+      )}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+    </div>
+  )
+}
+
+function ImportarBalancete({ onImportou }) {
+  const [prev, setPrev] = useState(null)
+  const [msg, setMsg] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  function ler(texto) {
+    setMsg(null)
+    try {
+      const b = lerBalancete(texto)
+      const soma = t => b.linhas.filter(l => l.tipo === t).reduce((s, l) => s + l.valor, 0)
+      setPrev({ ...b, receitas: soma('receita'), despesas: soma('despesa') })
+    } catch (e) { setPrev(null); setMsg({ tipo: 'danger', txt: e.message }) }
+  }
+
+  async function importar() {
+    setSalvando(true); setMsg(null)
+    try {
+      const { error: e1 } = await supabase.from('dre_caixa').delete().eq('mes', prev.mes)
+      if (e1) throw e1
+      // Mesma categoria repetida no arquivo (raro): soma
+      const porChave = {}
+      for (const l of prev.linhas) {
+        const k = `${l.tipo}|${l.categoria}`
+        porChave[k] = porChave[k] ? { ...porChave[k], valor: porChave[k].valor + l.valor } : { mes: prev.mes, ...l }
+      }
+      const { error: e2 } = await supabase.from('dre_caixa').insert(Object.values(porChave))
+      if (e2) throw e2
+      setMsg({ tipo: 'ok', txt: `Balancete de ${rotuloMes(prev.mes)} importado.` })
+      setPrev(null); onImportou()
+    } catch (e) { setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL : 'Erro ao importar: ' + (e.message || e) }) }
+    setSalvando(false)
+  }
+
+  const confere = prev && Math.abs(prev.receitas - (prev.totais['Total de receitas'] ?? prev.receitas)) < 0.01
+    && Math.abs(prev.despesas - (prev.totais['Total de despesas'] ?? prev.despesas)) < 0.01
+
+  return (
+    <div className="card card-pad">
+      <div style={{ fontWeight: 800, fontSize: 14 }}>Caixa (Balancete)</div>
+      <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
+        Bling › Financeiro › Relatórios › <b>Balancete</b> › "Do mês" › Visualizar › Exportar (CSV). Um mês por arquivo.
+      </div>
+      <CampoArquivo rotulo="Escolher arquivo" onTexto={ler} />
+      {prev && (
+        <div style={{ marginTop: 10, fontSize: 13 }}>
+          <div><b>{rotuloMes(prev.mes)}</b> · receitas R$ {fmt(prev.receitas)} · despesas R$ {fmt(prev.despesas)}</div>
+          <div style={{ fontSize: 12, color: confere ? 'var(--ok)' : 'var(--danger)' }}>
+            {confere ? '✓ Bate com os totais do Balancete' : '⚠️ Não bate com os totais do Balancete — confira o arquivo'}
+          </div>
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={importar} disabled={salvando}>
+            {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Importar
+          </button>
+        </div>
+      )}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+    </div>
+  )
+}
+
+function ReceitaCompetencia() {
+  const hoje = new Date()
+  const mesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)
+  const [mes, setMes] = useState(`${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, '0')}`)
+  const [valores, setValores] = useState({})
+  const [msg, setMsg] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  useEffect(() => {
+    setMsg(null)
+    supabase.from('dre_receita_competencia').select('linha, valor').eq('mes', mes).then(({ data, error }) => {
+      if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return }
+      setValores(Object.fromEntries((data || []).map(r => [r.linha, String(r.valor).replace('.', ',')])))
+    })
+  }, [mes])
+
+  const num = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
+  const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0)
+
+  async function salvar() {
+    setSalvando(true); setMsg(null)
+    const quem = usuarioNome()
+    const rows = RECEITAS.map(l => ({ mes, linha: l, valor: num(valores[l]), atualizado_em: new Date().toISOString(), atualizado_por: quem }))
+    const { error } = await supabase.from('dre_receita_competencia').upsert(rows, { onConflict: 'mes,linha' })
+    setSalvando(false)
+    setMsg(error ? { tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message } : { tipo: 'ok', txt: `Receita de ${rotuloMes(mes)} salva.` })
+  }
+
+  return (
+    <div className="card card-pad">
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ fontWeight: 800, fontSize: 14, flex: '1 1 200px' }}>Receita por competência (digitada)</div>
+        <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+        {RECEITAS.map(l => (
+          <div key={l} className="form-group" style={{ margin: 0 }}>
+            <label className="form-label" style={{ fontSize: 12 }}>{LINHAS[l].nome}</label>
+            <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''}
+              onChange={e => setValores(v => ({ ...v, [l]: e.target.value }))} style={{ textAlign: 'right' }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13 }}>Total: <b>R$ {fmt(total)}</b></div>
+        <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>
+          {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Salvar receita de {rotuloMes(mes)}
+        </button>
+        {msg && <div className={`alert-banner ${msg.tipo}`} style={{ padding: '6px 10px' }}>{msg.txt}</div>}
+      </div>
+    </div>
+  )
+}
+
+// Categorias sem linha (e as ambíguas, por fornecedor) + todas as categorias para ajustar
+function Classificar() {
+  const [dados, setDados] = useState(null)
+  const [erro, setErro] = useState('')
+  const [escolhas, setEscolhas] = useState({}) // chave → { linha, todaCategoria }
+  const [verTodas, setVerTodas] = useState(false)
+  const [salvando, setSalvando] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  async function carregar() {
+    setErro('')
+    try {
+      const [contas, caixa, mapaDB] = await Promise.all([
+        buscarTudo(() => supabase.from('dre_contas_competencia').select('nome, categoria, valor')),
+        buscarTudo(() => supabase.from('dre_caixa').select('tipo, categoria, valor')),
+        buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
+      ])
+      setDados({ contas, caixa, mapaDB }); setEscolhas({})
+    } catch (e) { setErro(semTabela(e) ? AVISO_SQL : e.message || String(e)) }
+  }
+  useEffect(() => { carregar() }, [])
+
+  const { pendentes, categorias } = useMemo(() => {
+    if (!dados) return { pendentes: [], categorias: [] }
+    const pend = new Map(), cats = new Map()
+    const add = (mapa, k, base, v) => { const p = mapa.get(k) || { ...base, qtd: 0, valor: 0 }; p.qtd++; p.valor += Number(v) || 0; mapa.set(k, p) }
+    for (const c of dados.contas) {
+      const cat = c.categoria || ''
+      add(cats, `competencia|${cat}`, { origem: 'competencia', categoria: cat }, c.valor)
+      if (!resolverLinha('competencia', cat, c.nome, dados.mapaDB))
+        add(pend, `competencia|${cat}|${c.nome || ''}`, { origem: 'competencia', categoria: cat, nome: c.nome || '' }, c.valor)
+    }
+    for (const c of dados.caixa) {
+      if (c.tipo === 'transferencia') continue
+      const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
+      add(cats, `${origem}|${c.categoria}`, { origem, categoria: c.categoria }, c.valor)
+      if (!resolverLinha(origem, c.categoria, '', dados.mapaDB))
+        add(pend, `${origem}|${c.categoria}|`, { origem, categoria: c.categoria, nome: '' }, c.valor)
+    }
+    return {
+      pendentes: [...pend.values()].sort((a, b) => a.categoria.localeCompare(b.categoria) || b.valor - a.valor),
+      categorias: [...cats.values()].sort((a, b) => a.origem.localeCompare(b.origem) || a.categoria.localeCompare(b.categoria)),
+    }
+  }, [dados])
+
+  const ORIGEM = { competencia: 'Competência', caixa_receita: 'Caixa · receita', caixa_despesa: 'Caixa · despesa' }
+  const chave = p => `${p.origem}|${p.categoria}|${p.nome || ''}`
+  const mudar = (k, campo, v) => setEscolhas(s => ({ ...s, [k]: { ...s[k], [campo]: v } }))
+  const qtdEscolhidas = Object.values(escolhas).filter(e => e.linha).length
+
+  async function salvar() {
+    setSalvando(true); setMsg(null)
+    const rows = []
+    for (const [k, e] of Object.entries(escolhas)) {
+      if (!e.linha) continue
+      const [origem, categoria, nome] = k.split('|')
+      rows.push({ origem, categoria, nome: e.todaCategoria ? '' : nome, linha: e.linha, atualizado_em: new Date().toISOString() })
+    }
+    // Mesma chave escolhida duas vezes (categoria toda): fica a última
+    const unicos = Object.values(Object.fromEntries(rows.map(r => [`${r.origem}|${r.categoria}|${r.nome}`, r])))
+    const { error } = await supabase.from('dre_mapa').upsert(unicos, { onConflict: 'origem,categoria,nome' })
+    setSalvando(false)
+    if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return }
+    setMsg({ tipo: 'ok', txt: `${unicos.length} classificação(ões) salva(s).` })
+    carregar()
+  }
+
+  const seletor = (k, atual) => (
+    <select className="form-input" value={escolhas[k]?.linha ?? ''} onChange={e => mudar(k, 'linha', e.target.value)} style={{ fontSize: 12, minWidth: 220 }}>
+      <option value="">{atual ? `${LINHAS[atual].nome} (atual)` : '— escolher linha —'}</option>
+      {LINHAS_ESCOLHA.map(l => <option key={l} value={l}>{LINHAS[l].nome}</option>)}
+    </select>
+  )
+
+  return (
+    <div className="card">
+      <div style={{ padding: '14px 16px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', borderBottom: '1px solid var(--gray-100)' }}>
+        <div style={{ flex: '1 1 260px' }}>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Classificar categorias na DRE</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+            Categorias com o mesmo nome em várias áreas ({AMBIGUAS.filter(Boolean).slice(0, 5).join(', ')}…) são classificadas por fornecedor. Basta uma vez: os próximos meses usam a mesma escolha.
+          </div>
+        </div>
+        {qtdEscolhidas > 0 && (
+          <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>
+            {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Salvar {qtdEscolhidas} classificação(ões)
+          </button>
+        )}
+      </div>
+      {erro && <div className="alert-banner danger" style={{ margin: 12 }}>{erro}</div>}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ margin: 12 }}>{msg.txt}</div>}
+      {dados && (
+        <>
+          {!pendentes.length ? (
+            <div style={{ padding: 16, color: 'var(--ok)', fontSize: 13 }}>✓ Todas as categorias importadas têm linha na DRE.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: 'var(--gray-50)' }}>
+                  {['Categoria no Bling', 'Fornecedor', 'Lançamentos', 'Linha da DRE', ''].map((h, i) => (
+                    <th key={i} style={{ padding: '8px 10px', paddingLeft: i ? 10 : 16, textAlign: i === 2 ? 'right' : 'left', fontSize: 12, color: 'var(--gray-500)', fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pendentes.map(p => {
+                  const k = chave(p)
+                  return (
+                    <tr key={k} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                      <td style={{ padding: '7px 10px 7px 16px' }}>
+                        <div style={{ fontWeight: 600 }}>{p.categoria || '(sem categoria)'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{ORIGEM[p.origem]}</div>
+                      </td>
+                      <td style={{ padding: '7px 10px' }}>{p.nome || '—'}</td>
+                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {p.qtd} · R$ {fmt(p.valor)}
+                      </td>
+                      <td style={{ padding: '7px 10px' }}>{seletor(k)}</td>
+                      <td style={{ padding: '7px 16px 7px 10px' }}>
+                        {p.nome && (
+                          <label style={{ fontSize: 11, color: 'var(--gray-500)', display: 'flex', gap: 4, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                            <input type="checkbox" checked={!!escolhas[k]?.todaCategoria} onChange={e => mudar(k, 'todaCategoria', e.target.checked)} />
+                            vale para toda a categoria
+                          </label>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+          <div style={{ padding: '10px 16px', borderTop: '1px solid var(--gray-100)' }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setVerTodas(v => !v)}>
+              {verTodas ? 'Esconder' : 'Ver e ajustar'} todas as categorias ({categorias.length})
+            </button>
+          </div>
+          {verTodas && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <tbody>
+                {categorias.map(c => {
+                  const k = `${c.origem}|${c.categoria}|`
+                  const atual = AMBIGUAS.includes(c.categoria) && c.origem === 'competencia'
+                    ? null : resolverLinha(c.origem, c.categoria, '', dados.mapaDB)
+                  return (
+                    <tr key={k} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                      <td style={{ padding: '6px 10px 6px 16px' }}>
+                        <div style={{ fontWeight: 600 }}>{c.categoria || '(sem categoria)'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{ORIGEM[c.origem]}</div>
+                      </td>
+                      <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--gray-500)' }}>{c.qtd} · R$ {fmt(c.valor)}</td>
+                      <td style={{ padding: '6px 16px 6px 10px' }}>
+                        {AMBIGUAS.includes(c.categoria) && c.origem === 'competencia'
+                          ? <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>por fornecedor (acima)</span>
+                          : seletor(k, atual)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  )
+}

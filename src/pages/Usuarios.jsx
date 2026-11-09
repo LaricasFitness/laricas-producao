@@ -7,13 +7,14 @@ const TODAS_ABAS = [
   { id: 'estoque',       label: '📥 Estoque',   desc: 'Situação, conferência, compras, preços, consumo e pedidos à gráfica' },
   { id: 'precificacao',  label: '💰 Custos',    desc: 'Ficha do produto (custo, preço e margem por canal), CMV do mês, preparações, overhead e ranking de margem' },
   { id: 'logistica',     label: '🚚 Logística', desc: 'Roteiros por zona e CSVs' },
+  { id: 'financeiro',    label: '💼 Financeiro', desc: 'DRE por competência e caixa (importação do Bling)' },
   { id: 'admin',         label: '⚙️ Admin',     desc: 'Cadastros, configurações e acessos' },
 ]
 
 // Permissões antigas continuam valendo: quem tinha 'embalagens' ou 'insumos'
 // enxerga 'estoque'. Ao salvar, os ids legados são convertidos.
 const LEGADO = { embalagens:'estoque', insumos:'estoque', dashboard:'estoque',
-                 pedidos:'estoque', compras:'estoque', financeiro:null,
+                 pedidos:'estoque', compras:'estoque',
                  analise:'producao', log:'producao', planejamento:'producao', historico:'producao' }
 
 function normalizarAbas(abas) {

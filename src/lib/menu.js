@@ -1,4 +1,4 @@
-import { ClipboardList, Truck, Package, CircleDollarSign, Settings } from 'lucide-react'
+import { ClipboardList, Truck, Package, CircleDollarSign, Wallet, Settings } from 'lucide-react'
 
 // Menu do sistema: áreas e as subtelas de cada uma.
 // No desktop as subtelas aparecem embaixo da área, no menu lateral.
@@ -48,6 +48,13 @@ export const MENU = [
       { id: 'overhead',    label: 'Overhead do mês' },
       { id: 'simular',     label: 'Criar produto' },
       { id: 'campanha',    label: 'Simular campanha' },
+    ],
+  },
+  {
+    id: 'financeiro', label: 'Financeiro', Icon: Wallet,
+    subs: [
+      { id: 'dre',      label: 'DRE' },
+      { id: 'importar', label: 'Importar e classificar' },
     ],
   },
   {
