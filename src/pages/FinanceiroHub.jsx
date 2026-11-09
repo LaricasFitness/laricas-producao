@@ -512,7 +512,6 @@ function Classificar() {
   const [dados, setDados] = useState(null)
   const [erro, setErro] = useState('')
   const [escolhas, setEscolhas] = useState({}) // chave → { linha, todaCategoria }
-  const [verTodas, setVerTodas] = useState(false)
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState(null)
 
@@ -520,8 +519,8 @@ function Classificar() {
     setErro('')
     try {
       const [contas, caixa, mapaDB] = await Promise.all([
-        buscarTudo(() => supabase.from('dre_contas_competencia').select('nome, categoria, valor')),
-        buscarTudo(() => supabase.from('dre_caixa').select('tipo, categoria, valor')),
+        buscarTudo(() => supabase.from('dre_contas_competencia').select('competencia, nome, categoria, observacoes, valor, situacao')),
+        buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor')),
         buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
       ])
       setDados({ contas, caixa, mapaDB }); setEscolhas({})
@@ -529,26 +528,23 @@ function Classificar() {
   }
   useEffect(() => { carregar() }, [])
 
-  const { pendentes, categorias } = useMemo(() => {
-    if (!dados) return { pendentes: [], categorias: [] }
-    const pend = new Map(), cats = new Map()
+  const { pendentes } = useMemo(() => {
+    if (!dados) return { pendentes: [] }
+    const pend = new Map()
     const add = (mapa, k, base, v) => { const p = mapa.get(k) || { ...base, qtd: 0, valor: 0 }; p.qtd++; p.valor += Number(v) || 0; mapa.set(k, p) }
     for (const c of dados.contas) {
       const cat = c.categoria || ''
-      add(cats, `competencia|${cat}`, { origem: 'competencia', categoria: cat }, c.valor)
       if (!resolverLinha('competencia', cat, c.nome, dados.mapaDB))
         add(pend, `competencia|${cat}|${c.nome || ''}`, { origem: 'competencia', categoria: cat, nome: c.nome || '' }, c.valor)
     }
     for (const c of dados.caixa) {
       if (c.tipo === 'transferencia') continue
       const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
-      add(cats, `${origem}|${c.categoria}`, { origem, categoria: c.categoria }, c.valor)
       if (!resolverLinha(origem, c.categoria, '', dados.mapaDB))
         add(pend, `${origem}|${c.categoria}|`, { origem, categoria: c.categoria, nome: '' }, c.valor)
     }
     return {
       pendentes: [...pend.values()].sort((a, b) => a.categoria.localeCompare(b.categoria) || b.valor - a.valor),
-      categorias: [...cats.values()].sort((a, b) => a.origem.localeCompare(b.origem) || a.categoria.localeCompare(b.categoria)),
     }
   }, [dados])
 
@@ -639,38 +635,155 @@ function Classificar() {
               </tbody>
             </table>
           )}
-          <div style={{ padding: '10px 16px', borderTop: '1px solid var(--gray-100)' }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => setVerTodas(v => !v)}>
-              {verTodas ? 'Esconder' : 'Ver e ajustar'} todas as categorias ({categorias.length})
-            </button>
-          </div>
-          {verTodas && (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <tbody>
-                {categorias.map(c => {
-                  const k = `${c.origem}|${c.categoria}|`
-                  const atual = AMBIGUAS.includes(c.categoria) && c.origem === 'competencia'
-                    ? null : resolverLinha(c.origem, c.categoria, '', dados.mapaDB)
-                  return (
-                    <tr key={k} style={{ borderTop: '1px solid var(--gray-100)' }}>
-                      <td style={{ padding: '6px 10px 6px 16px' }}>
-                        <div style={{ fontWeight: 600 }}>{c.categoria || '(sem categoria)'}</div>
-                        <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{ORIGEM[c.origem]}</div>
-                      </td>
-                      <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--gray-500)' }}>{c.qtd} · R$ {fmt(c.valor)}</td>
-                      <td style={{ padding: '6px 16px 6px 10px' }}>
-                        {AMBIGUAS.includes(c.categoria) && c.origem === 'competencia'
-                          ? <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>por fornecedor (acima)</span>
-                          : seletor(k, atual)}
+          <MapaPorLinha dados={dados} seletor={seletor} />
+        </>
+      )}
+    </div>
+  )
+}
+
+// O que entra em cada linha da DRE: categorias (e fornecedores, quando classificados
+// um a um) com o total e, na competência, as contas de cada uma. Dá para trocar a linha aqui.
+const ORDEM_LINHAS = [...ESTRUTURA.filter(e => e.tipo === 'grupo').flatMap(e => e.linhas), 'ignorar']
+const LIMITE_CONTAS = 300
+
+function MapaPorLinha({ dados, seletor }) {
+  const [visao, setVisao] = useState('competencia')
+  const [mes, setMes] = useState('')
+  const [fechadas, setFechadas] = useState(() => new Set())   // linhas da DRE fechadas
+  const [abertas, setAbertas] = useState(() => new Set())     // categorias com as contas abertas
+
+  const meses = useMemo(() => [...new Set(visao === 'competencia'
+    ? dados.contas.map(c => (c.competencia || '').slice(0, 7))
+    : dados.caixa.map(c => c.mes))].filter(Boolean).sort().reverse(), [dados, visao])
+
+  const grupos = useMemo(() => {
+    const g = {}
+    const somar = (linha, k, base, valor, conta) => {
+      const m = g[linha] || (g[linha] = new Map())
+      const it = m.get(k) || { ...base, k, qtd: 0, valor: 0, contas: [] }
+      it.qtd++; it.valor += Number(valor) || 0
+      if (conta) it.contas.push(conta)
+      m.set(k, it)
+    }
+    if (visao === 'competencia') {
+      for (const c of dados.contas) {
+        if (mes && !(c.competencia || '').startsWith(mes)) continue
+        const cat = c.categoria || '', nome = c.nome || ''
+        const linha = resolverLinha('competencia', cat, nome, dados.mapaDB) || 'nao_class'
+        const porNome = AMBIGUAS.includes(cat) ||
+          (!!nome && dados.mapaDB.some(m => m.origem === 'competencia' && m.categoria === cat && m.nome === nome))
+        somar(linha, `competencia|${cat}|${porNome ? nome : ''}`, { origem: 'competencia', categoria: cat, nome: porNome ? nome : '' }, c.valor, c)
+      }
+    } else {
+      for (const c of dados.caixa) {
+        if (c.tipo === 'transferencia' || (mes && c.mes !== mes)) continue
+        const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
+        const linha = resolverLinha(origem, c.categoria, '', dados.mapaDB) || (c.tipo === 'receita' ? 'rec_nao_class' : 'nao_class')
+        somar(linha, `${origem}|${c.categoria}|`, { origem, categoria: c.categoria, nome: '' }, c.valor, null)
+      }
+    }
+    return ORDEM_LINHAS.filter(l => g[l]).map(l => {
+      const itens = [...g[l].values()].sort((a, b) => b.valor - a.valor)
+      return { linha: l, itens, total: itens.reduce((s, i) => s + i.valor, 0) }
+    })
+  }, [dados, visao, mes])
+
+  const alternar = (atual, setter, k) => { const n = new Set(atual); n.has(k) ? n.delete(k) : n.add(k); setter(n) }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--gray-200)' }}>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 800, fontSize: 14, flex: '1 1 240px' }}>O que entra em cada linha da DRE</div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[['competencia', 'Competência'], ['caixa', 'Caixa']].map(([v, l]) => (
+            <button key={v} className={`btn btn-sm ${visao === v ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => { setVisao(v); setMes(''); setAbertas(new Set()) }}>{l}</button>
+          ))}
+        </div>
+        <select className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }}>
+          <option value="">Todos os meses</option>
+          {meses.map(m => <option key={m} value={m}>{rotuloMes(m)}</option>)}
+        </select>
+        <button className="btn btn-ghost btn-sm" onClick={() => setFechadas(fechadas.size ? new Set() : new Set(grupos.map(g => g.linha)))}>
+          {fechadas.size ? 'Abrir todas' : 'Fechar todas'}
+        </button>
+      </div>
+      {visao === 'caixa' && (
+        <div style={{ padding: '0 16px 10px', fontSize: 12, color: 'var(--gray-500)' }}>
+          O Balancete traz só o total de cada categoria principal do Bling. Para ver as contas uma a uma, use a visão de competência.
+        </div>
+      )}
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <tbody>
+          {grupos.map(g => {
+            const L = LINHAS[g.linha]
+            const aberta = !fechadas.has(g.linha)
+            return [
+              <tr key={g.linha} onClick={() => alternar(fechadas, setFechadas, g.linha)}
+                style={{ background: 'var(--gray-50)', borderTop: '1px solid var(--gray-200)', cursor: 'pointer' }}>
+                <td colSpan={3} style={{ padding: '8px 16px', fontWeight: 800, color: L.alerta ? 'var(--danger)' : 'var(--gray-800)' }}>
+                  {aberta ? <ChevronDown size={13} style={{ verticalAlign: -2 }} /> : <ChevronRight size={13} style={{ verticalAlign: -2 }} />} {L.nome}
+                  <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--gray-400)' }}> · {g.itens.length} {g.itens.length === 1 ? 'item' : 'itens'}</span>
+                </td>
+                <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap' }}>R$ {fmt(g.total)}</td>
+              </tr>,
+              ...(aberta ? g.itens.flatMap(it => {
+                const comContas = it.contas.length > 0
+                const verContas = abertas.has(it.k)
+                const linhas = [(
+                  <tr key={it.k} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                    <td style={{ padding: '6px 10px 6px 34px', cursor: comContas ? 'pointer' : 'default' }}
+                      onClick={() => comContas && alternar(abertas, setAbertas, it.k)}>
+                      {comContas && (verContas ? <ChevronDown size={12} style={{ verticalAlign: -2 }} /> : <ChevronRight size={12} style={{ verticalAlign: -2 }} />)}{' '}
+                      <span style={{ fontWeight: 600 }}>{it.categoria || '(sem categoria)'}</span>
+                      {it.nome && <span style={{ color: 'var(--gray-500)' }}> · {it.nome}</span>}
+                    </td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--gray-500)', fontSize: 12 }}>
+                      {it.qtd} {it.qtd === 1 ? 'conta' : 'contas'}
+                    </td>
+                    <td style={{ padding: '6px 10px' }}>{seletor(it.k, g.linha === 'nao_class' || g.linha === 'rec_nao_class' ? null : g.linha)}</td>
+                    <td style={{ padding: '6px 16px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>R$ {fmt(it.valor)}</td>
+                  </tr>
+                )]
+                if (verContas) {
+                  const contas = [...it.contas].sort((a, b) => (b.competencia || '').localeCompare(a.competencia || '') || b.valor - a.valor)
+                  linhas.push(
+                    <tr key={it.k + '-contas'}>
+                      <td colSpan={4} style={{ padding: '0 16px 10px 52px' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: 'var(--gray-50)', borderRadius: 6 }}>
+                          <tbody>
+                            {contas.slice(0, LIMITE_CONTAS).map((c, i) => (
+                              <tr key={i} style={{ borderTop: i ? '1px solid var(--gray-100)' : 'none' }}>
+                                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: 'var(--gray-500)' }}>
+                                  {c.competencia ? new Date(c.competencia + 'T12:00:00').toLocaleDateString('pt-BR') : ''}
+                                </td>
+                                <td style={{ padding: '4px 8px' }}>{c.nome}</td>
+                                <td style={{ padding: '4px 8px', color: 'var(--gray-500)' }}>{c.observacoes}</td>
+                                <td style={{ padding: '4px 8px', color: 'var(--gray-400)', whiteSpace: 'nowrap' }}>{c.situacao}</td>
+                                <td style={{ padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>R$ {fmt(c.valor)}</td>
+                              </tr>
+                            ))}
+                            {contas.length > LIMITE_CONTAS && (
+                              <tr><td colSpan={5} style={{ padding: '4px 8px', color: 'var(--gray-400)' }}>
+                                Mostrando {LIMITE_CONTAS} de {contas.length}. Escolha um mês para ver menos.
+                              </td></tr>
+                            )}
+                          </tbody>
+                        </table>
                       </td>
                     </tr>
                   )
-                })}
-              </tbody>
-            </table>
-          )}
-        </>
-      )}
+                }
+                return linhas
+              }) : []),
+            ]
+          })}
+        </tbody>
+      </table>
+      <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--gray-400)', borderTop: '1px solid var(--gray-100)' }}>
+        Clique no nome da linha para abrir ou fechar e na categoria para ver as contas. Para mover uma categoria (ou um fornecedor) de linha, escolha a nova linha e clique em "Salvar" no topo deste quadro.
+      </div>
     </div>
   )
 }
