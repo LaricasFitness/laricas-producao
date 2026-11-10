@@ -261,7 +261,8 @@ export function lerExtratoCaixa(texto) {
     const t = (r[ix.tipo] || '').trim().toUpperCase()
     if (!data || !['C', 'D'].includes(t)) continue // saldo, totais
     const categoria = (r[ix.cat] || '').trim()
-    const transf = /^transfer[eê]ncias?/i.test(categoria) || /^ajuste de saldo$/i.test(categoria)
+    // transferência entre contas próprias; "Transferências recebidas" (aportes, multas, reembolsos) é entrada
+    const transf = /^transfer[eê]ncias?( de (entrada|sa[ií]da))?$/i.test(categoria) || /^ajuste de saldo$/i.test(categoria)
     const banco = ix.banco >= 0 ? (r[ix.banco] || '').trim() : ''
     if (banco) bancos.add(banco)
     if (!periodo && ix.periodo >= 0) {
@@ -307,6 +308,10 @@ export function itensCaixa({ caixa = [], caixaLanc = [], mapaDB = [] }) {
     const origem = receita ? 'caixa_receita' : 'competencia'
     let linha = resolverLinha(origem, l.categoria, l.nome, mapaDB), sugerido = false
     if (!linha && receita && !l.categoria) { linha = doCliente(l.nome); sugerido = !!linha }
+    // "Transferências recebidas": aporte/empréstimo fica fora; multa de cancelamento, reembolso etc. é outra receita
+    const porNomeMapa = mapaDB.some(m => m.origem === origem && m.categoria === l.categoria && m.nome === l.nome)
+    if (receita && /^transfer[eê]ncias recebidas$/i.test(l.categoria) && !porNomeMapa)
+      linha = /aporte|empr[eé]stimo|capital|m[uú]tuo/i.test(l.historico || '') ? 'ignorar' : 'rec_outras'
     // classificação por fornecedor/cliente: categoria vazia ou ambígua, ou já classificada por nome
     const porNome = !l.categoria || (!receita && AMBIGUAS.includes(l.categoria)) ||
       mapaDB.some(m => m.origem === origem && m.categoria === l.categoria && m.nome === l.nome)
