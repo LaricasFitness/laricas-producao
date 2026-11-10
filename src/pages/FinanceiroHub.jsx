@@ -856,7 +856,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
             {CAMPOS_CANAL.map(([k, nome, destino]) => (
               <div key={k} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10, alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{nome}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{k === 'marketing' && f.canal === 'Site' ? 'Vouchers de influenciadores' : nome}</div>
                   <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{k === 'vendas' && f.canal === 'Site' ? 'Receita bruta · Venda Site' : destino}</div>
                 </div>
                 <input className="form-input" inputMode="decimal" placeholder="0,00" value={f[k] ?? ''} onChange={e => set(k, e.target.value)} style={{ textAlign: 'right' }} />
@@ -877,7 +877,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
             <div>Deduções · promoções: <b>− R$ {fmt(v.promocoes)}</b></div>
             <div>Comercial · comissão e taxas: <b>− R$ {fmt(custo)}</b>
               <span style={{ color: 'var(--gray-500)' }}> ({fmt(v.taxas)} + {fmt(v.servicos)} − {fmt(v.ajustes)} de ajustes)</span></div>
-            {anuncios !== 0 && <div>Marketing · anúncios: <b>− R$ {fmt(anuncios)}</b></div>}
+            {anuncios !== 0 && <div>Marketing · {f.canal === 'Site' ? 'influenciadores (vouchers)' : 'anúncios'}: <b>− R$ {fmt(anuncios)}</b></div>}
             <div style={{ color: bate == null ? 'var(--gray-500)' : bate ? 'var(--ok)' : 'var(--danger)', fontWeight: 600 }}>
               Recebido pela loja: R$ {fmt(liquido)}
               {bate == null ? '' : bate ? ' ✓ bate com o total do portal' : ` ⚠ o portal diz R$ ${fmt(v.total_faturamento)} (diferença R$ ${fmt(liquido - v.total_faturamento)})`}

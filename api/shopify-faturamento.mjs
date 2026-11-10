@@ -23,7 +23,10 @@ const CONSULTA = `query Pedidos($q: String!, $depois: String) {
       refunds { totalRefundedSet { shopMoney { amount } } }
       shippingLines(first: 3) { nodes {
         originalPriceSet { shopMoney { amount } }
-        discountAllocations { allocatedAmountSet { shopMoney { amount } } }
+        discountAllocations {
+          allocatedAmountSet { shopMoney { amount } }
+          discountApplication { ... on DiscountCodeApplication { code } }
+        }
       } }
       lineItems(first: 40) {
         pageInfo { hasNextPage }
