@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen } from 'lucide-react'
+import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, Camera, Plus, Pencil, Trash2 } from 'lucide-react'
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
   resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura, conferir, mesVencimento,
+  PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, liquidoCanal, LINHAS_CANAL,
 } from '../lib/dre'
+import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -64,7 +66,11 @@ async function carregarAno(ano) {
   let mesInfo = [], semTabelaMes = false
   try { mesInfo = await buscarTudo(() => supabase.from('dre_mes').select('*').like('mes', `${ano}-%`)) }
   catch (e) { if (semTabela(e)) semTabelaMes = true; else throw e }
-  return { contas, caixa, receitas, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
+  // dre_canal_competencia (faturamento das plataformas) existe a partir do financeiro_dre_3.sql
+  let canais = []
+  try { canais = await buscarTudo(() => supabase.from('dre_canal_competencia').select('*').gte('mes', `${ano - 1}-12`).lte('mes', `${ano}-12`)) }
+  catch (e) { if (!semTabela(e)) throw e }
+  return { contas, caixa, receitas, canais, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
 }
 
 // Meses fechados usam os valores guardados no cadeado
@@ -103,7 +109,7 @@ function TelaDRE({ irImportar }) {
 
   // Meses com dado na visão escolhida
   const meses = !dre ? [] : todosMeses.filter(m => visao === 'competencia'
-    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m) || dre.extras[m].fechado
+    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m) || dados.canais.some(r => r.mes === m) || dre.extras[m].fechado
     : dre.extras[m].temCaixa)
 
   const estrutura = Object.fromEntries(meses.map(m => [m, calcularEstrutura(dre.porMes[m])]))
@@ -112,6 +118,23 @@ function TelaDRE({ irImportar }) {
   const receitaTotal = totalEst('receita')
   const semReceita = visao === 'competencia' ? meses.filter(m => !dre.extras[m].temReceita) : []
   const cmvCompras = visao === 'competencia' ? meses.filter(m => dre.extras[m].cmvFonte === 'compras') : []
+
+  // Lojas das plataformas dentro da linha (iFood BV, 99 Food BK…) e o resto da linha em "demais"
+  const sublinhas = l => {
+    if (!LINHAS_CANAL[l]) return null
+    const rotulos = [...new Set(meses.flatMap(m => Object.keys(dre.extras[m].sub?.[l] || {})))]
+    if (!rotulos.length) return null
+    const lin = rotulos.map(r => {
+      const porMes = Object.fromEntries(meses.map(m => [m, dre.extras[m].sub?.[l]?.[r] || 0]))
+      return { rotulo: r, porMes, total: meses.reduce((s, m) => s + porMes[m], 0) }
+    }).sort((a, b) => b.total - a.total)
+    const resto = Object.fromEntries(meses.map(m => [m, (dre.porMes[m][l] || 0) - lin.reduce((s, x) => s + x.porMes[m], 0)]))
+    const totalResto = meses.reduce((s, m) => s + resto[m], 0)
+    if (meses.some(m => Math.abs(resto[m]) >= 0.005)) lin.push({
+      rotulo: l === 'rec_delivery' ? 'Digitado (fora das plataformas)' : 'Demais lançamentos (Bling)', porMes: resto, total: totalResto,
+    })
+    return lin
+  }
 
   const alternar = id => setAbertos(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const celula = (v, extra) => (
@@ -133,7 +156,7 @@ function TelaDRE({ irImportar }) {
         </select>
         <div style={{ flex: 1, fontSize: 12, color: 'var(--gray-400)', minWidth: 200 }}>
           {visao === 'competencia'
-            ? 'Despesas pela data de competência (Bling); receita digitada; CMV do fechamento do sistema.'
+            ? 'Despesas pela data de competência (Bling); faturamento das plataformas e receita digitada; CMV do fechamento do sistema.'
             : 'Entradas e saídas pagas no mês, pelo Balancete do Bling.'}
         </div>
         <button className="btn btn-ghost btn-sm" onClick={carregar} title="Recarregar"><RefreshCw size={13} /></button>
@@ -232,6 +255,21 @@ function TelaDRE({ irImportar }) {
                           </td>
                         </tr>
                       )
+                      const subs = visao === 'competencia' ? sublinhas(l) : null
+                      if (subs) return [row, ...subs.map(sb => (
+                        <tr key={e.id + l + sb.rotulo}>
+                          <td style={{ padding: '2px 14px 4px 48px', fontSize: 12, color: 'var(--gray-500)' }}>{sb.rotulo}</td>
+                          {meses.map(m => (
+                            <td key={m} style={{ padding: '2px 10px 4px', textAlign: 'right', fontSize: 12, color: 'var(--gray-500)', whiteSpace: 'nowrap' }}>
+                              {Math.abs(sb.porMes[m]) < 0.005 ? <span style={{ color: 'var(--gray-300)' }}>—</span> : fmt((L.sinal || 1) * sb.porMes[m])}
+                            </td>
+                          ))}
+                          <td style={{ padding: '2px 10px 4px', textAlign: 'right', fontSize: 12, color: 'var(--gray-500)' }}>{fmt((L.sinal || 1) * sb.total)}</td>
+                          <td style={{ padding: '2px 14px 4px 10px', textAlign: 'right', fontSize: 11, color: 'var(--gray-400)' }}>
+                            {receitaTotal ? fmtPct((L.sinal || 1) * sb.total / receitaTotal) : '—'}
+                          </td>
+                        </tr>
+                      ))]
                       if (l !== 'cmv' || visao !== 'competencia') return [row]
                       return [row, (
                         <tr key={e.id + l + 'memo'}>
@@ -283,6 +321,11 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
     }).map(c => ({ a: c.nome, b: c.categoria, c: c.observacoes, valor: Number(c.valor), d: c.situacao }))
     if (RECEITAS.includes(linha)) itens = dados.receitas.filter(r => r.mes === mes && r.linha === linha)
       .map(r => ({ a: 'Digitado na tela', b: '', c: '', valor: Number(r.valor) }))
+    if (LINHAS_CANAL[linha]) itens = [...itens, ...dados.canais.filter(r => r.mes === mes).map(r => ({
+      a: rotuloCanal(r), b: 'Faturamento da plataforma',
+      c: linha === 'dv_comercial' ? `taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}` : '',
+      valor: LINHAS_CANAL[linha](r), d: r.origem === 'print' ? 'lido do print' : 'digitado',
+    })).filter(i => Math.abs(i.valor) >= 0.005)]
   } else {
     itens = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia').filter(c => {
       const l = resolverLinha(c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa', c.categoria, '', dados.mapaDB)
@@ -334,13 +377,15 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
 // ── Importar e classificar ───────────────────────────────────────────────────
 function TelaImportar() {
   const [versao, setVersao] = useState(0) // recarrega a classificação depois de importar
+  const [versaoCanais, setVersaoCanais] = useState(0) // a receita mostra o total das plataformas
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <ImportarCompetencia onImportou={() => setVersao(v => v + 1)} />
         <ImportarBalancete onImportou={() => setVersao(v => v + 1)} />
       </div>
-      <ReceitaCompetencia />
+      <FaturamentoPlataformas onMudou={() => setVersaoCanais(v => v + 1)} />
+      <ReceitaCompetencia versaoCanais={versaoCanais} />
       <Classificar key={versao} />
     </div>
   )
@@ -493,7 +538,334 @@ function ImportarBalancete({ onImportou }) {
   )
 }
 
-function ReceitaCompetencia() {
+// ── Faturamento das plataformas (iFood, 99 Food, Keeta, Anota.AI) ────────────
+// Um lançamento por mês × canal × unidade, lido do print do portal ou digitado.
+// Vai para a DRE: vendas → Receita Delivery; promoções → Deduções; taxas + serviços − ajustes → Comercial.
+const AVISO_SQL_3 = 'Aplique o arquivo financeiro_dre_3.sql no Supabase para lançar o faturamento das plataformas.'
+const CAMPOS_CANAL = [
+  ['vendas', 'Valor das vendas', 'Receita bruta · Delivery'],
+  ['promocoes', 'Promoções', 'Deduções · promoções'],
+  ['taxas', 'Taxas e comissões', 'Comercial · comissão e taxas'],
+  ['servicos', 'Serviços (entrega sob demanda…)', 'Comercial · comissão e taxas'],
+  ['ajustes', 'Ajustes (+ a favor da loja)', 'abate de comissão e taxas'],
+]
+const numTxt = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
+const txtNum = v => v == null || v === '' ? '' : Number(v).toFixed(2).replace('.', ',')
+const mesPassado = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+const naFila = x => ({ ...x, _k: Date.now() + Math.random() })
+const normalizarCanal = p => {
+  const k = String(p || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  return PLATAFORMAS.find(x => x.canal.toLowerCase().replace(/[^a-z0-9]/g, '') === k)?.canal || (p || 'iFood')
+}
+// Linha do banco → formulário (valores em texto, com vírgula)
+const paraForm = r => ({
+  ...r, ...Object.fromEntries(CAMPOS_CANAL.map(([k]) => [k, txtNum(r[k])])), total_faturamento: txtNum(r.total_faturamento),
+})
+const doForm = f => ({
+  vendas: numTxt(f.vendas), promocoes: numTxt(f.promocoes), taxas: numTxt(f.taxas), servicos: numTxt(f.servicos), ajustes: numTxt(f.ajustes),
+  total_faturamento: String(f.total_faturamento ?? '').trim() === '' ? null : numTxt(f.total_faturamento),
+})
+
+function FaturamentoPlataformas({ onMudou }) {
+  const [mes, setMes] = useState(mesPassado)
+  const [todas, setTodas] = useState([])   // todos os meses: ensina nome da loja → unidade
+  const [fechados, setFechados] = useState(new Set())
+  const [semTab, setSemTab] = useState(false)
+  const [fila, setFila] = useState([])     // lançamentos para revisar (prints lidos, novo, edição)
+  const [lendo, setLendo] = useState(0)
+  const [msg, setMsg] = useState(null)
+  const ref = useRef()
+
+  async function carregar() {
+    const [{ data, error }, { data: fech }] = await Promise.all([
+      supabase.from('dre_canal_competencia').select('*').order('canal').order('unidade'),
+      supabase.from('dre_mes').select('mes').eq('visao', 'competencia').not('fechado_em', 'is', null),
+    ])
+    if (error) { if (semTabela(error)) setSemTab(true); else setMsg({ tipo: 'danger', txt: error.message }); return }
+    setSemTab(false); setTodas(data || []); setFechados(new Set((fech || []).map(r => r.mes)))
+  }
+  useEffect(() => { carregar() }, [])
+
+  // Print: lê cada arquivo e põe na fila de revisão (nada é salvo sem conferir)
+  async function lerArquivos(files) {
+    const lista = [...files].filter(f => /^image\/|pdf$/.test(f.type))
+    if (!lista.length) return
+    setMsg(null); setLendo(n => n + lista.length)
+    for (const file of lista) {
+      try {
+        const corpo = await arquivoParaEnvio(file, { rotuloPdf: 'envie um print da tela' })
+        const r = await fetch('/api/ler-faturamento', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(j.erro || `Falha na leitura (${r.status})`)
+        const p = j.faturamento
+        const canal = normalizarCanal(p.plataforma)
+        const unidade = siglaUnidade(p.unidade, todas.filter(x => x.canal === canal))
+          || (PLATAFORMAS.find(x => x.canal === canal)?.unidades.length === 1 ? PLATAFORMAS.find(x => x.canal === canal).unidades[0] : '')
+        setFila(q => [...q, naFila({
+          ...paraForm({ ...p, total_faturamento: p.total_faturamento }),
+          mes: /^\d{4}-\d{2}$/.test(p.mes) ? p.mes : mes, canal, unidade,
+          unidade_print: p.unidade || null, detalhes: p.linhas || [], origem: 'print',
+          aviso: p.legivel ? (p.problemas || '') : (p.problemas || 'Leitura incompleta: confira todos os valores.'),
+          ilegivel: !p.legivel, arquivo: file.name || 'print colado',
+        })])
+      } catch (e) { setMsg({ tipo: 'danger', txt: `${file.name || 'Print'}: ${e.message || e}` }) }
+      setLendo(n => n - 1)
+    }
+  }
+
+  // Ctrl+V de um print em qualquer lugar da tela de importação
+  useEffect(() => {
+    const colar = e => {
+      const arqs = [...(e.clipboardData?.files || [])]
+      if (arqs.some(f => f.type.startsWith('image/'))) { e.preventDefault(); lerArquivos(arqs) }
+    }
+    document.addEventListener('paste', colar)
+    return () => document.removeEventListener('paste', colar)
+  })
+
+  async function excluir(r) {
+    if (!window.confirm(`Excluir o faturamento de ${rotuloCanal(r)} em ${rotuloMes(r.mes)}?`)) return
+    const { error } = await supabase.from('dre_canal_competencia').delete().eq('id', r.id)
+    if (error) { setMsg({ tipo: 'danger', txt: error.message }); return }
+    setMsg({ tipo: 'ok', txt: `${rotuloCanal(r)} de ${rotuloMes(r.mes)} excluído.` }); carregar(); onMudou()
+  }
+
+  const doMes = todas.filter(r => r.mes === mes)
+  const fechado = fechados.has(mes)
+  const soma = k => doMes.reduce((s, r) => s + (typeof k === 'function' ? k(r) : Number(r[k]) || 0), 0)
+  const th = { padding: '6px 8px', textAlign: 'right', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700, whiteSpace: 'nowrap' }
+  const td = { padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }
+
+  return (
+    <div className="card card-pad">
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 260px' }}>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Faturamento das plataformas (competência)</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
+            iFood › Financeiro › <b>Faturamento</b> do mês, uma loja por print (com os grupos abertos). Envie ou cole (Ctrl+V) o print:
+            o sistema lê vendas, promoções, taxas, serviços e ajustes e você confere antes de salvar.
+          </div>
+        </div>
+        <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
+        <button className="btn btn-primary btn-sm" disabled={semTab || lendo > 0} onClick={() => ref.current?.click()}>
+          {lendo > 0 ? <RefreshCw size={13} className="spin" /> : <Camera size={13} />} {lendo > 0 ? `Lendo ${lendo} print(s)…` : 'Ler print(s)'}
+        </button>
+        <button className="btn btn-ghost btn-sm" disabled={semTab || fechado}
+          onClick={() => setFila(q => [...q, naFila(paraForm({ mes, canal: 'iFood', unidade: 'BV', origem: 'digitado' }))])}>
+          <Plus size={13} /> Digitar
+        </button>
+        <input ref={ref} type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
+          onChange={e => { const fs = e.target.files; lerArquivos(fs); e.target.value = '' }} />
+      </div>
+
+      {semTab && <div className="alert-banner info" style={{ marginTop: 10 }}>{AVISO_SQL_3}</div>}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+      {fechado && <div style={{ fontSize: 12, color: 'var(--ok)', marginTop: 8 }}><Lock size={12} style={{ verticalAlign: -2 }} /> {rotuloMes(mes)} fechado na DRE: abra o cadeado para alterar.</div>}
+
+      {!semTab && (doMes.length ? (
+        <div style={{ overflowX: 'auto', marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 640 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--gray-200)' }}>
+                <th style={{ ...th, textAlign: 'left' }}>Loja</th>
+                <th style={th}>Vendas</th><th style={th}>Promoções</th><th style={th}>Comissão e taxas</th>
+                <th style={th} title="vendas − promoções − comissão e taxas">Recebido</th><th style={th}>Portal</th><th />
+              </tr>
+            </thead>
+            <tbody>
+              {doMes.map(r => {
+                const bate = r.total_faturamento == null ? null : Math.abs(liquidoCanal(r) - Number(r.total_faturamento)) < 0.05
+                return (
+                  <tr key={r.id} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                    <td style={{ padding: '6px 8px', fontWeight: 700 }}>
+                      {rotuloCanal(r)}
+                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--gray-400)' }}> · {r.origem === 'print' ? 'print' : 'digitado'}</span>
+                    </td>
+                    <td style={td}>{fmt(r.vendas)}</td>
+                    <td style={td}>{fmt(r.promocoes)}</td>
+                    <td style={td} title={`taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}`}>{fmt(custoCanal(r))}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{fmt(liquidoCanal(r))}</td>
+                    <td style={{ ...td, fontSize: 12, color: bate == null ? 'var(--gray-300)' : bate ? 'var(--ok)' : 'var(--danger)' }}
+                      title={r.total_faturamento == null ? 'Sem total do portal' : `Total do faturamento no portal: R$ ${fmt(r.total_faturamento)}`}>
+                      {bate == null ? '—' : bate ? '✓ bate' : `⚠ ${fmt(r.total_faturamento)}`}
+                    </td>
+                    <td style={{ ...td, width: 70 }}>
+                      {!fechado && <>
+                        <button className="btn btn-ghost btn-xs" title="Editar" onClick={() => setFila(q => [...q, naFila(paraForm(r))])}><Pencil size={12} /></button>
+                        <button className="btn btn-ghost btn-xs" title="Excluir" onClick={() => excluir(r)}><Trash2 size={12} /></button>
+                      </>}
+                    </td>
+                  </tr>
+                )
+              })}
+              <tr style={{ borderTop: '2px solid var(--gray-200)', fontWeight: 800 }}>
+                <td style={{ padding: '6px 8px' }}>Total {rotuloMes(mes)}</td>
+                <td style={td}>{fmt(soma('vendas'))}</td><td style={td}>{fmt(soma('promocoes'))}</td>
+                <td style={td}>{fmt(soma(custoCanal))}</td><td style={td}>{fmt(soma(liquidoCanal))}</td><td /><td />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--gray-400)', marginTop: 10 }}>Nenhuma loja lançada em {rotuloMes(mes)}.</div>
+      ))}
+
+      {fila.length > 0 && (
+        <ModalCanal key={fila[0]._k} inicial={fila[0]} restantes={fila.length - 1} todas={todas} fechados={fechados}
+          onFechar={() => setFila(q => q.slice(1))}
+          onSalvou={m => { setFila(q => q.slice(1)); setMes(m); carregar(); onMudou() }} />
+      )}
+    </div>
+  )
+}
+
+function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou }) {
+  const [f, setF] = useState(inicial)
+  const [erro, setErro] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const [verLinhas, setVerLinhas] = useState(false)
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  const v = doForm(f)
+  const custo = custoCanal(v), liquido = liquidoCanal(v)
+  const bate = v.total_faturamento == null ? null : Math.abs(liquido - v.total_faturamento) < 0.05
+  const unidades = PLATAFORMAS.find(x => x.canal === f.canal)?.unidades || []
+  const existente = todas.find(r => r.mes === f.mes && r.canal === f.canal && r.unidade === (f.unidade || '') && r.id !== f.id)
+  const fechado = fechados.has(f.mes)
+
+  async function salvar() {
+    setErro('')
+    if (!/^\d{4}-\d{2}$/.test(f.mes || '')) return setErro('Escolha o mês do faturamento.')
+    if (!f.canal) return setErro('Escolha a plataforma.')
+    if (unidades.length > 1 && !f.unidade) return setErro(`Escolha a unidade (${unidades.join(', ')}).`)
+    if (!(v.vendas > 0)) return setErro('Valor das vendas em branco.')
+    if (fechado) return setErro(`${rotuloMes(f.mes)} está fechado na DRE: abra o cadeado antes.`)
+    if (existente && !window.confirm(`${rotuloCanal(f)} já tem faturamento em ${rotuloMes(f.mes)} (vendas R$ ${fmt(existente.vendas)}). Substituir?`)) return
+    if (bate === false && !window.confirm(`As linhas dão R$ ${fmt(liquido)} e o total do portal é R$ ${fmt(v.total_faturamento)}. Salvar mesmo assim?`)) return
+    setSalvando(true)
+    const linha = {
+      mes: f.mes, canal: f.canal, unidade: f.unidade || '', ...v,
+      unidade_print: f.unidade_print || null, detalhes: f.detalhes || null, origem: f.origem === 'print' ? 'print' : 'digitado',
+      atualizado_em: new Date().toISOString(), atualizado_por: usuarioNome(),
+    }
+    const { error } = await supabase.from('dre_canal_competencia').upsert(linha, { onConflict: 'mes,canal,unidade' })
+    // Edição que mudou mês, canal ou unidade: apaga o lançamento antigo
+    if (!error && f.id) {
+      const orig = todas.find(r => r.id === f.id)
+      if (orig && (orig.mes !== linha.mes || orig.canal !== linha.canal || orig.unidade !== linha.unidade))
+        await supabase.from('dre_canal_competencia').delete().eq('id', f.id)
+    }
+    setSalvando(false)
+    if (error) return setErro(semTabela(error) ? AVISO_SQL_3 : error.message)
+    onSalvou(f.mes)
+  }
+
+  const lbl = { fontSize: 12 }
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onFechar()}>
+      <div className="modal" style={{ maxWidth: 620, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">{f.id ? 'Editar faturamento' : f.origem === 'print' ? 'Conferir print' : 'Digitar faturamento'}</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>
+              {f.origem === 'print' ? `Lido de ${f.arquivo || 'print'}${f.unidade_print ? ` · loja no print: "${f.unidade_print}"` : ''}` : 'Valores do Faturamento do portal'}
+              {restantes > 0 && ` · mais ${restantes} na fila`}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onFechar}><X size={14} /></button>
+        </div>
+        <div className="modal-body">
+          {f.aviso && <div className={`alert-banner ${f.ilegivel ? 'danger' : 'warning'}`} style={{ marginBottom: 10 }}>{f.aviso}</div>}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={lbl}>Mês (competência)</label>
+              <input type="month" className="form-input" value={f.mes || ''} onChange={e => set('mes', e.target.value)} />
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={lbl}>Plataforma</label>
+              <select className="form-input" value={f.canal} onChange={e => {
+                const c = e.target.value, us = PLATAFORMAS.find(x => x.canal === c)?.unidades || []
+                setF(p => ({ ...p, canal: c, unidade: us.includes(p.unidade) ? p.unidade : (us.length === 1 ? us[0] : '') }))
+              }}>
+                {[...new Set([...PLATAFORMAS.map(x => x.canal), f.canal])].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={lbl}>Unidade</label>
+              <input className="form-input" list="unidades-canal" value={f.unidade || ''} placeholder={unidades.join(', ') || '—'}
+                onChange={e => set('unidade', e.target.value.toUpperCase().trim())}
+                style={{ borderColor: unidades.length > 1 && !f.unidade ? 'var(--danger)' : undefined }} />
+              <datalist id="unidades-canal">{unidades.filter(Boolean).map(u => <option key={u} value={u} />)}</datalist>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {CAMPOS_CANAL.map(([k, nome, destino]) => (
+              <div key={k} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10, alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{nome}</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{destino}</div>
+                </div>
+                <input className="form-input" inputMode="decimal" placeholder="0,00" value={f[k] ?? ''} onChange={e => set(k, e.target.value)} style={{ textAlign: 'right' }} />
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10, alignItems: 'center', borderTop: '1px solid var(--gray-100)', paddingTop: 6 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Total do faturamento no portal</div>
+                <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>opcional, só para conferir</div>
+              </div>
+              <input className="form-input" inputMode="decimal" placeholder="0,00" value={f.total_faturamento ?? ''} onChange={e => set('total_faturamento', e.target.value)} style={{ textAlign: 'right' }} />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, background: 'var(--gray-50)', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 800, marginBottom: 2 }}>Vai para a DRE de {f.mes ? rotuloMes(f.mes) : '—'} como {rotuloCanal(f) || f.canal}</div>
+            <div>Receita bruta · Delivery: <b>R$ {fmt(v.vendas)}</b></div>
+            <div>Deduções · promoções: <b>− R$ {fmt(v.promocoes)}</b></div>
+            <div>Comercial · comissão e taxas: <b>− R$ {fmt(custo)}</b>
+              <span style={{ color: 'var(--gray-500)' }}> ({fmt(v.taxas)} + {fmt(v.servicos)} − {fmt(v.ajustes)} de ajustes)</span></div>
+            <div style={{ color: bate == null ? 'var(--gray-500)' : bate ? 'var(--ok)' : 'var(--danger)', fontWeight: 600 }}>
+              Recebido pela loja: R$ {fmt(liquido)}
+              {bate == null ? '' : bate ? ' ✓ bate com o total do portal' : ` ⚠ o portal diz R$ ${fmt(v.total_faturamento)} (diferença R$ ${fmt(liquido - v.total_faturamento)})`}
+            </div>
+          </div>
+
+          {f.detalhes?.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <button className="btn btn-ghost btn-xs" onClick={() => setVerLinhas(x => !x)}>
+                {verLinhas ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Linhas lidas do print ({f.detalhes.length})
+              </button>
+              {verLinhas && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 4 }}>
+                  <tbody>
+                    {f.detalhes.map((d, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                        <td style={{ padding: '3px 6px', color: 'var(--gray-400)' }}>{d.grupo}</td>
+                        <td style={{ padding: '3px 6px' }}>{d.descricao}</td>
+                        <td style={{ padding: '3px 6px', textAlign: 'right', whiteSpace: 'nowrap', color: d.valor < 0 ? 'var(--danger)' : 'var(--ok)' }}>{fmt(d.valor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {existente && <div className="alert-banner warning" style={{ marginTop: 10 }}>Já existe {rotuloCanal(existente)} em {rotuloMes(existente.mes)} (vendas R$ {fmt(existente.vendas)}): salvar substitui.</div>}
+          {erro && <div className="alert-banner danger" style={{ marginTop: 10 }}>{erro}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onFechar}>{restantes > 0 ? 'Pular' : 'Cancelar'}</button>
+          <button className="btn btn-primary" onClick={salvar} disabled={salvando || fechado}>
+            {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Salvar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReceitaCompetencia({ versaoCanais }) {
   const hoje = new Date()
   const mesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)
   const [mes, setMes] = useState(`${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, '0')}`)
@@ -501,6 +873,12 @@ function ReceitaCompetencia() {
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [fechado, setFechado] = useState(false)
+  const [plataformas, setPlataformas] = useState(0)
+
+  useEffect(() => {
+    supabase.from('dre_canal_competencia').select('vendas').eq('mes', mes)
+      .then(({ data, error }) => setPlataformas(error ? 0 : (data || []).reduce((s, r) => s + (Number(r.vendas) || 0), 0)))
+  }, [mes, versaoCanais])
 
   useEffect(() => {
     setMsg(null)
@@ -513,7 +891,7 @@ function ReceitaCompetencia() {
   }, [mes])
 
   const num = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
-  const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0)
+  const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0) + plataformas
 
   async function salvar() {
     setSalvando(true); setMsg(null)
@@ -536,11 +914,16 @@ function ReceitaCompetencia() {
             <label className="form-label" style={{ fontSize: 12 }}>{LINHAS[l].nome}</label>
             <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''} disabled={fechado}
               onChange={e => setValores(v => ({ ...v, [l]: e.target.value }))} style={{ textAlign: 'right' }} />
+            {l === 'rec_delivery' && plataformas > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
+                + R$ {fmt(plataformas)} das plataformas (somado sozinho). Digite aqui só o delivery que não tem faturamento lançado acima.
+              </div>
+            )}
           </div>
         ))}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 13 }}>Total: <b>R$ {fmt(total)}</b></div>
+        <div style={{ fontSize: 13 }}>Total{plataformas > 0 ? ' com plataformas' : ''}: <b>R$ {fmt(total)}</b></div>
         {fechado
           ? <span style={{ fontSize: 12, color: 'var(--ok)' }}><Lock size={12} style={{ verticalAlign: -2 }} /> {rotuloMes(mes)} fechado na DRE: abra o cadeado para alterar.</span>
           : <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>

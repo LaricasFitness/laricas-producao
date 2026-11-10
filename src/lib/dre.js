@@ -5,6 +5,8 @@
 //                receita:  digitada na tela (dre_receita_competencia) — o Bling não tem essa visão
 //                CMV:      fechamento do sistema (fechamento_cmv: EI + compras − EF) quando o mês
 //                          está fechado; senão, as compras de MP/embalagem lançadas no Bling
+//                plataformas: faturamento do mês de cada loja no iFood, 99 Food, Keeta, Anota.AI
+//                          (dre_canal_competencia, lido do print do portal ou digitado)
 //   Caixa        Balancete do Bling, total do mês por categoria principal (dre_caixa)
 //
 // Cada categoria do Bling vira uma linha da DRE pelo MAPA_PADRAO abaixo ou pela
@@ -24,7 +26,7 @@ export const LINHAS = {
   rec_outras:     { nome: 'Outras receitas',                      sinal: +1 },
   rec_nao_class:  { nome: 'Receita sem classificação',            sinal: +1, alerta: true },
   ded_impostos:   { nome: 'Impostos sobre vendas (DAS)',          sinal: -1 },
-  ded_descontos:  { nome: 'Descontos e devoluções',               sinal: -1 },
+  ded_descontos:  { nome: 'Descontos, promoções e devoluções',    sinal: -1 },
   cmv:            { nome: 'CMV (matéria-prima + embalagem do produto)', sinal: -1 },
   cmv_envio:      { nome: 'Embalagem de envio',                   sinal: -1 },
   custo_producao: { nome: 'Outros custos de produção',            sinal: -1 },
@@ -65,6 +67,31 @@ export const ESTRUTURA = [
   { tipo: 'grupo', id: 'abaixo',     nome: '(−) Investimentos (abaixo da linha)', linhas: ['investimento'] },
   { tipo: 'total', id: 'pos_invest', nome: '= Resultado depois dos investimentos' },
 ]
+
+// ── Plataformas de delivery (faturamento por canal e unidade) ────────────────
+// Unidades da DRE gerencial: BV Bela Vista, ZN, BK, PR. A primeira da lista é a sugestão.
+export const PLATAFORMAS = [
+  { canal: 'iFood',    unidades: ['BV', 'ZN', 'BK', 'PR'] },
+  { canal: '99 Food',  unidades: ['BV', 'BK'] },
+  { canal: 'Keeta',    unidades: [''] },
+  { canal: 'Anota.AI', unidades: ['BV'] },
+]
+// Nome da loja no print → sigla da unidade (o que já foi lançado antes também ensina)
+const NOMES_UNIDADE = { BV: /bela[\s-]*vista/i }
+export function siglaUnidade(texto, anteriores = []) {
+  const t = String(texto || '').trim()
+  if (!t) return ''
+  const ja = anteriores.find(r => r.unidade_print && r.unidade_print.trim().toLowerCase() === t.toLowerCase())
+  if (ja) return ja.unidade
+  return Object.keys(NOMES_UNIDADE).find(k => NOMES_UNIDADE[k].test(t)) || ''
+}
+export const rotuloCanal = r => [r.canal, r.unidade].filter(Boolean).join(' ')
+// Comissão e taxas que vão para a DRE: taxas + serviços − ajustes a favor da loja
+export const custoCanal = r => (Number(r.taxas) || 0) + (Number(r.servicos) || 0) - (Number(r.ajustes) || 0)
+// O que o portal diz que a loja recebeu: vendas − promoções − taxas − serviços + ajustes
+export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) || 0) - custoCanal(r)
+// Linhas da DRE que recebem o faturamento das plataformas
+export const LINHAS_CANAL = { rec_delivery: r => Number(r.vendas) || 0, ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal }
 
 // ── Classificação padrão das categorias do Bling ─────────────────────────────
 // Categorias ambíguas (mesmo nome em várias áreas) ficam de fora de propósito:
@@ -229,7 +256,7 @@ export function lerBalancete(texto) {
 // ── Montagem ──────────────────────────────────────────────────────────────────
 // Devolve { porMes: { 'AAAA-MM': { linha: valor } }, extras: { mes: { cmvFonte, cmvCompras } }, pendentes }
 // valores em módulo (positivos); o sinal vem de LINHAS
-export function montarDRE({ visao, meses, contas = [], caixa = [], receitas = [], cmvSistema = {}, mapaDB = [] }) {
+export function montarDRE({ visao, meses, contas = [], caixa = [], receitas = [], canais = [], cmvSistema = {}, mapaDB = [] }) {
   const porMes = {}, extras = {}, pendentes = new Map()
   for (const m of meses) { porMes[m] = {}; extras[m] = {} }
   const somar = (m, linha, v) => { if (porMes[m]) porMes[m][linha] = (porMes[m][linha] || 0) + v }
@@ -252,6 +279,18 @@ export function montarDRE({ visao, meses, contas = [], caixa = [], receitas = []
       somar(m, linha, valor)
     }
     for (const r of receitas) if (porMes[r.mes] && RECEITAS.includes(r.linha)) somar(r.mes, r.linha, Number(r.valor) || 0)
+    // Plataformas: cada loja vira uma sublinha (extras.sub[linha][rótulo]) dentro da linha da DRE
+    for (const r of canais) {
+      if (!porMes[r.mes]) continue
+      const sub = extras[r.mes].sub || (extras[r.mes].sub = {})
+      for (const [linha, valorDe] of Object.entries(LINHAS_CANAL)) {
+        const v = valorDe(r)
+        if (Math.abs(v) < 0.005) continue
+        somar(r.mes, linha, v)
+        sub[linha] = sub[linha] || {}
+        sub[linha][rotuloCanal(r)] = (sub[linha][rotuloCanal(r)] || 0) + v
+      }
+    }
     for (const m of meses) {
       const sis = cmvSistema[m]
       extras[m].cmvCompras = compras[m] || 0
@@ -309,9 +348,23 @@ export function conferir({ visao, mes, dados, dre, mesInfo }) {
   if (visao === 'competencia') {
     const ex = dre.extras[mes] || {}
     const receita = RECEITAS.reduce((s, l) => s + (dre.porMes[mes]?.[l] || 0), 0)
+    const canaisMes = (dados.canais || []).filter(r => r.mes === mes)
+    const deCanais = canaisMes.reduce((s, r) => s + (Number(r.vendas) || 0), 0)
     out.push(receita > 0
-      ? { status: 'ok', titulo: `Receita digitada: ${brl(receita)}` }
-      : { status: 'erro', titulo: 'Receita do mês não digitada', detalhe: 'Digite em Importar e classificar › Receita por competência.' })
+      ? { status: 'ok', titulo: `Receita do mês: ${brl(receita)}`,
+          detalhe: deCanais ? `Plataformas ${brl(deCanais)} + digitada ${brl(receita - deCanais)}.` : undefined }
+      : { status: 'erro', titulo: 'Receita do mês não lançada', detalhe: 'Lance em Importar e classificar › Faturamento das plataformas e Receita por competência.' })
+
+    // Plataformas: loja lançada no mês anterior e não neste; total lido do print que não fecha
+    const antCanais = (dados.canais || []).filter(r => r.mes === mesAnterior(mes))
+    const faltam = antCanais.filter(a => !canaisMes.some(r => r.canal === a.canal && r.unidade === a.unidade)).map(rotuloCanal)
+    const naoFecha = canaisMes.filter(r => r.total_faturamento != null && Math.abs(liquidoCanal(r) - Number(r.total_faturamento)) >= 0.05)
+      .map(r => `${rotuloCanal(r)}: as linhas dão ${brl(liquidoCanal(r))}, o portal diz ${brl(r.total_faturamento)}`)
+    if (canaisMes.length || antCanais.length) out.push(faltam.length || naoFecha.length
+      ? { status: 'aviso', titulo: `Plataformas: ${faltam.length} loja(s) sem faturamento lançado${naoFecha.length ? `, ${naoFecha.length} com total diferente do portal` : ''}`,
+          detalhe: faltam.length ? 'Lojas que tinham faturamento no mês anterior.' : undefined,
+          itens: [...faltam.map(k => 'Falta: ' + k), ...naoFecha] }
+      : { status: 'ok', titulo: `Plataformas: ${canaisMes.length} loja(s) lançada(s), totais batem com o portal` })
 
     const sem = doMes.filter(c => !linhaDe(c))
     out.push(sem.length
