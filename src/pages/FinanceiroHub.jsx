@@ -8,6 +8,7 @@ import {
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { lerPlanilha99 } from '../lib/planilha99'
+import { lerPlanilhaKeeta } from '../lib/planilhaKeeta'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -601,8 +602,16 @@ function FaturamentoPlataformas({ onMudou }) {
     for (const file of lista) {
       try {
         if (ehPlanilha(file)) {
-          // 99 Food: uma entrada por loja × mês da planilha
-          const meses = await lerPlanilha99(await file.arrayBuffer(), todas.filter(x => x.canal === '99 Food'))
+          // 99 Food ou Keeta: uma entrada por loja × mês da planilha
+          const dados = await file.arrayBuffer()
+          let meses
+          try { meses = await lerPlanilha99(dados, todas.filter(x => x.canal === '99 Food')) } catch (e99) {
+            if (!/Não achei a aba/.test(e99.message)) throw e99
+            try { meses = await lerPlanilhaKeeta(dados) } catch (eK) {
+              if (!/Não achei a aba/.test(eK.message)) throw eK
+              throw new Error('planilha não reconhecida: use a "Detalhes da fatura" da 99 Food ou o "Billing report" da Keeta.')
+            }
+          }
           if (!meses.length) throw new Error('Nenhum pedido encontrado na planilha.')
           setFila(q => [...q, ...meses.map(e => naFila({
             ...paraForm(e), origem: 'planilha', arquivo: file.name,
@@ -661,7 +670,8 @@ function FaturamentoPlataformas({ onMudou }) {
           <div style={{ fontWeight: 800, fontSize: 14 }}>Faturamento das plataformas (competência)</div>
           <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
             <b>iFood:</b> Financeiro › Faturamento do mês, uma loja por print (com os grupos abertos); envie ou cole (Ctrl+V).{' '}
-            <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa pelo mês da cobrança.
+            <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa pelo mês da cobrança.{' '}
+            <b>Keeta:</b> Financials › Download › Billing report (.xlsx) do mês.
             Você confere cada loja × mês antes de salvar.
           </div>
         </div>
