@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, Camera, Plus, Pencil, Trash2 } from 'lucide-react'
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
-  resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, itensCaixa, montarDRE, calcularEstrutura, conferir, mesVencimento,
+  resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, itensCaixa, itensReceber, montarDRE, calcularEstrutura, conferir, mesVencimento,
   PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
@@ -76,7 +76,11 @@ async function carregarAno(ano) {
   let caixaLanc = []
   try { caixaLanc = await buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, data, tipo, categoria, nome, historico, valor, banco').like('mes', `${ano}-%`).order('data')) }
   catch (e) { if (!semTabela(e)) throw e }
-  return { contas, caixa, caixaLanc, receitas, canais, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
+  // dre_receber_competencia (contas a receber por competência do Bling) existe a partir do financeiro_dre_5.sql
+  let receber = []
+  try { receber = await buscarTudo(() => supabase.from('dre_receber_competencia').select('mes, competencia, categoria, nome, historico, valor, situacao').like('mes', `${ano}-%`)) }
+  catch (e) { if (!semTabela(e)) throw e }
+  return { contas, caixa, caixaLanc, receitas, receber, canais, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
 }
 
 // Meses fechados usam os valores guardados no cadeado
@@ -115,7 +119,8 @@ function TelaDRE({ irImportar }) {
 
   // Meses com dado na visão escolhida
   const meses = !dre ? [] : todosMeses.filter(m => visao === 'competencia'
-    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m) || dados.canais.some(r => r.mes === m) || dre.extras[m].fechado
+    ? dados.contas.some(c => c.competencia.startsWith(m)) || dados.receitas.some(r => r.mes === m) || dados.canais.some(r => r.mes === m)
+      || (dados.receber || []).some(r => r.mes === m) || dre.extras[m].fechado
     : dre.extras[m].temCaixa)
 
   const estrutura = Object.fromEntries(meses.map(m => [m, calcularEstrutura(dre.porMes[m])]))
@@ -325,8 +330,13 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
       const l = resolverLinha('competencia', c.categoria, c.nome, dados.mapaDB)
       return linha === 'nao_class' ? !l : l === linha
     }).map(c => ({ a: c.nome, b: c.categoria, c: c.observacoes, valor: Number(c.valor), d: c.situacao }))
-    if (RECEITAS.includes(linha)) itens = dados.receitas.filter(r => r.mes === mes && r.linha === linha)
-      .map(r => ({ a: 'Digitado na tela', b: '', c: '', valor: Number(r.valor) }))
+    if (RECEITAS.includes(linha) || linha === 'rec_nao_class') itens = [
+      ...dados.receitas.filter(r => r.mes === mes && r.linha === linha).map(r => ({ a: 'Digitado na tela', b: '', c: '', valor: Number(r.valor) })),
+      ...itensReceber(dados).filter(i => i.mes === mes && (linha === 'rec_nao_class' ? !i.linha : i.linha === linha)).map(i => ({
+        a: i.nome || '(sem nome)', b: i.categoria, c: [i.competencia ? i.competencia.split('-').reverse().join('/') : '', i.historico].filter(Boolean).join(' · '),
+        valor: i.valor, d: [i.situacao, i.sugerido ? 'pela linha do cliente' : ''].filter(Boolean).join(' · '),
+      })),
+    ]
     if (LINHAS_CANAL[linha]) itens = [...itens, ...dados.canais.filter(r => r.mes === mes).map(r => ({
       a: rotuloCanal(r), b: 'Faturamento da plataforma',
       c: linha === 'dv_comercial' ? `taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}` : '',
@@ -1015,6 +1025,18 @@ function ReceitaCompetencia({ versaoCanais }) {
   const [fechado, setFechado] = useState(false)
   const [plataformas, setPlataformas] = useState({}) // vendas das plataformas por linha (Delivery, Site)
 
+  const [doBling, setDoBling] = useState({}) // Revenda, Direta e Balcão das contas a receber do Bling
+  useEffect(() => {
+    Promise.all([
+      supabase.from('dre_receber_competencia').select('mes, categoria, nome, valor').eq('mes', mes),
+      supabase.from('dre_mapa').select('origem, categoria, nome, linha'),
+    ]).then(([{ data, error }, { data: mapaDB }]) => {
+      if (error) { setDoBling({}); return }
+      const t = {}
+      for (const i of itensReceber({ receber: data || [], mapaDB: mapaDB || [] })) if (i.linha && i.linha !== 'ignorar') t[i.linha] = (t[i.linha] || 0) + i.valor
+      setDoBling(t)
+    })
+  }, [mes])
   useEffect(() => {
     supabase.from('dre_canal_competencia').select('canal, vendas').eq('mes', mes)
       .then(({ data, error }) => setPlataformas(error ? {} : (data || []).reduce((s, r) => {
@@ -1034,7 +1056,7 @@ function ReceitaCompetencia({ versaoCanais }) {
   }, [mes])
 
   const num = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
-  const somaPlat = Object.values(plataformas).reduce((s, x) => s + x, 0)
+  const somaPlat = Object.values(plataformas).reduce((s, x) => s + x, 0) + Object.values(doBling).reduce((s, x) => s + x, 0)
   const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0) + somaPlat
 
   async function salvar() {
@@ -1058,6 +1080,11 @@ function ReceitaCompetencia({ versaoCanais }) {
             <label className="form-label" style={{ fontSize: 12 }}>{LINHAS[l].nome}</label>
             <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''} disabled={fechado}
               onChange={e => setValores(v => ({ ...v, [l]: e.target.value }))} style={{ textAlign: 'right' }} />
+            {doBling[l] > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
+                + R$ {fmt(doBling[l])} das contas a receber do Bling (somado sozinho). Digite aqui só o que não está no Bling.
+              </div>
+            )}
             {plataformas[l] > 0 && (
               <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
                 {l === 'rec_site'
@@ -1097,10 +1124,12 @@ function Classificar() {
         buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor')),
         buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
       ])
-      let caixaLanc = []
+      let caixaLanc = [], receber = []
       try { caixaLanc = await buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, data, tipo, categoria, nome, historico, valor, banco')) }
       catch (e) { if (!semTabela(e)) throw e }
-      setDados({ contas, caixa, caixaLanc, mapaDB }); setEscolhas({})
+      try { receber = await buscarTudo(() => supabase.from('dre_receber_competencia').select('mes, competencia, categoria, nome, historico, valor, situacao')) }
+      catch (e) { if (!semTabela(e)) throw e }
+      setDados({ contas, caixa, caixaLanc, receber, mapaDB }); setEscolhas({})
     } catch (e) { setErro(semTabela(e) ? AVISO_SQL : e.message || String(e)) }
   }
   useEffect(() => { carregar() }, [])
@@ -1117,12 +1146,15 @@ function Classificar() {
     for (const i of itensCaixa(dados)) {
       if (!i.linha) add(pend, `${i.origem}|${i.categoria}|${i.chaveNome}`, { origem: i.origem, categoria: i.categoria, nome: i.chaveNome }, i.valor)
     }
+    for (const i of itensReceber(dados)) {
+      if (!i.linha) add(pend, `receber|${i.categoria}|${i.chaveNome}`, { origem: 'receber', categoria: i.categoria, nome: i.chaveNome }, i.valor)
+    }
     return {
       pendentes: [...pend.values()].sort((a, b) => a.categoria.localeCompare(b.categoria) || b.valor - a.valor),
     }
   }, [dados])
 
-  const ORIGEM = { competencia: 'Competência', caixa_receita: 'Caixa · receita', caixa_despesa: 'Caixa · despesa' }
+  const ORIGEM = { competencia: 'Competência', receber: 'Competência · contas a receber', caixa_receita: 'Caixa · receita', caixa_despesa: 'Caixa · despesa' }
   const chave = p => `${p.origem}|${p.categoria}|${p.nome || ''}`
   const mudar = (k, campo, v) => setEscolhas(s => ({ ...s, [k]: { ...s[k], [campo]: v } }))
   const qtdEscolhidas = Object.values(escolhas).filter(e => e.linha).length

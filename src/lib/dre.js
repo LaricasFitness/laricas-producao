@@ -171,6 +171,42 @@ export const MAPA_PADRAO = {
     'iFood': 'rec_delivery', '99 Food': 'rec_delivery', 'Keeta': 'rec_delivery', 'Anota.Ai': 'rec_delivery', 'Anota.AI': 'rec_delivery',
     'Juros recebidos': 'fin_receitas',
   },
+  // contas a receber por competência: só o que não tem fonte própria
+  receber: {
+    'Revenda': 'rec_revenda', 'Venda Direta': 'rec_direta', 'Venda Balcão': 'rec_balcao',
+    'Venda de ativo': 'rec_outras', 'Outras Receitas': 'rec_outras',
+    'Venda Site': 'ignorar', 'iFood': 'ignorar', '99 Food': 'ignorar', 'Keeta': 'ignorar', 'Anota.Ai': 'ignorar', 'Anota.AI': 'ignorar',
+    'Delivery': 'ignorar', 'Venda Ativação': 'ignorar', 'Transferências recebidas': 'ignorar', 'Transferências': 'ignorar',
+    'Rendimento de aplicação financeira': 'ignorar', 'Juros recebidos': 'ignorar', 'Receitas adicionais em operações financeiras': 'ignorar',
+  },
+}
+
+// Contas a receber por competência (Bling) → receita da DRE de competência só das linhas que não têm
+// fonte própria: Revenda (B2B), Venda Direta, Venda Balcão e venda de ativo. Delivery, site e ativação
+// vêm das plataformas, da Shopify e do Mercado Pago, então essas categorias ficam fora (sem duplicar).
+// "Sem categoria" (pedido de venda sem categoria) segue a linha que o mesmo cliente tem nas outras contas
+// a receber; se não houver, a classificação por cliente do caixa; senão, fica para classificar.
+export function itensReceber({ receber = [], mapaDB = [] }) {
+  const semCat = c => !c || /^sem categoria$/i.test(c)
+  const porCliente = {}
+  for (const r of receber) {
+    if (semCat(r.categoria) || !r.nome) continue
+    const li = resolverLinha('receber', r.categoria, r.nome, mapaDB)
+    if (!li || li === 'ignorar') continue
+    const a = porCliente[r.nome] || (porCliente[r.nome] = {})
+    a[li] = (a[li] || 0) + (Number(r.valor) || 0)
+  }
+  const doCliente = n => { const a = porCliente[n]; return a ? Object.entries(a).sort((x, y) => y[1] - x[1])[0][0] : null }
+  return receber.map(r => {
+    const cat = semCat(r.categoria) ? 'Sem categoria' : r.categoria
+    let linha = resolverLinha('receber', cat, r.nome, mapaDB), sugerido = false
+    if (!linha && cat === 'Sem categoria') {
+      linha = doCliente(r.nome) || resolverLinha('caixa_receita', '', r.nome, mapaDB)
+      sugerido = !!linha
+    }
+    return { mes: r.mes, categoria: cat, nome: r.nome || '', chaveNome: cat === 'Sem categoria' ? (r.nome || '') : '',
+      historico: r.historico || '', competencia: r.competencia, situacao: r.situacao || '', valor: Number(r.valor) || 0, linha, sugerido }
+  })
 }
 
 // Linha de uma categoria. mapaDB: linhas de dre_mapa. Devolve null se precisar classificar.
@@ -356,7 +392,7 @@ export function lerBalancete(texto) {
 // ── Montagem ──────────────────────────────────────────────────────────────────
 // Devolve { porMes: { 'AAAA-MM': { linha: valor } }, extras: { mes: { cmvFonte, cmvCompras } }, pendentes }
 // valores em módulo (positivos); o sinal vem de LINHAS
-export function montarDRE({ visao, meses, contas = [], caixa = [], caixaLanc = [], receitas = [], canais = [], cmvSistema = {}, mapaDB = [] }) {
+export function montarDRE({ visao, meses, contas = [], caixa = [], caixaLanc = [], receitas = [], receber = [], canais = [], cmvSistema = {}, mapaDB = [] }) {
   const porMes = {}, extras = {}, pendentes = new Map()
   for (const m of meses) { porMes[m] = {}; extras[m] = {} }
   const somar = (m, linha, v) => { if (porMes[m]) porMes[m][linha] = (porMes[m][linha] || 0) + v }
@@ -379,6 +415,13 @@ export function montarDRE({ visao, meses, contas = [], caixa = [], caixaLanc = [
       somar(m, linha, valor)
     }
     for (const r of receitas) if (porMes[r.mes] && RECEITAS.includes(r.linha)) somar(r.mes, r.linha, Number(r.valor) || 0)
+    // Revenda, Venda Direta e Balcão: contas a receber por competência do Bling
+    for (const it of itensReceber({ receber, mapaDB })) {
+      if (!porMes[it.mes] || it.linha === 'ignorar') continue
+      if (!it.linha) { somar(it.mes, 'rec_nao_class', it.valor); pendente('receber', it.categoria, it.chaveNome, it.valor); continue }
+      somar(it.mes, it.linha, it.valor)
+      extras[it.mes].receberBling = (extras[it.mes].receberBling || 0) + it.valor
+    }
     // Plataformas: cada loja vira uma sublinha (extras.sub[linha][rótulo]) dentro da linha da DRE
     for (const r of canais) {
       if (!porMes[r.mes]) continue
@@ -450,7 +493,12 @@ export function conferir({ visao, mes, dados, dre, mesInfo }) {
     const deCanais = canaisMes.reduce((s, r) => s + (Number(r.vendas) || 0), 0)
     out.push(receita > 0
       ? { status: 'ok', titulo: `Receita do mês: ${brl(receita)}`,
-          detalhe: deCanais ? `Plataformas ${brl(deCanais)} + digitada ${brl(receita - deCanais)}.` : undefined }
+          detalhe: (() => {
+            const bling = ex.receberBling || 0
+            const partes = [deCanais && `plataformas e site ${brl(deCanais)}`, bling && `Revenda, Direta e Balcão do Bling ${brl(bling)}`,
+              Math.abs(receita - deCanais - bling) >= 0.005 && `digitada ${brl(receita - deCanais - bling)}`].filter(Boolean)
+            return partes.length ? partes.join(' + ') + '.' : undefined
+          })() }
       : { status: 'erro', titulo: 'Receita do mês não lançada', detalhe: 'Lance em Importar e classificar › Faturamento das plataformas e Receita por competência.' })
 
     // Plataformas: loja lançada no mês anterior e não neste; total lido do print que não fecha
