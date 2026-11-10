@@ -5,6 +5,7 @@
 --   vendas      → Receita bruta · Delivery
 --   promocoes   → Deduções · Descontos e promoções
 --   taxas + servicos − ajustes → Despesas variáveis · Comercial (comissão e taxas)
+--   marketing   → Despesas variáveis · Marketing (pacote de anúncios da plataforma)
 -- total_faturamento é o "Total do faturamento" do portal, só para conferir a leitura.
 
 CREATE TABLE IF NOT EXISTS dre_canal_competencia (
@@ -16,11 +17,12 @@ CREATE TABLE IF NOT EXISTS dre_canal_competencia (
   promocoes          numeric(14,2) NOT NULL DEFAULT 0, -- promoções pagas pela loja
   taxas              numeric(14,2) NOT NULL DEFAULT 0, -- taxas e comissões
   servicos           numeric(14,2) NOT NULL DEFAULT 0, -- serviços contratados (ex.: entrega sob demanda)
+  marketing          numeric(14,2) NOT NULL DEFAULT 0, -- pacote de anúncios (vem dentro de Serviços no portal)
   ajustes            numeric(14,2) NOT NULL DEFAULT 0, -- + a favor da loja (reembolsos), − contra
   total_faturamento  numeric(14,2),                    -- total do portal, para conferência
   unidade_print      text,                             -- nome da loja como aparece no print
   detalhes           jsonb,                            -- linhas lidas do print
-  origem             text NOT NULL DEFAULT 'digitado' CHECK (origem IN ('print', 'digitado')),
+  origem             text NOT NULL DEFAULT 'digitado' CHECK (origem IN ('print', 'digitado', 'portal')),
   atualizado_em      timestamptz DEFAULT now(),
   atualizado_por     text,
   UNIQUE (mes, canal, unidade)
@@ -29,6 +31,9 @@ CREATE TABLE IF NOT EXISTS dre_canal_competencia (
 ALTER TABLE dre_canal_competencia ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS public_all ON dre_canal_competencia;
 CREATE POLICY public_all ON dre_canal_competencia FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE dre_canal_competencia ADD COLUMN IF NOT EXISTS marketing numeric(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE dre_canal_competencia DROP CONSTRAINT IF EXISTS dre_canal_competencia_origem_check;
+ALTER TABLE dre_canal_competencia ADD CONSTRAINT dre_canal_competencia_origem_check CHECK (origem IN ('print', 'digitado', 'portal'));
 
 -- Mês fechado (cadeado) não aceita lançamento novo (mesma trava das outras tabelas da DRE)
 DROP TRIGGER IF EXISTS trava_mes ON dre_canal_competencia;

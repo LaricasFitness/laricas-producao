@@ -14,7 +14,7 @@ const TIPOS = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['legivel', 'problemas', 'plataforma', 'unidade', 'mes', 'vendas', 'taxas', 'promocoes', 'servicos', 'ajustes', 'total_faturamento', 'linhas'],
+  required: ['legivel', 'problemas', 'plataforma', 'unidade', 'mes', 'vendas', 'taxas', 'promocoes', 'servicos', 'marketing', 'ajustes', 'total_faturamento', 'linhas'],
   properties: {
     legivel: { type: 'boolean' },
     problemas: { type: 'string' },
@@ -25,6 +25,7 @@ const SCHEMA = {
     taxas: { type: 'number' },
     promocoes: { type: 'number' },
     servicos: { type: 'number' },
+    marketing: { type: 'number' },
     ajustes: { type: 'number' },
     total_faturamento: { anyOf: [{ type: 'number' }, { type: 'null' }] },
     linhas: {
@@ -52,8 +53,10 @@ Devolva:
 - unidade: o nome da loja exatamente como aparece (mesmo cortado com "...").
 - mes: o mês do faturamento como AAAA-MM; "" se não aparecer.
 - vendas: total do grupo Valor das vendas.
-- taxas: total de Taxas e comissões. promocoes: total de Promoções. servicos: total de Serviços (entregas sob demanda e outros serviços contratados).
-  Esses três em módulo (positivos), mesmo que a tela mostre "-R$".
+- taxas: total de Taxas e comissões. promocoes: total de Promoções.
+- marketing: soma das linhas de anúncios dentro de Serviços ("Pacote de anúncios" e outras divulgações pagas).
+- servicos: total de Serviços MENOS o que foi para marketing (entregas sob demanda e outros serviços).
+  taxas, promocoes, servicos e marketing em módulo (positivos), mesmo que a tela mostre "-R$".
 - ajustes: total de Ajustes com sinal: positivo quando é a favor da loja (reembolsos), negativo quando é débito.
 - total_faturamento: o Total do faturamento (soma de repasses e valores recebidos direto); null se não aparecer.
 - linhas: cada linha detalhada visível, com o grupo a que pertence, a descrição (sem o número de pedidos) e o valor com o sinal da tela (cobranças negativas).

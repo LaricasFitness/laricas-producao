@@ -4,7 +4,7 @@ import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, 
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
   resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura, conferir, mesVencimento,
-  PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, liquidoCanal, LINHAS_CANAL,
+  PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 
@@ -324,7 +324,7 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
     if (LINHAS_CANAL[linha]) itens = [...itens, ...dados.canais.filter(r => r.mes === mes).map(r => ({
       a: rotuloCanal(r), b: 'Faturamento da plataforma',
       c: linha === 'dv_comercial' ? `taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}` : '',
-      valor: LINHAS_CANAL[linha](r), d: r.origem === 'print' ? 'lido do print' : 'digitado',
+      valor: LINHAS_CANAL[linha](r), d: r.origem === 'print' ? 'lido do print' : r.origem === 'portal' ? 'lido do portal' : 'digitado',
     })).filter(i => Math.abs(i.valor) >= 0.005)]
   } else {
     itens = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia').filter(c => {
@@ -540,13 +540,15 @@ function ImportarBalancete({ onImportou }) {
 
 // ── Faturamento das plataformas (iFood, 99 Food, Keeta, Anota.AI) ────────────
 // Um lançamento por mês × canal × unidade, lido do print do portal ou digitado.
-// Vai para a DRE: vendas → Receita Delivery; promoções → Deduções; taxas + serviços − ajustes → Comercial.
+// Vai para a DRE: vendas → Receita Delivery; promoções → Deduções; taxas + serviços − ajustes → Comercial;
+// pacote de anúncios → Marketing.
 const AVISO_SQL_3 = 'Aplique o arquivo financeiro_dre_3.sql no Supabase para lançar o faturamento das plataformas.'
 const CAMPOS_CANAL = [
   ['vendas', 'Valor das vendas', 'Receita bruta · Delivery'],
   ['promocoes', 'Promoções', 'Deduções · promoções'],
   ['taxas', 'Taxas e comissões', 'Comercial · comissão e taxas'],
-  ['servicos', 'Serviços (entrega sob demanda…)', 'Comercial · comissão e taxas'],
+  ['servicos', 'Serviços sem anúncios (entrega sob demanda…)', 'Comercial · comissão e taxas'],
+  ['marketing', 'Pacote de anúncios', 'Marketing'],
   ['ajustes', 'Ajustes (+ a favor da loja)', 'abate de comissão e taxas'],
 ]
 const numTxt = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
@@ -562,7 +564,8 @@ const paraForm = r => ({
   ...r, ...Object.fromEntries(CAMPOS_CANAL.map(([k]) => [k, txtNum(r[k])])), total_faturamento: txtNum(r.total_faturamento),
 })
 const doForm = f => ({
-  vendas: numTxt(f.vendas), promocoes: numTxt(f.promocoes), taxas: numTxt(f.taxas), servicos: numTxt(f.servicos), ajustes: numTxt(f.ajustes),
+  vendas: numTxt(f.vendas), promocoes: numTxt(f.promocoes), taxas: numTxt(f.taxas), servicos: numTxt(f.servicos),
+  marketing: numTxt(f.marketing), ajustes: numTxt(f.ajustes),
   total_faturamento: String(f.total_faturamento ?? '').trim() === '' ? null : numTxt(f.total_faturamento),
 })
 
@@ -643,7 +646,7 @@ function FaturamentoPlataformas({ onMudou }) {
           <div style={{ fontWeight: 800, fontSize: 14 }}>Faturamento das plataformas (competência)</div>
           <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
             iFood › Financeiro › <b>Faturamento</b> do mês, uma loja por print (com os grupos abertos). Envie ou cole (Ctrl+V) o print:
-            o sistema lê vendas, promoções, taxas, serviços e ajustes e você confere antes de salvar.
+            o sistema lê vendas, promoções, taxas, serviços, anúncios e ajustes e você confere antes de salvar.
           </div>
         </div>
         <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
@@ -668,8 +671,8 @@ function FaturamentoPlataformas({ onMudou }) {
             <thead>
               <tr style={{ borderBottom: '1px solid var(--gray-200)' }}>
                 <th style={{ ...th, textAlign: 'left' }}>Loja</th>
-                <th style={th}>Vendas</th><th style={th}>Promoções</th><th style={th}>Comissão e taxas</th>
-                <th style={th} title="vendas − promoções − comissão e taxas">Recebido</th><th style={th}>Portal</th><th />
+                <th style={th}>Vendas</th><th style={th}>Promoções</th><th style={th}>Comissão e taxas</th><th style={th}>Anúncios</th>
+                <th style={th} title="vendas − promoções − comissão e taxas − anúncios">Recebido</th><th style={th}>Portal</th><th />
               </tr>
             </thead>
             <tbody>
@@ -679,11 +682,12 @@ function FaturamentoPlataformas({ onMudou }) {
                   <tr key={r.id} style={{ borderTop: '1px solid var(--gray-100)' }}>
                     <td style={{ padding: '6px 8px', fontWeight: 700 }}>
                       {rotuloCanal(r)}
-                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--gray-400)' }}> · {r.origem === 'print' ? 'print' : 'digitado'}</span>
+                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--gray-400)' }}> · {r.origem === 'print' ? 'print' : r.origem === 'portal' ? 'portal iFood' : 'digitado'}</span>
                     </td>
                     <td style={td}>{fmt(r.vendas)}</td>
                     <td style={td}>{fmt(r.promocoes)}</td>
                     <td style={td} title={`taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}`}>{fmt(custoCanal(r))}</td>
+                    <td style={td}>{marketingCanal(r) ? fmt(marketingCanal(r)) : '—'}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{fmt(liquidoCanal(r))}</td>
                     <td style={{ ...td, fontSize: 12, color: bate == null ? 'var(--gray-300)' : bate ? 'var(--ok)' : 'var(--danger)' }}
                       title={r.total_faturamento == null ? 'Sem total do portal' : `Total do faturamento no portal: R$ ${fmt(r.total_faturamento)}`}>
@@ -701,7 +705,7 @@ function FaturamentoPlataformas({ onMudou }) {
               <tr style={{ borderTop: '2px solid var(--gray-200)', fontWeight: 800 }}>
                 <td style={{ padding: '6px 8px' }}>Total {rotuloMes(mes)}</td>
                 <td style={td}>{fmt(soma('vendas'))}</td><td style={td}>{fmt(soma('promocoes'))}</td>
-                <td style={td}>{fmt(soma(custoCanal))}</td><td style={td}>{fmt(soma(liquidoCanal))}</td><td /><td />
+                <td style={td}>{fmt(soma(custoCanal))}</td><td style={td}>{fmt(soma(marketingCanal))}</td><td style={td}>{fmt(soma(liquidoCanal))}</td><td /><td />
               </tr>
             </tbody>
           </table>
@@ -727,7 +731,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
 
   const v = doForm(f)
-  const custo = custoCanal(v), liquido = liquidoCanal(v)
+  const custo = custoCanal(v), anuncios = marketingCanal(v), liquido = liquidoCanal(v)
   const bate = v.total_faturamento == null ? null : Math.abs(liquido - v.total_faturamento) < 0.05
   const unidades = PLATAFORMAS.find(x => x.canal === f.canal)?.unidades || []
   const existente = todas.find(r => r.mes === f.mes && r.canal === f.canal && r.unidade === (f.unidade || '') && r.id !== f.id)
@@ -824,6 +828,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
             <div>Deduções · promoções: <b>− R$ {fmt(v.promocoes)}</b></div>
             <div>Comercial · comissão e taxas: <b>− R$ {fmt(custo)}</b>
               <span style={{ color: 'var(--gray-500)' }}> ({fmt(v.taxas)} + {fmt(v.servicos)} − {fmt(v.ajustes)} de ajustes)</span></div>
+            {anuncios !== 0 && <div>Marketing · anúncios: <b>− R$ {fmt(anuncios)}</b></div>}
             <div style={{ color: bate == null ? 'var(--gray-500)' : bate ? 'var(--ok)' : 'var(--danger)', fontWeight: 600 }}>
               Recebido pela loja: R$ {fmt(liquido)}
               {bate == null ? '' : bate ? ' ✓ bate com o total do portal' : ` ⚠ o portal diz R$ ${fmt(v.total_faturamento)} (diferença R$ ${fmt(liquido - v.total_faturamento)})`}

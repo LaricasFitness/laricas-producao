@@ -69,7 +69,7 @@ export const ESTRUTURA = [
 ]
 
 // ── Plataformas de delivery (faturamento por canal e unidade) ────────────────
-// Unidades da DRE gerencial: BV Bela Vista, ZN, BK, PR. A primeira da lista é a sugestão.
+// Unidades da DRE gerencial: BV Bela Vista, ZN Santana, BK Brooklin, PR Maringá. A primeira da lista é a sugestão.
 export const PLATAFORMAS = [
   { canal: 'iFood',    unidades: ['BV', 'ZN', 'BK', 'PR'] },
   { canal: '99 Food',  unidades: ['BV', 'BK'] },
@@ -77,21 +77,26 @@ export const PLATAFORMAS = [
   { canal: 'Anota.AI', unidades: ['BV'] },
 ]
 // Nome da loja no print → sigla da unidade (o que já foi lançado antes também ensina)
-const NOMES_UNIDADE = { BV: /bela[\s-]*vista/i }
+// BV Bela Vista · ZN Santana · BK Brooklin · PR Maringá
+const NOMES_UNIDADE = { BV: /bela[\s-]*vista/i, ZN: /santana/i, BK: /brooklin/i, PR: /maring/i }
 export function siglaUnidade(texto, anteriores = []) {
   const t = String(texto || '').trim()
   if (!t) return ''
-  const ja = anteriores.find(r => r.unidade_print && r.unidade_print.trim().toLowerCase() === t.toLowerCase())
+  // compara o começo do nome: o print corta o fim ("Pães de...")
+  const base = x => x.toLowerCase().replace(/\.{3}|…/g, '').split(' - ').slice(0, 2).join(' - ').trim()
+  const ja = anteriores.find(r => r.unidade_print && base(r.unidade_print) === base(t))
   if (ja) return ja.unidade
   return Object.keys(NOMES_UNIDADE).find(k => NOMES_UNIDADE[k].test(t)) || ''
 }
 export const rotuloCanal = r => [r.canal, r.unidade].filter(Boolean).join(' ')
 // Comissão e taxas que vão para a DRE: taxas + serviços − ajustes a favor da loja
 export const custoCanal = r => (Number(r.taxas) || 0) + (Number(r.servicos) || 0) - (Number(r.ajustes) || 0)
-// O que o portal diz que a loja recebeu: vendas − promoções − taxas − serviços + ajustes
-export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) || 0) - custoCanal(r)
+// Anúncios pagos na plataforma (no portal vêm dentro de Serviços) vão para Marketing
+export const marketingCanal = r => Number(r.marketing) || 0
+// O que o portal diz que a loja recebeu: vendas − promoções − taxas − serviços − anúncios + ajustes
+export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) || 0) - custoCanal(r) - marketingCanal(r)
 // Linhas da DRE que recebem o faturamento das plataformas
-export const LINHAS_CANAL = { rec_delivery: r => Number(r.vendas) || 0, ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal }
+export const LINHAS_CANAL = { rec_delivery: r => Number(r.vendas) || 0, ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal, dv_marketing: marketingCanal }
 
 // ── Classificação padrão das categorias do Bling ─────────────────────────────
 // Categorias ambíguas (mesmo nome em várias áreas) ficam de fora de propósito:
