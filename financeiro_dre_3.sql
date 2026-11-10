@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS dre_canal_competencia (
   total_faturamento  numeric(14,2),                    -- total do portal, para conferência
   unidade_print      text,                             -- nome da loja como aparece no print
   detalhes           jsonb,                            -- linhas lidas do print
-  origem             text NOT NULL DEFAULT 'digitado' CHECK (origem IN ('print', 'digitado', 'portal')),
+  origem             text NOT NULL DEFAULT 'digitado' CHECK (origem IN ('print', 'digitado', 'portal', 'planilha')),
   atualizado_em      timestamptz DEFAULT now(),
   atualizado_por     text,
   UNIQUE (mes, canal, unidade)
@@ -33,7 +33,7 @@ DROP POLICY IF EXISTS public_all ON dre_canal_competencia;
 CREATE POLICY public_all ON dre_canal_competencia FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE dre_canal_competencia ADD COLUMN IF NOT EXISTS marketing numeric(14,2) NOT NULL DEFAULT 0;
 ALTER TABLE dre_canal_competencia DROP CONSTRAINT IF EXISTS dre_canal_competencia_origem_check;
-ALTER TABLE dre_canal_competencia ADD CONSTRAINT dre_canal_competencia_origem_check CHECK (origem IN ('print', 'digitado', 'portal'));
+ALTER TABLE dre_canal_competencia ADD CONSTRAINT dre_canal_competencia_origem_check CHECK (origem IN ('print', 'digitado', 'portal', 'planilha'));
 
 -- Mês fechado (cadeado) não aceita lançamento novo (mesma trava das outras tabelas da DRE)
 DROP TRIGGER IF EXISTS trava_mes ON dre_canal_competencia;

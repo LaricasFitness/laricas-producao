@@ -7,6 +7,7 @@ import {
   PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
+import { lerPlanilha99 } from '../lib/planilha99'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -324,7 +325,7 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
     if (LINHAS_CANAL[linha]) itens = [...itens, ...dados.canais.filter(r => r.mes === mes).map(r => ({
       a: rotuloCanal(r), b: 'Faturamento da plataforma',
       c: linha === 'dv_comercial' ? `taxas ${fmt(r.taxas)} + serviços ${fmt(r.servicos)} − ajustes ${fmt(r.ajustes)}` : '',
-      valor: LINHAS_CANAL[linha](r), d: r.origem === 'print' ? 'lido do print' : r.origem === 'portal' ? 'lido do portal' : 'digitado',
+      valor: LINHAS_CANAL[linha](r), d: rotuloOrigem(r.origem),
     })).filter(i => Math.abs(i.valor) >= 0.005)]
   } else {
     itens = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia').filter(c => {
@@ -555,6 +556,8 @@ const numTxt = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').re
 const txtNum = v => v == null || v === '' ? '' : Number(v).toFixed(2).replace('.', ',')
 const mesPassado = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
 const naFila = x => ({ ...x, _k: Date.now() + Math.random() })
+const ORIGENS = { print: 'print', portal: 'portal iFood', planilha: 'planilha', digitado: 'digitado' }
+const rotuloOrigem = o => ORIGENS[o] || 'digitado'
 const normalizarCanal = p => {
   const k = String(p || '').toLowerCase().replace(/[^a-z0-9]/g, '')
   return PLATAFORMAS.find(x => x.canal.toLowerCase().replace(/[^a-z0-9]/g, '') === k)?.canal || (p || 'iFood')
@@ -591,11 +594,23 @@ function FaturamentoPlataformas({ onMudou }) {
 
   // Print: lê cada arquivo e põe na fila de revisão (nada é salvo sem conferir)
   async function lerArquivos(files) {
-    const lista = [...files].filter(f => /^image\/|pdf$/.test(f.type))
+    const ehPlanilha = f => /\.xlsx$/i.test(f.name || '')
+    const lista = [...files].filter(f => /^image\/|pdf$/.test(f.type) || ehPlanilha(f))
     if (!lista.length) return
     setMsg(null); setLendo(n => n + lista.length)
     for (const file of lista) {
       try {
+        if (ehPlanilha(file)) {
+          // 99 Food: uma entrada por loja × mês da planilha
+          const meses = await lerPlanilha99(await file.arrayBuffer(), todas.filter(x => x.canal === '99 Food'))
+          if (!meses.length) throw new Error('Nenhum pedido encontrado na planilha.')
+          setFila(q => [...q, ...meses.map(e => naFila({
+            ...paraForm(e), origem: 'planilha', arquivo: file.name,
+            aviso: [`${e.pedidos} pedido(s) de ${rotuloMes(e.mes)} somados da planilha.`, ...e.avisos].join(' '),
+          }))])
+          setLendo(n => n - 1)
+          continue
+        }
         const corpo = await arquivoParaEnvio(file, { rotuloPdf: 'envie um print da tela' })
         const r = await fetch('/api/ler-faturamento', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) })
         const j = await r.json().catch(() => ({}))
@@ -645,19 +660,20 @@ function FaturamentoPlataformas({ onMudou }) {
         <div style={{ flex: '1 1 260px' }}>
           <div style={{ fontWeight: 800, fontSize: 14 }}>Faturamento das plataformas (competência)</div>
           <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
-            iFood › Financeiro › <b>Faturamento</b> do mês, uma loja por print (com os grupos abertos). Envie ou cole (Ctrl+V) o print:
-            o sistema lê vendas, promoções, taxas, serviços, anúncios e ajustes e você confere antes de salvar.
+            <b>iFood:</b> Financeiro › Faturamento do mês, uma loja por print (com os grupos abertos); envie ou cole (Ctrl+V).{' '}
+            <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa por mês do pedido.
+            Você confere cada loja × mês antes de salvar.
           </div>
         </div>
         <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
         <button className="btn btn-primary btn-sm" disabled={semTab || lendo > 0} onClick={() => ref.current?.click()}>
-          {lendo > 0 ? <RefreshCw size={13} className="spin" /> : <Camera size={13} />} {lendo > 0 ? `Lendo ${lendo} print(s)…` : 'Ler print(s)'}
+          {lendo > 0 ? <RefreshCw size={13} className="spin" /> : <Camera size={13} />} {lendo > 0 ? `Lendo ${lendo} arquivo(s)…` : 'Ler print ou planilha'}
         </button>
         <button className="btn btn-ghost btn-sm" disabled={semTab || fechado}
           onClick={() => setFila(q => [...q, naFila(paraForm({ mes, canal: 'iFood', unidade: 'BV', origem: 'digitado' }))])}>
           <Plus size={13} /> Digitar
         </button>
-        <input ref={ref} type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
+        <input ref={ref} type="file" multiple accept="image/*,application/pdf,.xlsx" style={{ display: 'none' }}
           onChange={e => { const fs = e.target.files; lerArquivos(fs); e.target.value = '' }} />
       </div>
 
@@ -682,7 +698,7 @@ function FaturamentoPlataformas({ onMudou }) {
                   <tr key={r.id} style={{ borderTop: '1px solid var(--gray-100)' }}>
                     <td style={{ padding: '6px 8px', fontWeight: 700 }}>
                       {rotuloCanal(r)}
-                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--gray-400)' }}> · {r.origem === 'print' ? 'print' : r.origem === 'portal' ? 'portal iFood' : 'digitado'}</span>
+                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--gray-400)' }}> · {rotuloOrigem(r.origem)}</span>
                     </td>
                     <td style={td}>{fmt(r.vendas)}</td>
                     <td style={td}>{fmt(r.promocoes)}</td>
@@ -728,7 +744,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
   const [erro, setErro] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [verLinhas, setVerLinhas] = useState(false)
-  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const set = (k, v) => setF(p => ({ ...p, [k]: v, alterado: p.alterado || CAMPOS_CANAL.some(([c]) => c === k) }))
 
   const v = doForm(f)
   const custo = custoCanal(v), anuncios = marketingCanal(v), liquido = liquidoCanal(v)
@@ -749,7 +765,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
     setSalvando(true)
     const linha = {
       mes: f.mes, canal: f.canal, unidade: f.unidade || '', ...v,
-      unidade_print: f.unidade_print || null, detalhes: f.detalhes || null, origem: f.origem === 'print' ? 'print' : 'digitado',
+      unidade_print: f.unidade_print || null, detalhes: f.detalhes || null, origem: f.alterado || !ORIGENS[f.origem] ? 'digitado' : f.origem,
       atualizado_em: new Date().toISOString(), atualizado_por: usuarioNome(),
     }
     const { error } = await supabase.from('dre_canal_competencia').upsert(linha, { onConflict: 'mes,canal,unidade' })
@@ -770,9 +786,9 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
       <div className="modal" style={{ maxWidth: 620, maxHeight: '92vh', overflowY: 'auto' }}>
         <div className="modal-header">
           <div>
-            <div className="modal-title">{f.id ? 'Editar faturamento' : f.origem === 'print' ? 'Conferir print' : 'Digitar faturamento'}</div>
+            <div className="modal-title">{f.id ? 'Editar faturamento' : f.origem === 'print' ? 'Conferir print' : f.origem === 'planilha' ? 'Conferir planilha' : 'Digitar faturamento'}</div>
             <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>
-              {f.origem === 'print' ? `Lido de ${f.arquivo || 'print'}${f.unidade_print ? ` · loja no print: "${f.unidade_print}"` : ''}` : 'Valores do Faturamento do portal'}
+              {['print', 'planilha'].includes(f.origem) && f.arquivo ? `Lido de ${f.arquivo}${f.unidade_print ? ` · loja: "${f.unidade_print}"` : ''}` : 'Valores do Faturamento do portal'}
               {restantes > 0 && ` · mais ${restantes} na fila`}
             </div>
           </div>
@@ -838,7 +854,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
           {f.detalhes?.length > 0 && (
             <div style={{ marginTop: 10 }}>
               <button className="btn btn-ghost btn-xs" onClick={() => setVerLinhas(x => !x)}>
-                {verLinhas ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Linhas lidas do print ({f.detalhes.length})
+                {verLinhas ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Linhas lidas ({f.detalhes.length})
               </button>
               {verLinhas && (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 4 }}>
