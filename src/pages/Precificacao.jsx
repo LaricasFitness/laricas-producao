@@ -42,7 +42,7 @@ function usePrecificacao() {
         supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario,equivalencia_overhead').eq('ativo',true).order('categoria').order('nome'),
         supabase.from('produto_composicao').select('sku_produto,preparacao_id,quantidade_por_unidade,unidade'),
         supabase.from('preparacao_composicao').select('preparacao_id,ingrediente,quantidade,unidade,materia_prima_id,sub_preparacao_id'),
-        supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual'),
+        supabase.from('preparacoes').select('id,nome,tipo,unidade_rendimento,rendimento_estimado,rendimento_real_medio,perda_percentual,ativo'),
         supabase.from('materias_primas').select('id,nome,unidade,custo_unitario,atualizado_em'),
         supabase.from('canal_custos').select('*').eq('ativo',true).order('canal_id').then(r => r).catch(() => ({ data: [] })),
         supabase.from('preco_produto_canal').select('*').then(r=>r).catch(()=>({data:[]})),

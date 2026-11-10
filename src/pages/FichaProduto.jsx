@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Save, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, Save, ChevronLeft, ChevronRight, FileDown } from 'lucide-react'
+import { gerarFichaTecnicaPDF, gerarFichaPreparacoesPDF } from '../lib/fichaTecnicaPDF'
 
 // Ficha do produto: tudo de um produto numa tela só — custo da unidade,
 // preço e margem em cada canal e o que pesa no custo.
@@ -63,6 +64,8 @@ export default function FichaProduto({ data, reload, incluirOverhead, cmvDe }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <FichasPreparacao prepMap={data.prepMap || {}} />
+
       {/* Escolha do produto */}
       <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input className="form-input" placeholder="Buscar produto ou código..." value={busca}
@@ -144,6 +147,7 @@ function Detalhe({ p, data, reload, incluirOverhead, cmvDe, alvo, alvoTxt, mudar
             {p.temRendimentoReal ? '✓ Custo com rendimento medido na produção' : 'Custo com rendimento estimado da receita'}
           </span>
         )}
+        {!p.semFicha && <BotaoFichaPDF emb={p.emb} />}
       </div>
 
       {p.semFicha && (
@@ -176,6 +180,65 @@ function Detalhe({ p, data, reload, incluirOverhead, cmvDe, alvo, alvoTxt, mudar
       {/* 3. O que pesa no custo */}
       <Composicao p={p} data={data} cmv={cmv} overhead={overhead} />
     </>
+  )
+}
+
+// Ficha técnica das preparações (PDF para o time de produção): 0,5 a 6 receitas, sem custos
+const LS_PREP = 'fichaProduto.prepPDF'
+function FichasPreparacao({ prepMap }) {
+  const preps = Object.values(prepMap).filter(p => p.ativo !== false).sort((a, b) =>
+    (a.tipo || '').localeCompare(b.tipo || '') || (a.nome || '').localeCompare(b.nome || ''))
+  const tipos = [...new Set(preps.map(p => p.tipo || 'outros'))]
+  const [prepId, setPrepId] = useState(() => lerLS(LS_PREP, ''))
+  const [gerando, setGerando] = useState(null)
+  const atual = prepMap[prepId] ? prepId : preps[0]?.id || ''
+
+  async function gerar(qual) {
+    setGerando(qual)
+    try { await gerarFichaPreparacoesPDF(qual === 'uma' ? [atual] : []) }
+    catch (e) { alert('Não consegui gerar o PDF: ' + (e.message || e)) }
+    setGerando(null)
+  }
+  if (!preps.length) return null
+  return (
+    <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 14 }}>Ficha técnica das preparações</div>
+        <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>PDF para a produção: ingredientes de 0,5 a 6 receitas e quanto rende, sem custos.</div>
+      </div>
+      <select className="form-input" value={atual} onChange={e => { setPrepId(e.target.value); gravarLS(LS_PREP, e.target.value) }}
+        style={{ flex: '1 1 220px', minWidth: 0, maxWidth: 320, fontSize: 13, fontWeight: 600 }}>
+        {tipos.map(t => (
+          <optgroup key={t} label={t}>
+            {preps.filter(p => (p.tipo || 'outros') === t).map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+          </optgroup>
+        ))}
+      </select>
+      <button className="btn btn-primary btn-sm" onClick={() => gerar('uma')} disabled={!!gerando || !atual}>
+        {gerando === 'uma' ? <RefreshCw size={13} className="spin" /> : <FileDown size={13} />} PDF desta preparação
+      </button>
+      <button className="btn btn-ghost btn-sm" onClick={() => gerar('todas')} disabled={!!gerando}
+        title="Todas as preparações ativas num PDF só, agrupadas por tipo">
+        {gerando === 'todas' ? <RefreshCw size={13} className="spin" /> : <FileDown size={13} />} Todas
+      </button>
+    </div>
+  )
+}
+
+// PDF das preparações deste produto, com quantas unidades cada receita rende
+function BotaoFichaPDF({ emb }) {
+  const [gerando, setGerando] = useState(false)
+  async function gerar() {
+    setGerando(true)
+    try { await gerarFichaTecnicaPDF({ codigo: emb.codigo, nome: emb.nome, categoria: emb.categoria }) }
+    catch (e) { alert('Não consegui gerar o PDF: ' + (e.message || e)) }
+    setGerando(false)
+  }
+  return (
+    <button className="btn btn-ghost btn-sm" onClick={gerar} disabled={gerando}
+      title="As preparações deste produto, de 0,5 a 6 receitas, com quantas unidades cada receita rende">
+      {gerando ? <RefreshCw size={13} className="spin" /> : <FileDown size={13} />} PDF das preparações deste produto
+    </button>
   )
 }
 
