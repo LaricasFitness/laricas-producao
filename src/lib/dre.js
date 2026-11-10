@@ -76,6 +76,8 @@ export const PLATAFORMAS = [
   { canal: 'Keeta',    unidades: [''] },
   { canal: 'Anota.AI', unidades: ['BV'] },
   { canal: 'Site',     unidades: [''] },   // Shopify: vai para Venda Site, não para Delivery
+  { canal: 'Ativação', unidades: [''] },   // Mercado Pago, loja Ativação → Venda Ativação
+  { canal: 'Balcão',   unidades: [''] },   // Mercado Pago, loja Loja (desde jul/26) → Venda Balcão
 ]
 // Nome da loja no print → sigla da unidade (o que já foi lançado antes também ensina)
 // BV Bela Vista · ZN Santana · BK Brooklin · PR Maringá
@@ -96,11 +98,15 @@ export const custoCanal = r => (Number(r.taxas) || 0) + (Number(r.servicos) || 0
 export const marketingCanal = r => Number(r.marketing) || 0
 // O que o portal diz que a loja recebeu: vendas − promoções − taxas − serviços − anúncios + ajustes
 export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) || 0) - custoCanal(r) - marketingCanal(r)
-// Linhas da DRE que recebem o faturamento das plataformas (o site, da Shopify, vai para Venda Site)
+// Linha da receita de cada canal: Site (Shopify) → Venda Site; Ativação e Balcão (Mercado Pago) → suas linhas;
+// o resto (plataformas de delivery) → Delivery
 export const ehSite = r => r.canal === 'Site'
+export const RECEITA_DO_CANAL = { Site: 'rec_site', 'Ativação': 'rec_ativacao', 'Balcão': 'rec_balcao' }
+export const linhaReceitaCanal = r => RECEITA_DO_CANAL[r.canal] || 'rec_delivery'
+const vendasNa = linha => r => linhaReceitaCanal(r) === linha ? Number(r.vendas) || 0 : 0
 export const LINHAS_CANAL = {
-  rec_delivery: r => ehSite(r) ? 0 : Number(r.vendas) || 0,
-  rec_site: r => ehSite(r) ? Number(r.vendas) || 0 : 0,
+  rec_delivery: vendasNa('rec_delivery'), rec_site: vendasNa('rec_site'),
+  rec_ativacao: vendasNa('rec_ativacao'), rec_balcao: vendasNa('rec_balcao'),
   ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal, dv_marketing: marketingCanal,
 }
 

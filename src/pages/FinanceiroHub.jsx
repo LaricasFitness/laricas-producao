@@ -4,11 +4,12 @@ import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, 
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
   resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, itensCaixa, itensReceber, montarDRE, calcularEstrutura, conferir, mesVencimento,
-  PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL,
+  PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL, linhaReceitaCanal,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { lerPlanilha99 } from '../lib/planilha99'
 import { lerPlanilhaKeeta } from '../lib/planilhaKeeta'
+import { lerRelatorioMercadoPago } from '../lib/relatorioMercadoPago'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -711,11 +712,24 @@ function FaturamentoPlataformas({ onMudou }) {
   // Print: lê cada arquivo e põe na fila de revisão (nada é salvo sem conferir)
   async function lerArquivos(files) {
     const ehPlanilha = f => /\.xlsx$/i.test(f.name || '')
-    const lista = [...files].filter(f => /^image\/|pdf$/.test(f.type) || ehPlanilha(f))
+    const ehCsv = f => /\.csv$/i.test(f.name || '')
+    const lista = [...files].filter(f => /^image\/|pdf$/.test(f.type) || ehPlanilha(f) || ehCsv(f))
     if (!lista.length) return
     setMsg(null); setLendo(n => n + lista.length)
     for (const file of lista) {
       try {
+        if (ehCsv(file)) {
+          // Mercado Pago (relatório de Vendas): Ativação e Balcão por mês da compra
+          const { meses, fora } = lerRelatorioMercadoPago(await file.text())
+          if (!meses.length) throw new Error('Nenhuma venda das lojas Ativação ou Loja no arquivo.')
+          const txtFora = Object.entries(fora).map(([k, v]) => `${k}: R$ ${fmt(v)}`).join('; ')
+          setFila(q => [...q, ...meses.map(e => naFila({
+            ...paraForm(e), origem: 'planilha', arquivo: file.name,
+            aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago.${txtFora ? ` Fora da DRE neste arquivo (já vêm de outras fontes): ${txtFora}.` : ''}`,
+          }))])
+          setLendo(n => n - 1)
+          continue
+        }
         if (ehPlanilha(file)) {
           // 99 Food ou Keeta: uma entrada por loja × mês da planilha
           const dados = await file.arrayBuffer()
@@ -787,7 +801,8 @@ function FaturamentoPlataformas({ onMudou }) {
             <b>iFood:</b> Financeiro › Faturamento do mês, uma loja por print (com os grupos abertos); envie ou cole (Ctrl+V).{' '}
             <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa pelo mês da cobrança.{' '}
             <b>Keeta:</b> Financials › Download › Billing report (.xlsx) do mês.{' '}
-            <b>Site:</b> busca os pedidos do mês direto na Shopify (brindes da régua ficam fora da receita e dos descontos).
+            <b>Site:</b> busca os pedidos do mês direto na Shopify (brindes da régua ficam fora da receita e dos descontos).{' '}
+            <b>Mercado Pago:</b> Relatórios › Vendas (.csv): lojas Ativação e Loja (Balcão, desde jul/26).
             Você confere cada loja × mês antes de salvar.
           </div>
         </div>
@@ -802,7 +817,7 @@ function FaturamentoPlataformas({ onMudou }) {
           onClick={() => setFila(q => [...q, naFila(paraForm({ mes, canal: 'iFood', unidade: 'BV', origem: 'digitado' }))])}>
           <Plus size={13} /> Digitar
         </button>
-        <input ref={ref} type="file" multiple accept="image/*,application/pdf,.xlsx" style={{ display: 'none' }}
+        <input ref={ref} type="file" multiple accept="image/*,application/pdf,.xlsx,.csv" style={{ display: 'none' }}
           onChange={e => { const fs = e.target.files; lerArquivos(fs); e.target.value = '' }} />
       </div>
 
@@ -953,7 +968,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
               <div key={k} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10, alignItems: 'center' }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{k === 'marketing' && f.canal === 'Site' ? 'Vouchers de influenciadores' : nome}</div>
-                  <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{k === 'vendas' && f.canal === 'Site' ? 'Receita bruta · Venda Site' : destino}</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{k === 'vendas' ? `Receita bruta · ${LINHAS[linhaReceitaCanal(f)].nome}` : destino}</div>
                 </div>
                 <input className="form-input" inputMode="decimal" placeholder="0,00" value={f[k] ?? ''} onChange={e => set(k, e.target.value)} style={{ textAlign: 'right' }} />
               </div>
@@ -969,7 +984,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
 
           <div style={{ marginTop: 12, background: 'var(--gray-50)', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 800, marginBottom: 2 }}>Vai para a DRE de {f.mes ? rotuloMes(f.mes) : '—'} como {rotuloCanal(f) || f.canal}</div>
-            <div>Receita bruta · {f.canal === 'Site' ? 'Venda Site' : 'Delivery'}: <b>R$ {fmt(v.vendas)}</b></div>
+            <div>Receita bruta · {LINHAS[linhaReceitaCanal(f)].nome}: <b>R$ {fmt(v.vendas)}</b></div>
             <div>Deduções · promoções: <b>− R$ {fmt(v.promocoes)}</b></div>
             <div>Comercial · comissão e taxas: <b>− R$ {fmt(custo)}</b>
               <span style={{ color: 'var(--gray-500)' }}> ({fmt(v.taxas)} + {fmt(v.servicos)} − {fmt(v.ajustes)} de ajustes)</span></div>
@@ -1040,7 +1055,7 @@ function ReceitaCompetencia({ versaoCanais }) {
   useEffect(() => {
     supabase.from('dre_canal_competencia').select('canal, vendas').eq('mes', mes)
       .then(({ data, error }) => setPlataformas(error ? {} : (data || []).reduce((s, r) => {
-        const l = r.canal === 'Site' ? 'rec_site' : 'rec_delivery'
+        const l = linhaReceitaCanal(r)
         return { ...s, [l]: (s[l] || 0) + (Number(r.vendas) || 0) }
       }, {})))
   }, [mes, versaoCanais])
@@ -1089,6 +1104,8 @@ function ReceitaCompetencia({ versaoCanais }) {
               <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
                 {l === 'rec_site'
                   ? <>+ R$ {fmt(plataformas[l])} da Shopify (somado sozinho). Digite aqui só venda do site que não passou pela Shopify.</>
+                  : ['rec_ativacao', 'rec_balcao'].includes(l)
+                  ? <>+ R$ {fmt(plataformas[l])} do Mercado Pago (somado sozinho). Digite aqui só o que não passou pelo Mercado Pago.</>
                   : <>+ R$ {fmt(plataformas[l])} das plataformas (somado sozinho). Digite aqui só o delivery que não tem faturamento lançado acima.</>}
               </div>
             )}
