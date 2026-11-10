@@ -971,6 +971,11 @@ ON CONFLICT (id_bling) DO UPDATE SET mes = EXCLUDED.mes, competencia = EXCLUDED.
   nome = EXCLUDED.nome, cnpj = EXCLUDED.cnpj, historico = EXCLUDED.historico, valor = EXCLUDED.valor,
   situacao = EXCLUDED.situacao, id_origem = EXCLUDED.id_origem, importado_em = now();
 
+-- Classificação por cliente das contas a receber: nova origem 'receber' na tabela de classificação
+ALTER TABLE dre_mapa DROP CONSTRAINT IF EXISTS dre_mapa_origem_check;
+ALTER TABLE dre_mapa ADD CONSTRAINT dre_mapa_origem_check
+  CHECK (origem IN ('competencia', 'caixa_receita', 'caixa_despesa', 'receber'));
+
 -- "MERCADO PAGO – Vendas site" sem categoria é venda do site (já vem da Shopify)
 INSERT INTO dre_mapa (origem, categoria, nome, linha, atualizado_em)
 VALUES ('receber', 'Sem categoria', 'MERCADO PAGO', 'ignorar', now())
