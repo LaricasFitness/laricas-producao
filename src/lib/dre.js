@@ -75,6 +75,7 @@ export const PLATAFORMAS = [
   { canal: '99 Food',  unidades: ['BV', 'BK'] },
   { canal: 'Keeta',    unidades: [''] },
   { canal: 'Anota.AI', unidades: ['BV'] },
+  { canal: 'Site',     unidades: [''] },   // Shopify: vai para Venda Site, não para Delivery
 ]
 // Nome da loja no print → sigla da unidade (o que já foi lançado antes também ensina)
 // BV Bela Vista · ZN Santana · BK Brooklin · PR Maringá
@@ -95,8 +96,13 @@ export const custoCanal = r => (Number(r.taxas) || 0) + (Number(r.servicos) || 0
 export const marketingCanal = r => Number(r.marketing) || 0
 // O que o portal diz que a loja recebeu: vendas − promoções − taxas − serviços − anúncios + ajustes
 export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) || 0) - custoCanal(r) - marketingCanal(r)
-// Linhas da DRE que recebem o faturamento das plataformas
-export const LINHAS_CANAL = { rec_delivery: r => Number(r.vendas) || 0, ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal, dv_marketing: marketingCanal }
+// Linhas da DRE que recebem o faturamento das plataformas (o site, da Shopify, vai para Venda Site)
+export const ehSite = r => r.canal === 'Site'
+export const LINHAS_CANAL = {
+  rec_delivery: r => ehSite(r) ? 0 : Number(r.vendas) || 0,
+  rec_site: r => ehSite(r) ? Number(r.vendas) || 0 : 0,
+  ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal, dv_marketing: marketingCanal,
+}
 
 // ── Classificação padrão das categorias do Bling ─────────────────────────────
 // Categorias ambíguas (mesmo nome em várias áreas) ficam de fora de propósito:

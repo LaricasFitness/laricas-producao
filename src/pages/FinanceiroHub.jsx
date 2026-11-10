@@ -133,7 +133,7 @@ function TelaDRE({ irImportar }) {
     const resto = Object.fromEntries(meses.map(m => [m, (dre.porMes[m][l] || 0) - lin.reduce((s, x) => s + x.porMes[m], 0)]))
     const totalResto = meses.reduce((s, m) => s + resto[m], 0)
     if (meses.some(m => Math.abs(resto[m]) >= 0.005)) lin.push({
-      rotulo: l === 'rec_delivery' ? 'Digitado (fora das plataformas)' : 'Demais lançamentos (Bling)', porMes: resto, total: totalResto,
+      rotulo: l === 'rec_delivery' ? 'Digitado (fora das plataformas)' : l === 'rec_site' ? 'Digitado (fora da Shopify)' : 'Demais lançamentos (Bling)', porMes: resto, total: totalResto,
     })
     return lin
   }
@@ -557,7 +557,7 @@ const numTxt = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').re
 const txtNum = v => v == null || v === '' ? '' : Number(v).toFixed(2).replace('.', ',')
 const mesPassado = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
 const naFila = x => ({ ...x, _k: Date.now() + Math.random() })
-const ORIGENS = { print: 'print', portal: 'portal iFood', planilha: 'planilha', digitado: 'digitado' }
+const ORIGENS = { print: 'print', portal: 'portal iFood', planilha: 'planilha', shopify: 'Shopify', digitado: 'digitado' }
 const rotuloOrigem = o => ORIGENS[o] || 'digitado'
 const normalizarCanal = p => {
   const k = String(p || '').toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -580,8 +580,27 @@ function FaturamentoPlataformas({ onMudou }) {
   const [semTab, setSemTab] = useState(false)
   const [fila, setFila] = useState([])     // lançamentos para revisar (prints lidos, novo, edição)
   const [lendo, setLendo] = useState(0)
+  const [buscandoSite, setBuscandoSite] = useState(false)
   const [msg, setMsg] = useState(null)
   const ref = useRef()
+
+  // Site: pedidos do mês direto da Shopify (brindes da régua já ficam de fora) → fila de revisão
+  async function buscarShopify() {
+    setBuscandoSite(true); setMsg(null)
+    try {
+      const r = await fetch(`/api/shopify-faturamento?mes=${mes}`)
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.erro || `Falha ao buscar na Shopify (${r.status})`)
+      const e = j.faturamento
+      const fora = [e.fora.cancelados && `${e.fora.cancelados} cancelado(s)`, e.fora.naoPagos && `${e.fora.naoPagos} não pago(s)`, e.fora.teste && `${e.fora.teste} de teste`].filter(Boolean)
+      setFila(q => [...q, naFila({
+        ...paraForm(e), origem: 'shopify', arquivo: 'Shopify',
+        aviso: [`${e.pedidos} pedido(s) de ${rotuloMes(e.mes)}${fora.length ? ` (fora: ${fora.join(', ')})` : ''}.`,
+          e.brindes.quantidade ? `Brindes da régua fora da receita: ${e.brindes.quantidade} un., R$ ${fmt(e.brindes.valor)}.` : '', ...e.avisos].filter(Boolean).join(' '),
+      })])
+    } catch (e) { setMsg({ tipo: 'danger', txt: `Shopify: ${e.message || e}` }) }
+    setBuscandoSite(false)
+  }
 
   async function carregar() {
     const [{ data, error }, { data: fech }] = await Promise.all([
@@ -671,13 +690,17 @@ function FaturamentoPlataformas({ onMudou }) {
           <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
             <b>iFood:</b> Financeiro › Faturamento do mês, uma loja por print (com os grupos abertos); envie ou cole (Ctrl+V).{' '}
             <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa pelo mês da cobrança.{' '}
-            <b>Keeta:</b> Financials › Download › Billing report (.xlsx) do mês.
+            <b>Keeta:</b> Financials › Download › Billing report (.xlsx) do mês.{' '}
+            <b>Site:</b> busca os pedidos do mês direto na Shopify (brindes da régua ficam fora da receita e dos descontos).
             Você confere cada loja × mês antes de salvar.
           </div>
         </div>
         <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
         <button className="btn btn-primary btn-sm" disabled={semTab || lendo > 0} onClick={() => ref.current?.click()}>
           {lendo > 0 ? <RefreshCw size={13} className="spin" /> : <Camera size={13} />} {lendo > 0 ? `Lendo ${lendo} arquivo(s)…` : 'Ler print ou planilha'}
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={semTab || fechado || buscandoSite} onClick={buscarShopify} title="Pedidos do mês na Shopify, sem os brindes da régua">
+          {buscandoSite ? <RefreshCw size={13} className="spin" /> : <RefreshCw size={13} />} {buscandoSite ? 'Buscando na Shopify…' : 'Site: buscar na Shopify'}
         </button>
         <button className="btn btn-ghost btn-sm" disabled={semTab || fechado}
           onClick={() => setFila(q => [...q, naFila(paraForm({ mes, canal: 'iFood', unidade: 'BV', origem: 'digitado' }))])}>
@@ -834,7 +857,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
               <div key={k} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10, alignItems: 'center' }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{nome}</div>
-                  <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{destino}</div>
+                  <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>{k === 'vendas' && f.canal === 'Site' ? 'Receita bruta · Venda Site' : destino}</div>
                 </div>
                 <input className="form-input" inputMode="decimal" placeholder="0,00" value={f[k] ?? ''} onChange={e => set(k, e.target.value)} style={{ textAlign: 'right' }} />
               </div>
@@ -850,7 +873,7 @@ function ModalCanal({ inicial, restantes, todas, fechados, onFechar, onSalvou })
 
           <div style={{ marginTop: 12, background: 'var(--gray-50)', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 800, marginBottom: 2 }}>Vai para a DRE de {f.mes ? rotuloMes(f.mes) : '—'} como {rotuloCanal(f) || f.canal}</div>
-            <div>Receita bruta · Delivery: <b>R$ {fmt(v.vendas)}</b></div>
+            <div>Receita bruta · {f.canal === 'Site' ? 'Venda Site' : 'Delivery'}: <b>R$ {fmt(v.vendas)}</b></div>
             <div>Deduções · promoções: <b>− R$ {fmt(v.promocoes)}</b></div>
             <div>Comercial · comissão e taxas: <b>− R$ {fmt(custo)}</b>
               <span style={{ color: 'var(--gray-500)' }}> ({fmt(v.taxas)} + {fmt(v.servicos)} − {fmt(v.ajustes)} de ajustes)</span></div>
@@ -904,11 +927,14 @@ function ReceitaCompetencia({ versaoCanais }) {
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [fechado, setFechado] = useState(false)
-  const [plataformas, setPlataformas] = useState(0)
+  const [plataformas, setPlataformas] = useState({}) // vendas das plataformas por linha (Delivery, Site)
 
   useEffect(() => {
-    supabase.from('dre_canal_competencia').select('vendas').eq('mes', mes)
-      .then(({ data, error }) => setPlataformas(error ? 0 : (data || []).reduce((s, r) => s + (Number(r.vendas) || 0), 0)))
+    supabase.from('dre_canal_competencia').select('canal, vendas').eq('mes', mes)
+      .then(({ data, error }) => setPlataformas(error ? {} : (data || []).reduce((s, r) => {
+        const l = r.canal === 'Site' ? 'rec_site' : 'rec_delivery'
+        return { ...s, [l]: (s[l] || 0) + (Number(r.vendas) || 0) }
+      }, {})))
   }, [mes, versaoCanais])
 
   useEffect(() => {
@@ -922,7 +948,8 @@ function ReceitaCompetencia({ versaoCanais }) {
   }, [mes])
 
   const num = v => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
-  const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0) + plataformas
+  const somaPlat = Object.values(plataformas).reduce((s, x) => s + x, 0)
+  const total = RECEITAS.reduce((s, l) => s + num(valores[l]), 0) + somaPlat
 
   async function salvar() {
     setSalvando(true); setMsg(null)
@@ -945,16 +972,18 @@ function ReceitaCompetencia({ versaoCanais }) {
             <label className="form-label" style={{ fontSize: 12 }}>{LINHAS[l].nome}</label>
             <input className="form-input" inputMode="decimal" placeholder="0,00" value={valores[l] || ''} disabled={fechado}
               onChange={e => setValores(v => ({ ...v, [l]: e.target.value }))} style={{ textAlign: 'right' }} />
-            {l === 'rec_delivery' && plataformas > 0 && (
+            {plataformas[l] > 0 && (
               <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
-                + R$ {fmt(plataformas)} das plataformas (somado sozinho). Digite aqui só o delivery que não tem faturamento lançado acima.
+                {l === 'rec_site'
+                  ? <>+ R$ {fmt(plataformas[l])} da Shopify (somado sozinho). Digite aqui só venda do site que não passou pela Shopify.</>
+                  : <>+ R$ {fmt(plataformas[l])} das plataformas (somado sozinho). Digite aqui só o delivery que não tem faturamento lançado acima.</>}
               </div>
             )}
           </div>
         ))}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 13 }}>Total{plataformas > 0 ? ' com plataformas' : ''}: <b>R$ {fmt(total)}</b></div>
+        <div style={{ fontSize: 13 }}>Total{somaPlat > 0 ? ' com plataformas' : ''}: <b>R$ {fmt(total)}</b></div>
         {fechado
           ? <span style={{ fontSize: 12, color: 'var(--ok)' }}><Lock size={12} style={{ verticalAlign: -2 }} /> {rotuloMes(mes)} fechado na DRE: abra o cadeado para alterar.</span>
           : <button className="btn btn-primary btn-sm" onClick={salvar} disabled={salvando}>
