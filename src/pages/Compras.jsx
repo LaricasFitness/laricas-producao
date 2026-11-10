@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
+import { semOcultos } from '../lib/sazonal'
 import { registrarAcao } from '../lib/log'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { BotaoCadeado, conferido, erroCadeado } from '../lib/cadeado'
@@ -193,10 +194,10 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
                   <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
                     <option value="">— Não cadastrado / digitar nome —</option>
                     <optgroup label="🏷️ Rótulos">
-                      {embalagens.filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                      {semOcultos(embalagens, e => e.id === it.embalagem_id).filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                     </optgroup>
                     <optgroup label="📦 Embalagens">
-                      {embalagens.filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                      {semOcultos(embalagens, e => e.id === it.embalagem_id).filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                     </optgroup>
                   </select>
                   {!it.embalagem_id && (
@@ -333,10 +334,10 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
                   <select className="form-input" value={it.embalagem_id} onChange={e => updItem(i, 'embalagem_id', e.target.value)}>
                     <option value="">— Não cadastrado / digitar nome —</option>
                     <optgroup label="🏷️ Rótulos">
-                      {embalagens.filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                      {semOcultos(embalagens, e => e.id === it.embalagem_id).filter(e => e.tipo === 'rotulo').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                     </optgroup>
                     <optgroup label="📦 Embalagens">
-                      {embalagens.filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
+                      {semOcultos(embalagens, e => e.id === it.embalagem_id).filter(e => e.tipo === 'embalagem').map(e => <option key={e.id} value={e.id}>{e.nome}</option>)}
                     </optgroup>
                   </select>
                   {!it.embalagem_id && (

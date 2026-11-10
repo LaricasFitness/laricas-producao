@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { carregarStatusCompleto, statusCfg, consumoSemanal } from '../lib/data'
 import { RefreshCw } from 'lucide-react'
+import { semOcultos, ocultoSazonal } from '../lib/sazonal'
 
 function TrendIcon({ dir }) {
   if (dir === 'up')   return <span className="trend up">↑ Alta</span>
@@ -46,8 +47,11 @@ function BarEstoque({ pct, status }) {
 }
 
 export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
-  const [data, setData] = useState([])
+  const [todos, setData] = useState([])
   const [loading, setLoading] = useState(true)
+  // Sazonal fora de temporada some da lista e dos alertas; o valor dele continua no total
+  const data = semOcultos(todos)
+  const valorOcultos = todos.filter(ocultoSazonal).reduce((s, d) => s + (d.valorEstoque || 0), 0)
   const [filtro, setFiltro] = useState('todos')
   const [filtroCategoria, setFiltroCategoria] = useState('todas')
   const [expandido, setExpandido] = useState(null)
@@ -74,7 +78,8 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
     .filter(d => filtro === 'todos' || (filtro === 'negativo' ? d.negativo : d.status === filtro))
     .filter(d => filtroCategoria === 'todas' || d.categoria === filtroCategoria)
 
-  const valorTotalEstoque = filtered.reduce((s, d) => s + (d.valorEstoque || 0), 0)
+  const somaOcultos = filtro === 'todos' && filtroCategoria === 'todas' && valorOcultos > 0
+  const valorTotalEstoque = filtered.reduce((s, d) => s + (d.valorEstoque || 0), 0) + (somaOcultos ? valorOcultos : 0)
 
   return (
     <>
@@ -112,7 +117,10 @@ export default function Dashboard({ onNovoPedido, tipo = 'rotulo' }) {
             <div className="kpi-value" style={{ color: 'var(--purple)', fontSize: 16 }}>
               {valorTotalEstoque.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
             </div>
-            <div className="kpi-detail">{filtroCategoria !== 'todas' ? filtroCategoria : 'todos os itens filtrados'}</div>
+            <div className="kpi-detail">
+              {filtroCategoria !== 'todas' ? filtroCategoria : 'todos os itens filtrados'}
+              {somaOcultos && ` · inclui ${valorOcultos.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de sazonais fora de temporada`}
+            </div>
           </div>
         )}
       </div>

@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
 import ControleEstoque from './Estoque'
 import { CustoPreparacoes, OverheadMensal } from './MatPrimas'
 import SimularCampanha from './SimularCampanha'
 import FichaProduto from './FichaProduto'
 import { RefreshCw, Save } from 'lucide-react'
+import { ocultoSazonal } from '../lib/sazonal'
 
 const CANAIS_DEFAULT = [
   { id: 'ecommerce', label: 'E-commerce',   totalPct:0,    totalFixo:18 },
@@ -461,6 +462,8 @@ export default function Precificacao({ sub, onSub }) {
   const [incluirOverhead, setIncluirOverhead] = useState(false)
   const [snapshotKey, setSnapshotKey] = useState(0)
   const { data, loading, reload } = usePrecificacao()
+  // Telas de uso sem os sazonais fora de temporada; o retrato mensal do CMV (cmv_historico) segue com todos
+  const dataVis = useMemo(() => data && ({ ...data, produtos: data.produtos.filter(p => !ocultoSazonal(p.emb)) }), [data])
 
   // Salva snapshot automaticamente quando os dados carregam
   useEffect(() => {
@@ -540,12 +543,12 @@ export default function Precificacao({ sub, onSub }) {
             </div>
           </div>
 
-          {aba==='ficha'     && <FichaProduto data={data} reload={reload} incluirOverhead={incluirOverhead}
+          {aba==='ficha'     && <FichaProduto data={dataVis} reload={reload} incluirOverhead={incluirOverhead}
             cmvDe={p => cmvEfetivo(p.cmvTotalReal ?? p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)} />}
-          {aba==='ranking'   && <RankingMargem data={data} reload={reload} incluirOverhead={incluirOverhead} />}
+          {aba==='ranking'   && <RankingMargem data={dataVis} reload={reload} incluirOverhead={incluirOverhead} />}
           {aba==='evolucao'  && <EvolucaoCMV key={snapshotKey} />}
-          {aba==='simular'   && <SimularProduto data={data} incluirOverhead={incluirOverhead} />}
-          {aba==='campanha'  && <SimularCampanha data={data}
+          {aba==='simular'   && <SimularProduto data={dataVis} incluirOverhead={incluirOverhead} />}
+          {aba==='campanha'  && <SimularCampanha data={dataVis}
             cmvDe={p => cmvEfetivo(p.cmvTotalReal ?? p.cmvTotal, incluirOverhead, data.overheadPorUnidade, parseFloat(p.emb.equivalencia_overhead)||1)} />}
           {aba==='estoque'   && <ControleEstoque />}
           {aba==='preparacoes' && <CustoPreparacoes />}

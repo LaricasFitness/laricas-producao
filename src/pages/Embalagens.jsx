@@ -5,6 +5,7 @@ import Compras from './Compras'
 import LogGeral from './LogGeral'
 import { supabase } from '../supabase'
 import { calcularEstoqueCronologico } from '../lib/data'
+import { semOcultos } from '../lib/sazonal'
 import { RefreshCw, Save, CheckCircle, Pencil } from 'lucide-react'
 
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
@@ -30,9 +31,10 @@ export function ConferenciaEstoque({ onSalvo }) {
       .order('tipo').order('categoria').order('nome')
 
     if (!data) { setLoading(false); return }
+    const lista = semOcultos(data)   // sazonal fora de temporada não entra na contagem
 
-    const estoques = await Promise.all(data.map(e => calcularEstoqueCronologico(e.id)))
-    setEmbs(data.map((e, i) => ({ ...e, estoque_sistema: estoques[i] })))
+    const estoques = await Promise.all(lista.map(e => calcularEstoqueCronologico(e.id)))
+    setEmbs(lista.map((e, i) => ({ ...e, estoque_sistema: estoques[i] })))
     setLoading(false)
   }
 

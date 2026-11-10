@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { Upload, FileText, RefreshCw, Trash2 } from 'lucide-react'
 import { registrarAcao } from '../lib/log'
+import { ocultoSazonal, skusOcultos } from '../lib/sazonal'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -258,7 +259,9 @@ function gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, dia
   function deliveryParaDia({ data, dow }) {
     const diasSomar = dow === 'sex' ? ['sex', 'sab', 'dom', 'seg'] : [dow]
     const porSku = {}
+    const ocultos = skusOcultos(embalagens)   // sazonal fora de temporada não entra pela previsão
     for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
+      if (ocultos.has(sku)) continue
       // Usa diasDelivery se já existir (editado), senão usa previsão
       const fromState = diasDelivery[data]?.[sku]
       if (fromState !== undefined) { porSku[sku] = fromState; continue }
@@ -1188,7 +1191,9 @@ export default function Planejamento({ onIrLogistica }) {
           ? ['sex', 'sab', 'dom', 'seg']
           : [dow]
         const previsaoDia = {}
+        const ocultos = skusOcultos(embalagens)   // sazonal fora de temporada não entra pela previsão
         for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
+          if (ocultos.has(sku)) continue
           const qtd = diasSomar.reduce((s, d) => s + (pDias[d] || 0), 0)
           if (qtd > 0) previsaoDia[sku] = qtd
         }
@@ -1223,6 +1228,7 @@ export default function Planejamento({ onIrLogistica }) {
   }
   const totalDiaAtual = Object.values(itensDiaAtual).flat().reduce((s, i) => s + i.total, 0)
   const temDados = diasOrdenados.length > 0
+  const temPedido = sku => diasVisiveis.some(d => (diasBling[d]?.[sku] || 0) + (diasDelivery[d]?.[sku] || 0) > 0)
 
   if (loading) return <div className="loading"><RefreshCw size={16} className="spin" /> Carregando...</div>
 
@@ -1491,8 +1497,9 @@ export default function Planejamento({ onIrLogistica }) {
                 </tr>
               </thead>
               <tbody>
-                {catsDe(embalagens).map(cat => {
-                  const itens = embalagens.filter(e => e.categoria === cat)
+                {catsDe(embalagens.filter(e => !ocultoSazonal(e) || temPedido(e.codigo))).map(cat => {
+                  // Sazonal fora de temporada só aparece se veio pedido de verdade no CSV
+                  const itens = embalagens.filter(e => e.categoria === cat && (!ocultoSazonal(e) || temPedido(e.codigo)))
                   if (!itens.length) return null
                   return [
                     <tr key={`cat-${cat}`}>

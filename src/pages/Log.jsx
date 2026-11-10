@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { editarProducao, excluirProducao, adicionarProducao } from '../lib/producao'
 import { RefreshCw, AlertTriangle, Download, Pencil, Check, X } from 'lucide-react'
+import { ocultoSazonal } from '../lib/sazonal'
 
 function getMesGrid(ano, mes) {
   const primeiroDia = new Date(ano, mes, 1)
@@ -121,6 +122,7 @@ function BlocoLote({ lote, embs, dataAtual, onSaved }) {
 function EditarLote({ dia, itens, embs, onClose, onSaved }) {
   const lista = Object.values(embs || {})
     .filter(e => e && e.ativo !== false && (e.tipo === 'rotulo' || e.visivel_producao))
+    .filter(e => !ocultoSazonal(e) || itens.some(r => r.embalagem_id === e.id))   // sazonal fora de temporada só se já está no lançamento
   const cats = [...new Set(lista.map(e => e.categoria).filter(Boolean))].sort()
 
   const [linhas, setLinhas] = useState(
@@ -256,7 +258,8 @@ function EditarQtd({ r, embs, onSaved }) {
   const [erro, setErro] = useState('')
 
   const trocouProduto = embId !== r.embalagem_id
-  const lista = Object.values(embs || {}).filter(e => e && e.ativo !== false && (e.tipo === 'rotulo' || e.visivel_producao))
+  const lista = Object.values(embs || {}).filter(e => e && e.ativo !== false && (e.tipo === 'rotulo' || e.visivel_producao) &&
+    (!ocultoSazonal(e) || e.id === r.embalagem_id))   // sazonal fora de temporada só se já é o do lançamento
   const cats = [...new Set(lista.map(e => e.categoria).filter(Boolean))].sort()
 
   async function salvar() {

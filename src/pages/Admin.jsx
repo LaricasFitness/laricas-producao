@@ -4,11 +4,18 @@ import { diasPorCategoria } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { Plus, Pencil, Trash2, RefreshCw, Save } from 'lucide-react'
 import Usuarios from './Usuarios'
+import { SelectCategoria } from '../lib/categorias'
+import { ehSazonal, ocultoSazonal, semOcultos, categoriaOculta, definirTemporada } from '../lib/sazonal'
 
-const CATEGORIAS = [
-  'Pão de Mel 100g','Mini Pão de Mel 30g','Lata Mini 240g',
-  'Potinho 60g','Potão 280g','Barra 180g','Bombom','Outros'
-]
+// Botão "mostrar sazonais fora de temporada" das listas do Admin
+function BotaoOcultos({ qtd, ver, onClick }) {
+  if (!qtd) return null
+  return (
+    <button className="btn btn-ghost btn-sm" onClick={onClick} title="Produtos de categoria sazonal fora de temporada (Admin › Sistema)">
+      {ver ? 'Esconder' : 'Mostrar'} {qtd} sazona{qtd > 1 ? 'is' : 'l'} fora de temporada
+    </button>
+  )
+}
 
 function ModalEmb({ emb, onClose, onSaved }) {
   const isNew = !emb?.id
@@ -124,9 +131,7 @@ function ModalEmb({ emb, onClose, onSaved }) {
             </div>
             <div className="form-group">
               <label className="form-label">Categoria</label>
-              <select className="form-input" value={f.categoria} onChange={e => onCatChange(e.target.value)}>
-                {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
-              </select>
+              <SelectCategoria value={f.categoria} onChange={onCatChange} />
             </div>
           </div>
           <div className="form-group">
@@ -179,7 +184,7 @@ function ModalEmb({ emb, onClose, onSaved }) {
                 <select className="form-input" value={f.planejar_como}
                   onChange={e => { set('planejar_como', e.target.value); if (e.target.value && !f.planejar_fator) set('planejar_fator', 1) }}>
                   <option value="">— o próprio produto —</option>
-                  {rotulos.filter(r => r.codigo !== f.codigo).map(r => <option key={r.codigo} value={r.codigo}>{r.nome} ({r.categoria})</option>)}
+                  {semOcultos(rotulos, r => r.codigo === f.planejar_como).filter(r => r.codigo !== f.codigo).map(r => <option key={r.codigo} value={r.codigo}>{r.nome} ({r.categoria})</option>)}
                 </select>
               </div>
               <div className="form-group">
@@ -351,9 +356,15 @@ function AdminDeliveryPrevisao() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('delivery_previsao').select('*').order('nome')
+    const [{ data }, { data: embsCat }] = await Promise.all([
+      supabase.from('delivery_previsao').select('*').order('nome'),
+      supabase.from('embalagens').select('codigo, categoria'),
+    ])
+    // Sazonal fora de temporada não aparece (e não entra na previsão do Planejamento)
+    const ocultos = new Set((embsCat || []).filter(ocultoSazonal).map(e => e.codigo))
     const map = {}
     for (const r of (data || [])) {
+      if (ocultos.has(r.sku)) continue
       if (!map[r.sku]) map[r.sku] = { sku: r.sku, nome: r.nome, seg:0,ter:0,qua:0,qui:0,sex:0,sab:0,dom:0 }
       map[r.sku][r.dia_semana] = r.quantidade
     }
@@ -931,6 +942,7 @@ function AdminComposicaoProdutos() {
   const [embDisponiveis, setEmbDisponiveis] = useState([])
   const [salvando, setSalvando] = useState(false)
   const [filtro, setFiltro] = useState('')
+  const [verOcultos, setVerOcultos] = useState(false)
 
   async function load() {
     setLoading(true)
@@ -998,8 +1010,10 @@ function AdminComposicaoProdutos() {
     setSalvando(false)
   }
 
+  const qtdOcultos = embs.filter(ocultoSazonal).length
   const embsFiltradas = embs.filter(e =>
-    !filtro || e.nome.toLowerCase().includes(filtro.toLowerCase()) || e.codigo.toLowerCase().includes(filtro.toLowerCase())
+    (verOcultos || !ocultoSazonal(e)) &&
+    (!filtro || e.nome.toLowerCase().includes(filtro.toLowerCase()) || e.codigo.toLowerCase().includes(filtro.toLowerCase()))
   )
 
   if (editandoSku) {
@@ -1015,7 +1029,7 @@ function AdminComposicaoProdutos() {
         emb={emb}
         preps={preps}
         itensIniciais={itensAtuais}
-        embDisponiveis={embDisponiveis}
+        embDisponiveis={semOcultos(embDisponiveis, x => (embalagensProduto[editandoSku] || []).some(v => v.embalagem_id === x.id))}
         embIniciais={(embalagensProduto[editandoSku] || []).map(v => ({
           embalagem_id: v.embalagem_id, quantidade: String(v.quantidade),
         }))}
@@ -1033,7 +1047,8 @@ function AdminComposicaoProdutos() {
           <div style={{ fontWeight:800, fontSize:15 }}>🧩 Composição dos Produtos</div>
           <div style={{ fontSize:12, color:'var(--gray-400)', marginTop:2 }}>Quanto de cada preparação é usado por unidade de produto final</div>
         </div>
-        <div style={{ display:'flex', gap:8 }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <BotaoOcultos qtd={qtdOcultos} ver={verOcultos} onClick={() => setVerOcultos(v => !v)} />
           <input className="form-input" placeholder="Filtrar produto..." value={filtro} onChange={e => setFiltro(e.target.value)} style={{ width:200, fontSize:13 }} />
           <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
         </div>
@@ -1554,6 +1569,64 @@ function AdminOverhead() {
   )
 }
 
+// ── Produtos sazonais: em temporada (aparece) ou fora (some das telas de uso) ──
+function SecaoSazonais() {
+  const [cats, setCats] = useState(null)   // [{ cat, qtd }]
+  const [salvando, setSalvando] = useState(null)
+  const [, forcar] = useState(0)
+
+  useEffect(() => {
+    supabase.from('embalagens').select('categoria').eq('ativo', true).then(({ data }) => {
+      const cont = {}
+      for (const r of (data || [])) if (ehSazonal(r.categoria)) cont[r.categoria] = (cont[r.categoria] || 0) + 1
+      setCats(Object.entries(cont).map(([cat, qtd]) => ({ cat, qtd })).sort((a, b) => a.cat.localeCompare(b.cat)))
+    })
+  }, [])
+
+  async function alternar(cat) {
+    setSalvando(cat)
+    try { await definirTemporada(cat, categoriaOculta(cat)); forcar(x => x + 1) }
+    catch (e) { alert('Não consegui salvar: ' + (e.message || e)) }
+    setSalvando(null)
+  }
+
+  return (
+    <div style={{ border: '2px solid var(--gray-200)', borderRadius: 10, padding: 16, background: '#fafafa' }}>
+      <div style={{ fontWeight: 800, fontSize: 14 }}>🎄 Produtos sazonais</div>
+      <div style={{ fontSize: 13, color: 'var(--gray-500)', marginTop: 4, marginBottom: 12 }}>
+        Categoria com <b>[SAZONAL]</b> no nome (ex.: "Chocotone [SAZONAL]"). Fora de temporada, os produtos somem do registro de produção,
+        planejamento, estoque, conferência, compras, pedidos à gráfica, custos e cadastros. Históricos, análises, CMV do mês e valor do
+        estoque continuam contando tudo. Pedido real que chegar no planejamento aparece mesmo fora de temporada.
+      </div>
+      {cats === null ? <RefreshCw size={14} className="spin" /> : !cats.length ? (
+        <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>
+          Nenhuma categoria sazonal. Para criar: Cadastro de embalagens › editar o produto › Categoria › "＋ Nova categoria…", terminando o nome com [SAZONAL].
+        </div>
+      ) : cats.map(({ cat, qtd }) => {
+        const ativa = !categoriaOculta(cat)
+        return (
+          <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid var(--gray-200)' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>{cat}</div>
+              <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>{qtd} produto{qtd > 1 ? 's' : ''}/embalage{qtd > 1 ? 'ns' : 'm'}</div>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 800, color: ativa ? 'var(--ok)' : 'var(--gray-400)' }}>
+              {ativa ? 'EM TEMPORADA' : 'FORA DE TEMPORADA'}
+            </span>
+            <button onClick={() => alternar(cat)} disabled={salvando === cat}
+              title={ativa ? 'Esconder do sistema (fim da temporada)' : 'Mostrar no sistema (começo da temporada)'}
+              style={{ width: 48, height: 26, borderRadius: 13, border: 'none', cursor: 'pointer', position: 'relative',
+                background: ativa ? 'var(--ok)' : 'var(--gray-300)', flexShrink: 0 }}>
+              <span style={{ position: 'absolute', top: 3, left: ativa ? 25 : 3, width: 20, height: 20, borderRadius: '50%',
+                background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.3)' }} />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Configurações do Sistema ──────────────────────────────────────────────────
 function AdminSistema() {
   const [configs, setConfigs] = useState({})
@@ -1650,6 +1723,8 @@ function AdminSistema() {
             )
           })}
 
+          <SecaoSazonais />
+
           {/* Percentuais de desperdício */}
           <div style={{ border:'2px solid var(--warning)', borderRadius:10, padding:16, background:'#fffbf0' }}>
             <div style={{ fontWeight:800, fontSize:14, marginBottom:4 }}>♻️ Perda de Embalagem</div>
@@ -1706,6 +1781,7 @@ export default function Admin({ sub, onSub }) {
   const [ajuste, setAjuste] = useState(null)
   const [excluir, setExcluir] = useState(null)
   const [filtro, setFiltro] = useState('todos')
+  const [verOcultos, setVerOcultos] = useState(false)
 
   async function load() {
     setLoading(true)
@@ -1726,7 +1802,9 @@ export default function Admin({ sub, onSub }) {
 
   useEffect(() => { load() }, [])
 
-  const filtered = embs.filter(e => filtro === 'todos' ? true : filtro === 'ativo' ? e.ativo : !e.ativo)
+  const qtdOcultos = embs.filter(ocultoSazonal).length
+  const filtered = embs.filter(e => (verOcultos || !ocultoSazonal(e)) &&
+    (filtro === 'todos' ? true : filtro === 'ativo' ? e.ativo : !e.ativo))
 
   const porCategoria = filtered.reduce((acc, e) => {
     const cat = e.categoria || 'Outros'
@@ -1799,6 +1877,7 @@ export default function Admin({ sub, onSub }) {
             {f === 'todos' ? 'Todas' : f === 'ativo' ? 'Ativas' : 'Inativas'}
           </button>
         ))}
+        <BotaoOcultos qtd={qtdOcultos} ver={verOcultos} onClick={() => setVerOcultos(v => !v)} />
       </div>
 
       {loading ? <div className="loading">Carregando...</div> : (
@@ -1806,6 +1885,7 @@ export default function Admin({ sub, onSub }) {
           <div key={cat} style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple-light)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 8, paddingBottom: 6, borderBottom: '2px solid var(--purple-pale)' }}>
               {cat} <span style={{ color: 'var(--gray-400)', fontWeight: 400 }}>({items.length})</span>
+              {categoriaOculta(cat) && <span style={{ marginLeft: 8, color: 'var(--warning)', textTransform: 'none', letterSpacing: 0 }}>· fora de temporada</span>}
             </div>
             <table className="tbl">
               <thead>

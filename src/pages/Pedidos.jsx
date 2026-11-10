@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { carregarStatusCompleto, gerarNumeroPedido, statusCfg, recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { FileText, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Plus } from 'lucide-react'
+import { semOcultos } from '../lib/sazonal'
+import { SelectCategoria, CATEGORIAS_BASE } from '../lib/categorias'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -83,13 +85,14 @@ function ModalNovoPedido({ onClose, onSaved }) {
 
   useEffect(() => {
     async function load() {
-      const { data: embsData } = await supabase
+      let { data: embsData } = await supabase
         .from('embalagens')
         .select('id, codigo, nome, categoria, tipo, unidade_minima_grafica')
         .eq('ativo', true)
         .order('tipo').order('categoria').order('nome')
 
       if (!embsData) { setLoading(false); return }
+      embsData = semOcultos(embsData)   // sazonal fora de temporada não entra no pedido à gráfica
 
       // Usa as mesmas funções do Dashboard — estoque cronológico + média por dias produtivos
       const { calcularEstoqueCronologico, calcularMedia } = await import('../lib/data.js')
@@ -237,8 +240,7 @@ function ModalNovoPedido({ onClose, onSaved }) {
 }
 
 function ModalCadastrarEmbalagem({ extra, onClose, onSalvar }) {
-  const CATS = ['Pão de Mel 100g','Pão de Mel 30g','Barra 180g','Potão 280g','Potinho 60g','Outros']
-  const [form, setForm] = useState({ nome: extra.nome, codigo: '', categoria: CATS[0], tipo: 'rotulo' })
+  const [form, setForm] = useState({ nome: extra.nome, codigo: '', categoria: CATEGORIAS_BASE[0], tipo: 'rotulo' })
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
   const [saving, setSaving] = useState(false)
   return (
@@ -271,9 +273,7 @@ function ModalCadastrarEmbalagem({ extra, onClose, onSalvar }) {
           </div>
           <div className="form-group">
             <label className="form-label">Categoria</label>
-            <select className="form-input" value={form.categoria} onChange={e=>set('categoria',e.target.value)}>
-              {CATS.map(c=><option key={c} value={c}>{c}</option>)}
-            </select>
+            <SelectCategoria value={form.categoria} onChange={v=>set('categoria',v)} />
           </div>
         </div>
         <div className="modal-footer">

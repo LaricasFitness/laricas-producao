@@ -4,6 +4,7 @@ import './App.css'
 import { fecharMesesPendentes } from './lib/cmv'
 import { MENU, subPadrao, rotuloSub } from './lib/menu'
 import { observarGradesFixas } from './lib/gradesMobile'
+import { carregarSazonais } from './lib/sazonal'
 import Login from './pages/Login'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
@@ -36,6 +37,13 @@ export default function App() {
 
   // Fecha o CMV dos meses vencidos (a partir do dia 5) — sem botão, em segundo plano
   useEffect(() => { if (usuario) fecharMesesPendentes() }, [usuario])
+
+  // Sazonais fora de temporada: carrega antes de abrir qualquer tela
+  const [sazonalPronto, setSazonalPronto] = useState(false)
+  useEffect(() => {
+    if (!usuario) return
+    carregarSazonais().finally(() => setSazonalPronto(true))
+  }, [usuario])
 
   // Celular: grades com colunas fixas em px ganham a classe .grade-px (ver App.css)
   useEffect(() => observarGradesFixas(), [])
@@ -133,12 +141,14 @@ export default function App() {
           </div>
         </header>
         <div className="page">
-          {pageAtual==='producao'   && <ProducaoHub onIrLogistica={irLogistica} sub={subAtual} onSub={id => setSub('producao', id)} />}
+          {!sazonalPronto ? <div className="loading">Carregando...</div> : <>
+          {pageAtual==='producao'  && <ProducaoHub onIrLogistica={irLogistica} sub={subAtual} onSub={id => setSub('producao', id)} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} sub={subAtual} onSub={id => setSub('logistica', id)} />}
           {pageAtual==='estoque'       && <EstoqueHub sub={subAtual} onSub={id => setSub('estoque', id)} />}
           {pageAtual==='precificacao'  && <Precificacao sub={subAtual} onSub={id => setSub('precificacao', id)} />}
           {pageAtual==='financeiro'    && <FinanceiroHub sub={subAtual} onSub={id => setSub('financeiro', id)} />}
           {pageAtual==='admin'      && <Admin sub={subAtual} onSub={id => setSub('admin', id)} />}
+          </>}
         </div>
       </div>
     </div>

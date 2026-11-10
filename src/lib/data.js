@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { semOcultos } from './sazonal'
 
 const CATS_15 = ['Pão de Mel 100g', 'Mini Pão de Mel 30g', 'Barra 180g']
 
@@ -11,7 +12,7 @@ export async function carregarEmbalagens(tipo = null) {
   if (tipo) q = q.eq('tipo', tipo)
   const { data, error } = await q.order('categoria').order('nome')
   if (error) throw error
-  return data || []
+  return semOcultos(data)   // sazonal fora de temporada não aparece no registro de produção
 }
 
 export async function carregarEmbalagenEstoque(tipo = null) {
