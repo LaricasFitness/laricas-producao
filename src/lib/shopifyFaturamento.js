@@ -2,16 +2,19 @@
 // Usado pela função api/shopify-faturamento.mjs; fica aqui para poder ser testado sem a Shopify.
 //
 // Regras (DRE gerencial da Laricas):
-//   Receita bruta  produtos pelo preço do pedido antes dos descontos + frete cobrado do cliente
+//   Receita bruta  produtos pelo preço do pedido antes dos descontos + frete cobrado do cliente,
+//                  menos o valor coberto por voucher de influenciador (ver abaixo)
 //   Descontos      cupons, ofertas de upsell (QIKIFY…), descontos automáticos, frete grátis por desconto
 //                  e devoluções (reembolsos) dos pedidos do mês
-//   Marketing      cupons "voucher…" (envio para influenciadoras e nutricionistas): custo de divulgação,
-//                  não desconto para cliente → Marketing (influenciadores)
+//   Voucher        cupons "voucher…" (influenciadoras e nutricionistas): o valor coberto pelo voucher é
+//                  produto dado, não venda nem desconto — fica FORA da receita e dos descontos; o custo
+//                  real (matéria-prima, embalagem) já está no CMV do fechamento de estoque. Se o pedido
+//                  passou do voucher, o que a influenciadora pagou é receita normal.
 //   Brinde         produto da régua de recompensa (atributo _qbk-tier ou cupom QIKIFY-OKEVSB) que saiu
 //                  de graça: fica FORA da receita e dos descontos. Se o cliente pagou alguma coisa
 //                  por ele (ex.: outro cupom substituiu o da régua), é venda normal.
 //   Fora           pedidos de teste, cancelados e não pagos (Pix/boleto vencido)
-// Conferência: receita − descontos − vouchers = total dos pedidos − reembolsos.
+// Conferência: receita − descontos = total dos pedidos − reembolsos.
 
 export const CODIGO_REGUA = 'QIKIFY-OKEVSB'
 export const ehVoucher = code => /^voucher/i.test(code || '')
@@ -68,27 +71,28 @@ export function resumirPedidos(pedidos) {
     t.total += v(p.totalPriceSet)
   }
 
-  const vendas = r2(t.produtos + t.frete)
+  const vendas = r2(t.produtos + t.frete - t.vouchers)
   const promocoes = r2(t.descontos + t.freteDesc + t.devolucoes)
-  const marketing = r2(t.vouchers)
   const total = r2(t.total - t.devolucoes)
-  if (Math.abs(vendas - promocoes - marketing - total) >= 0.05) avisos.add('A soma das linhas não bate com o total dos pedidos: confira descontos fora das linhas.')
+  if (Math.abs(vendas - promocoes - total) >= 0.05) avisos.add('A soma das linhas não bate com o total dos pedidos: confira descontos fora das linhas.')
   if (t.reguaPaga) avisos.add(`${t.reguaPaga} item(ns) da régua foram pagos (outro cupom no lugar do da régua): contados como venda.`)
 
   const detalhes = [
     { grupo: 'vendas', descricao: 'Produtos (preço antes dos descontos)', valor: r2(t.produtos) },
     { grupo: 'vendas', descricao: 'Frete cobrado', valor: r2(t.frete) },
+    ...(t.vouchers ? [{ grupo: 'vendas', descricao: `Coberto por voucher de influenciador (${Object.keys(porVoucher).length} voucher(s), fora da receita)`, valor: -r2(t.vouchers) }] : []),
     ...Object.entries(porDesconto).sort((a, b) => b[1] - a[1]).map(([descricao, valor]) => ({ grupo: 'promocoes', descricao, valor: -r2(valor) })),
     ...(t.devolucoes ? [{ grupo: 'promocoes', descricao: 'Devoluções (reembolsos)', valor: -r2(t.devolucoes) }] : []),
-    ...Object.entries(porVoucher).sort((a, b) => b[1] - a[1]).map(([code, valor]) => ({ grupo: 'marketing', descricao: `Voucher influenciador ${code}`, valor: -r2(valor) })),
+    ...Object.entries(porVoucher).sort((a, b) => b[1] - a[1]).map(([code, valor]) => ({ grupo: 'fora', descricao: `Voucher ${code}`, valor: r2(valor) })),
     ...(t.brindes ? [{ grupo: 'fora', descricao: `Brindes da régua (${t.brindesQtd} un., fora da receita)`, valor: r2(t.brindes) }] : []),
   ].filter(d => Math.abs(d.valor) >= 0.005)
 
   return {
-    canal: 'Site', unidade: '', vendas, promocoes, taxas: 0, servicos: 0, marketing, ajustes: 0,
+    canal: 'Site', unidade: '', vendas, promocoes, taxas: 0, servicos: 0, marketing: 0, ajustes: 0,
     total_faturamento: total, detalhes, pedidos: t.pedidos,
     fora: { cancelados: t.foraCancelados, naoPagos: t.foraNaoPagos, teste: t.foraTeste },
     brindes: { valor: r2(t.brindes), quantidade: t.brindesQtd },
+    vouchers: { valor: r2(t.vouchers), quantidade: Object.keys(porVoucher).length },
     avisos: [...avisos],
   }
 }

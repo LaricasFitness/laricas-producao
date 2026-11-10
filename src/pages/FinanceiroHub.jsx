@@ -596,7 +596,8 @@ function FaturamentoPlataformas({ onMudou }) {
       setFila(q => [...q, naFila({
         ...paraForm(e), origem: 'shopify', arquivo: 'Shopify',
         aviso: [`${e.pedidos} pedido(s) de ${rotuloMes(e.mes)}${fora.length ? ` (fora: ${fora.join(', ')})` : ''}.`,
-          e.brindes.quantidade ? `Brindes da régua fora da receita: ${e.brindes.quantidade} un., R$ ${fmt(e.brindes.valor)}.` : '', ...e.avisos].filter(Boolean).join(' '),
+          e.brindes.quantidade ? `Brindes da régua fora da receita: ${e.brindes.quantidade} un., R$ ${fmt(e.brindes.valor)}.` : '',
+          e.vouchers?.quantidade ? `Vouchers de influenciadores fora da receita: ${e.vouchers.quantidade}, R$ ${fmt(e.vouchers.valor)} (custo dos produtos já está no CMV).` : '', ...e.avisos].filter(Boolean).join(' '),
       })])
     } catch (e) { setMsg({ tipo: 'danger', txt: `Shopify: ${e.message || e}` }) }
     setBuscandoSite(false)
