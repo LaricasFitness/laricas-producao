@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, Save, ChevronLeft, ChevronRight, FileDown } from 'lucide-react'
-import { gerarFichaTecnicaPDF, gerarFichaPreparacoesPDF } from '../lib/fichaTecnicaPDF'
+import { gerarFichaTecnicaPDF, gerarFichaPreparacoesPDF, gerarMontagemCategoriaPDF } from '../lib/fichaTecnicaPDF'
 
 // Ficha do produto: tudo de um produto numa tela só — custo da unidade,
 // preço e margem em cada canal e o que pesa no custo.
@@ -65,6 +65,7 @@ export default function FichaProduto({ data, reload, incluirOverhead, cmvDe }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <FichasPreparacao prepMap={data.prepMap || {}} />
+      <MontagemCategoria produtos={produtos} />
 
       {/* Escolha do produto */}
       <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -220,6 +221,39 @@ function FichasPreparacao({ prepMap }) {
       <button className="btn btn-ghost btn-sm" onClick={() => gerar('todas')} disabled={!!gerando}
         title="Todas as preparações ativas num PDF só, agrupadas por tipo">
         {gerando === 'todas' ? <RefreshCw size={13} className="spin" /> : <FileDown size={13} />} Todas
+      </button>
+    </div>
+  )
+}
+
+// Montagem de uma categoria inteira numa página (ex.: todos os Chocotones)
+const LS_CAT_MONT = 'fichaProduto.catMontagem'
+function MontagemCategoria({ produtos }) {
+  const cats = [...new Set(produtos.filter(p => !p.semFicha).map(p => p.emb.categoria).filter(Boolean))].sort()
+  const [cat, setCat] = useState(() => lerLS(LS_CAT_MONT, ''))
+  const [gerando, setGerando] = useState(false)
+  const atual = cats.includes(cat) ? cat : cats[0] || ''
+  const qtd = produtos.filter(p => p.emb.categoria === atual).length
+
+  async function gerar() {
+    setGerando(true)
+    try { await gerarMontagemCategoriaPDF(atual) }
+    catch (e) { alert('Não consegui gerar o PDF: ' + (e.message || e)) }
+    setGerando(false)
+  }
+  if (!cats.length) return null
+  return (
+    <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 14 }}>Montagem por categoria</div>
+        <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Uma página com todos os produtos da categoria: o que vai em cada um (g por unidade), peso e embalagem.</div>
+      </div>
+      <select className="form-input" value={atual} onChange={e => { setCat(e.target.value); gravarLS(LS_CAT_MONT, e.target.value) }}
+        style={{ flex: '1 1 220px', minWidth: 0, maxWidth: 320, fontSize: 13, fontWeight: 600 }}>
+        {cats.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <button className="btn btn-primary btn-sm" onClick={gerar} disabled={gerando || !atual}>
+        {gerando ? <RefreshCw size={13} className="spin" /> : <FileDown size={13} />} PDF da montagem ({qtd})
       </button>
     </div>
   )

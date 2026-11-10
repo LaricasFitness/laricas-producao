@@ -65,14 +65,15 @@ function montarBlocos(ids, { prepMap, ingsDe }, compPorPrep = {}) {
 }
 
 function cabecalho(doc, titulo, subtitulo, atualizadas) {
-  doc.setFillColor(...ESCURO); doc.rect(0, 0, 210, 30, 'F')
+  const LG = doc.internal.pageSize.getWidth()
+  doc.setFillColor(...ESCURO); doc.rect(0, 0, LG, 30, 'F')
   doc.setTextColor(...DOURADO); doc.setFont(undefined, 'bold'); doc.setFontSize(9)
   doc.text('LARC · FICHA TÉCNICA DE PRODUÇÃO', L, 9)
   doc.setTextColor(255, 255, 255); doc.setFontSize(16)
-  doc.text(doc.splitTextToSize(titulo, W)[0], L, 18)
+  doc.text(doc.splitTextToSize(titulo, LG - 2 * L)[0], L, 18)
   doc.setFont(undefined, 'normal'); doc.setFontSize(8.5)
   if (subtitulo) doc.text(subtitulo, L, 25)
-  if (atualizadas) doc.text(`Receitas atualizadas em ${new Date(atualizadas).toLocaleDateString('pt-BR')}`, 210 - L, 25, { align: 'right' })
+  if (atualizadas) doc.text(`Receitas atualizadas em ${new Date(atualizadas).toLocaleDateString('pt-BR')}`, LG - L, 25, { align: 'right' })
 }
 
 function tabelaPreparacao(doc, y, { prep, comp, usadaEm }, ingsDe, prepMap, mostrarTitulo) {
@@ -168,11 +169,12 @@ function tabelaPreparacao(doc, y, { prep, comp, usadaEm }, ingsDe, prepMap, most
 function rodapes(doc, texto) {
   const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })
   const paginas = doc.internal.getNumberOfPages()
+  const LG = doc.internal.pageSize.getWidth(), AL = doc.internal.pageSize.getHeight()
   for (let i = 1; i <= paginas; i++) {
     doc.setPage(i)
     doc.setFont(undefined, 'normal'); doc.setFontSize(7); doc.setTextColor(150, 150, 150)
-    doc.text(`${texto} · gerado em ${agora}`, L, 297 - 6)
-    doc.text(`página ${i} de ${paginas}`, 210 - L, 297 - 6, { align: 'right' })
+    doc.text(`${texto} · gerado em ${agora}`, L, AL - 6)
+    doc.text(`página ${i} de ${paginas}`, LG - L, AL - 6, { align: 'right' })
   }
 }
 
@@ -253,6 +255,87 @@ export async function gerarFichaTecnicaPDF(produto, { salvar = true } = {}) {
   rodapes(doc, produto.nome)
 
   const arquivo = nomeArquivo(produto.codigo || produto.nome)
+  if (salvar) doc.save(arquivo)
+  return { arquivo, doc }
+}
+
+// ── Montagem de uma categoria (ex.: Chocotone) numa página só ──
+// Uma linha por produto; uma coluna por tipo de preparação (massa, recheio, cobertura…)
+// com o nome e os gramas por unidade, peso total, embalagem e um espaço para anotar
+// quantas montar. Sem custos.
+const ORDEM_TIPOS = ['massa', 'recheio', 'creme', 'cobertura']
+
+export async function gerarMontagemCategoriaPDF(categoria, { salvar = true } = {}) {
+  const { data: prods, error: e1 } = await supabase.from('embalagens')
+    .select('id, codigo, nome').eq('categoria', categoria).eq('ativo', true).order('nome')
+  if (e1) throw e1
+  const skus = (prods || []).map(p => p.codigo).filter(Boolean)
+  if (!skus.length) throw new Error('Nenhum produto ativo nessa categoria.')
+
+  const [{ data: comps, error: e2 }, { data: embsProd }, { data: embsCat }] = await Promise.all([
+    supabase.from('produto_composicao').select('sku_produto, quantidade_por_unidade, unidade, observacao, preparacoes(nome, tipo, atualizado_em)').in('sku_produto', skus),
+    supabase.from('produto_embalagem').select('sku_produto, quantidade, embalagens(nome)').in('sku_produto', skus),
+    supabase.from('categoria_embalagem').select('quantidade, embalagens(nome)').eq('categoria', categoria),
+  ])
+  if (e2) throw e2
+
+  const tipoDe = c => (c.preparacoes?.tipo || 'outros').toLowerCase()
+  const presentes = [...new Set((comps || []).map(tipoDe))]
+  const tipos = [...ORDEM_TIPOS.filter(t => presentes.includes(t)), ...presentes.filter(t => !ORDEM_TIPOS.includes(t)).sort()]
+  const titulo1 = t => t.charAt(0).toUpperCase() + t.slice(1)
+  const qtdEmb = q => n(q) && n(q) !== 1 ? ` ×${fmtQtd(n(q))}` : ''
+  const embCat = (embsCat || []).map(x => `${x.embalagens?.nome}${qtdEmb(x.quantidade)}`)
+
+  const semFicha = []
+  const body = (prods || []).map(p => {
+    const doProd = (comps || []).filter(c => c.sku_produto === p.codigo)
+    if (!doProd.length) semFicha.push(p.nome)
+    const peso = doProd.reduce((s, c) => s + ((c.unidade || 'g') === 'g' ? n(c.quantidade_por_unidade) : 0), 0)
+    const embs = (embsProd || []).filter(x => x.sku_produto === p.codigo).map(x => `${x.embalagens?.nome}${qtdEmb(x.quantidade)}`)
+    const listaEmb = embs.length ? embs : embCat
+    return [
+      { content: p.nome, styles: { fontStyle: 'bold' } },
+      ...tipos.map(t => doProd.filter(c => tipoDe(c) === t)
+        .map(c => `${c.preparacoes?.nome}\n${fmtQtd(n(c.quantidade_por_unidade))} ${c.unidade || 'g'}${c.observacao ? ` · ${c.observacao}` : ''}`)
+        .join('\n') || '—'),
+      { content: peso ? `${fmtQtd(peso)} g` : '—', styles: { fontStyle: 'bold', halign: 'center' } },
+      listaEmb.length ? listaEmb.join('\n') : { content: 'sem embalagem cadastrada', styles: { textColor: [190, 60, 60] } },
+      '',
+    ]
+  })
+
+  const doc = new jsPDF('l', 'mm', 'a4')
+  const atualizadas = (comps || []).map(c => c.preparacoes?.atualizado_em).filter(Boolean).sort().pop()
+  const nomeCat = categoria.replace(/\s*\[\s*sazonal\s*\]\s*/i, '').trim() || categoria
+  cabecalho(doc, `Montagem · ${nomeCat}`, `${body.length} produto${body.length > 1 ? 's' : ''}  ·  quantidades por unidade montada`, atualizadas)
+
+  autoTable(doc, {
+    startY: 38,
+    head: [['Produto', ...tipos.map(titulo1), 'Peso', 'Embalagem', 'Qtd. a montar']],
+    body,
+    theme: 'grid',
+    styles: { fontSize: 10, cellPadding: 2.6, lineColor: [225, 220, 224], lineWidth: 0.1, textColor: [40, 40, 40], valign: 'middle' },
+    headStyles: { fillColor: MEDIO, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 9.5 },
+    alternateRowStyles: { fillColor: [252, 250, 251] },
+    columnStyles: {
+      0: { cellWidth: 52 },
+      [tipos.length + 1]: { cellWidth: 20, fillColor: DESTAQUE },
+      [tipos.length + 2]: { cellWidth: 44, fontSize: 8.5 },
+      [tipos.length + 3]: { cellWidth: 26 },
+    },
+    margin: { left: L, right: L, top: 14, bottom: 14 },
+  })
+
+  let y = doc.lastAutoTable.finalY + 6
+  doc.setFont(undefined, 'normal'); doc.setFontSize(8.5); doc.setTextColor(...MEDIO)
+  const notas = [
+    'Pesos do produto acabado (já assado), por unidade. Receitas de cada preparação: PDF "Ficha técnica das preparações".',
+    semFicha.length ? `Sem composição cadastrada: ${semFicha.join(', ')}.` : null,
+  ].filter(Boolean)
+  doc.text(doc.splitTextToSize(notas.join('  '), 297 - 2 * L), L, y)
+  rodapes(doc, `Montagem · ${nomeCat}`)
+
+  const arquivo = nomeArquivo(`Montagem_${nomeCat}`)
   if (salvar) doc.save(arquivo)
   return { arquivo, doc }
 }
