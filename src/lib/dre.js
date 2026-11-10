@@ -19,6 +19,8 @@
 export const LINHAS = {
   rec_delivery:   { nome: 'Delivery (iFood, 99, Keeta, Anota.Ai)', sinal: +1 },
   rec_site:       { nome: 'Venda Site',                           sinal: +1 },
+  rec_clube:      { nome: 'Clube de Assinatura',                  sinal: +1 },
+  rec_marketplace: { nome: 'Mercado Livre',                       sinal: +1 },
   rec_revenda:    { nome: 'Revenda (B2B)',                        sinal: +1 },
   rec_direta:     { nome: 'Venda Direta',                         sinal: +1 },
   rec_balcao:     { nome: 'Venda Balcão',                         sinal: +1 },
@@ -48,7 +50,7 @@ export const LINHAS = {
 // Linhas que a tela de classificação oferece
 export const LINHAS_ESCOLHA = Object.keys(LINHAS).filter(k => !['rec_nao_class', 'nao_class'].includes(k))
 
-export const RECEITAS = ['rec_delivery', 'rec_site', 'rec_revenda', 'rec_direta', 'rec_balcao', 'rec_ativacao', 'rec_outras']
+export const RECEITAS = ['rec_delivery', 'rec_site', 'rec_clube', 'rec_marketplace', 'rec_revenda', 'rec_direta', 'rec_balcao', 'rec_ativacao', 'rec_outras']
 
 // ── Desenho da DRE ────────────────────────────────────────────────────────────
 // grupo: soma das linhas (com o sinal de cada uma); total: acumulado até ali
@@ -78,6 +80,8 @@ export const PLATAFORMAS = [
   { canal: 'Site',     unidades: [''] },   // Shopify: vai para Venda Site, não para Delivery
   { canal: 'Ativação', unidades: [''] },   // Mercado Pago, loja Ativação → Venda Ativação
   { canal: 'Balcão',   unidades: [''] },   // Mercado Pago, loja Loja (desde jul/26) → Venda Balcão
+  { canal: 'Clube',    unidades: [''] },   // Bling, loja Clube de Assinatura - Rits Pay → Clube de Assinatura
+  { canal: 'Mercado Livre', unidades: [''] }, // Bling, loja Mercado Livre → Mercado Livre
 ]
 // Nome da loja no print → sigla da unidade (o que já foi lançado antes também ensina)
 // BV Bela Vista · ZN Santana · BK Brooklin · PR Maringá
@@ -101,12 +105,13 @@ export const liquidoCanal = r => (Number(r.vendas) || 0) - (Number(r.promocoes) 
 // Linha da receita de cada canal: Site (Shopify) → Venda Site; Ativação e Balcão (Mercado Pago) → suas linhas;
 // o resto (plataformas de delivery) → Delivery
 export const ehSite = r => r.canal === 'Site'
-export const RECEITA_DO_CANAL = { Site: 'rec_site', 'Ativação': 'rec_ativacao', 'Balcão': 'rec_balcao' }
+export const RECEITA_DO_CANAL = { Site: 'rec_site', 'Ativação': 'rec_ativacao', 'Balcão': 'rec_balcao', Clube: 'rec_clube', 'Mercado Livre': 'rec_marketplace' }
 export const linhaReceitaCanal = r => RECEITA_DO_CANAL[r.canal] || 'rec_delivery'
 const vendasNa = linha => r => linhaReceitaCanal(r) === linha ? Number(r.vendas) || 0 : 0
 export const LINHAS_CANAL = {
   rec_delivery: vendasNa('rec_delivery'), rec_site: vendasNa('rec_site'),
   rec_ativacao: vendasNa('rec_ativacao'), rec_balcao: vendasNa('rec_balcao'),
+  rec_clube: vendasNa('rec_clube'), rec_marketplace: vendasNa('rec_marketplace'),
   ded_descontos: r => Number(r.promocoes) || 0, dv_comercial: custoCanal, dv_marketing: marketingCanal,
 }
 

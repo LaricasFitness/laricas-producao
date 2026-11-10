@@ -1106,6 +1106,8 @@ function ReceitaCompetencia({ versaoCanais }) {
                   ? <>+ R$ {fmt(plataformas[l])} da Shopify (somado sozinho). Digite aqui só venda do site que não passou pela Shopify.</>
                   : ['rec_ativacao', 'rec_balcao'].includes(l)
                   ? <>+ R$ {fmt(plataformas[l])} do Mercado Pago (somado sozinho). Digite aqui só o que não passou pelo Mercado Pago.</>
+                  : ['rec_clube', 'rec_marketplace'].includes(l)
+                  ? <>+ R$ {fmt(plataformas[l])} dos pedidos do Bling (somado sozinho). Digite aqui só o que não está no Bling.</>
                   : <>+ R$ {fmt(plataformas[l])} das plataformas (somado sozinho). Digite aqui só o delivery que não tem faturamento lançado acima.</>}
               </div>
             )}
