@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, Camera, Plus, Pencil, Trash2 } from 'lucide-react'
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
-  resolverLinha, lerContasCompetencia, lerBalancete, montarDRE, calcularEstrutura, conferir, mesVencimento,
+  resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, itensCaixa, montarDRE, calcularEstrutura, conferir, mesVencimento,
   PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
@@ -72,7 +72,11 @@ async function carregarAno(ano) {
   let canais = []
   try { canais = await buscarTudo(() => supabase.from('dre_canal_competencia').select('*').gte('mes', `${ano - 1}-12`).lte('mes', `${ano}-12`)) }
   catch (e) { if (!semTabela(e)) throw e }
-  return { contas, caixa, receitas, canais, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
+  // dre_caixa_lancamentos (extrato de Caixas e Bancos) existe a partir do financeiro_dre_4.sql
+  let caixaLanc = []
+  try { caixaLanc = await buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, data, tipo, categoria, nome, historico, valor, banco').like('mes', `${ano}-%`).order('data')) }
+  catch (e) { if (!semTabela(e)) throw e }
+  return { contas, caixa, caixaLanc, receitas, canais, mapaDB, cmvSistema, mesInfo, semTabelaMes, ini }
 }
 
 // Meses fechados usam os valores guardados no cadeado
@@ -159,7 +163,7 @@ function TelaDRE({ irImportar }) {
         <div style={{ flex: 1, fontSize: 12, color: 'var(--gray-400)', minWidth: 200 }}>
           {visao === 'competencia'
             ? 'Despesas pela data de competência (Bling); faturamento das plataformas e receita digitada; CMV do fechamento do sistema.'
-            : 'Entradas e saídas pagas no mês, pelo Balancete do Bling.'}
+            : 'Entradas e saídas pagas no mês, pelo extrato de Caixas e Bancos do Bling (todas as contas, sem as transferências entre elas).'}
         </div>
         <button className="btn btn-ghost btn-sm" onClick={carregar} title="Recarregar"><RefreshCw size={13} /></button>
       </div>
@@ -329,10 +333,14 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
       valor: LINHAS_CANAL[linha](r), d: rotuloOrigem(r.origem),
     })).filter(i => Math.abs(i.valor) >= 0.005)]
   } else {
-    itens = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia').filter(c => {
-      const l = resolverLinha(c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa', c.categoria, '', dados.mapaDB)
-      return (linha === 'nao_class' || linha === 'rec_nao_class') ? !l : l === linha
-    }).map(c => ({ a: c.categoria, b: c.tipo, c: 'total do mês no Balancete', valor: Number(c.valor) }))
+    itens = itensCaixa(dados).filter(i => i.mes === mes).filter(i => {
+      const semLinha = linha === 'rec_nao_class' ? i.tipo === 'receita' : i.tipo !== 'receita'
+      return (linha === 'nao_class' || linha === 'rec_nao_class') ? !i.linha && semLinha : i.linha === linha
+    }).map(i => ({
+      a: i.nome || i.categoria || '(sem nome)', b: i.categoria || '(sem categoria)',
+      c: [i.data ? i.data.split('-').reverse().join('/') : '', i.historico, i.banco].filter(Boolean).join(' · '),
+      valor: i.valor, d: i.sugerido ? 'pela linha do cliente' : '',
+    }))
   }
   itens.sort((x, y) => y.valor - x.valor)
   const total = itens.reduce((s, i) => s + i.valor, 0)
@@ -384,8 +392,12 @@ function TelaImportar() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <ImportarCompetencia onImportou={() => setVersao(v => v + 1)} />
-        <ImportarBalancete onImportou={() => setVersao(v => v + 1)} />
+        <ImportarExtratoCaixa onImportou={() => setVersao(v => v + 1)} />
       </div>
+      <details>
+        <summary style={{ fontSize: 12, color: 'var(--gray-500)', cursor: 'pointer' }}>Caixa pelo Balancete (antigo, só totais por categoria)</summary>
+        <div style={{ marginTop: 8 }}><ImportarBalancete onImportou={() => setVersao(v => v + 1)} /></div>
+      </details>
       <FaturamentoPlataformas onMudou={() => setVersaoCanais(v => v + 1)} />
       <ReceitaCompetencia versaoCanais={versaoCanais} />
       <Classificar key={versao} />
@@ -467,6 +479,79 @@ function ImportarCompetencia({ onImportou }) {
       {prev && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
           <div><b>{prev.contas.length}</b> contas · {rotuloMes(prev.meses[0])} a {rotuloMes(prev.meses[prev.meses.length - 1])} · R$ {fmt(prev.total)}</div>
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={importar} disabled={salvando}>
+            {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Importar
+          </button>
+        </div>
+      )}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+    </div>
+  )
+}
+
+// Caixa lançamento a lançamento: extrato de Caixas e Bancos do Bling (todas as contas, qualquer período).
+// O período do arquivo substitui o que já estava no sistema nesse intervalo (menos meses fechados).
+const AVISO_SQL_4 = 'Aplique o arquivo financeiro_dre_4.sql no Supabase para importar o extrato do caixa.'
+function ImportarExtratoCaixa({ onImportou }) {
+  const [prev, setPrev] = useState(null)
+  const [msg, setMsg] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  function ler(texto, nome) {
+    setMsg(null)
+    try {
+      const e = lerExtratoCaixa(texto)
+      if (!e.lancamentos.length) throw new Error('Nenhum lançamento no arquivo.')
+      const meses = [...new Set(e.lancamentos.map(l => l.mes))].sort()
+      const soma = t => e.lancamentos.filter(l => l.tipo === t).reduce((s, l) => s + l.valor, 0)
+      setPrev({ ...e, meses, nome, entradas: soma('receita'), saidas: soma('despesa'), transf: e.lancamentos.filter(l => l.tipo === 'transferencia').length })
+    } catch (err) { setPrev(null); setMsg({ tipo: 'danger', txt: err.message }) }
+  }
+
+  async function importar() {
+    setSalvando(true); setMsg(null)
+    try {
+      const { data: fech, error: eF } = await supabase.from('dre_mes').select('mes').eq('visao', 'caixa').not('fechado_em', 'is', null)
+      const fechados = new Set(eF ? [] : (fech || []).map(r => r.mes))
+      const { ini, fim } = prev.periodo
+      // apaga o período do arquivo, mês a mês (o cadeado protege os meses fechados)
+      for (const m of prev.meses.filter(m => !fechados.has(m))) {
+        const de = ini > `${m}-01` ? ini : `${m}-01`
+        const ultimo = `${m}-${String(new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()).padStart(2, '0')}`
+        const ate = fim < ultimo ? fim : ultimo
+        const { error } = await supabase.from('dre_caixa_lancamentos').delete().gte('data', de).lte('data', ate)
+        if (error) throw error
+      }
+      const linhas = prev.lancamentos.filter(l => !fechados.has(l.mes))
+      for (let i = 0; i < linhas.length; i += 500) {
+        const { error } = await supabase.from('dre_caixa_lancamentos').upsert(linhas.slice(i, i + 500), { onConflict: 'id_bling' })
+        if (error) throw error
+      }
+      const pulados = prev.meses.filter(m => fechados.has(m))
+      setMsg({ tipo: 'ok', txt: `${linhas.length} lançamento(s) importado(s) de ${prev.bancos.length} conta(s).`
+        + (pulados.length ? ` Meses fechados não foram alterados: ${pulados.map(rotuloMes).join(', ')}.` : '') })
+      setPrev(null); onImportou()
+    } catch (e) { setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL_4 : 'Erro ao importar: ' + (e.message || e) }) }
+    setSalvando(false)
+  }
+
+  const dataBR = d => d ? d.split('-').reverse().join('/') : ''
+  return (
+    <div className="card card-pad">
+      <div style={{ fontWeight: 800, fontSize: 14 }}>Caixa (extrato do Bling)</div>
+      <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
+        Bling › Financeiro › <b>Caixas e Bancos</b> › conta <b>Todas contas</b> › período › <b>Exportar extrato</b> (CSV).
+        Pode ser de vários meses: o período do arquivo substitui o que estava no sistema (menos os meses fechados).
+      </div>
+      <CampoArquivo rotulo="Escolher arquivo" onTexto={ler} />
+      {prev && (
+        <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
+          <div><b>{prev.lancamentos.length}</b> lançamentos · {dataBR(prev.periodo.ini)} a {dataBR(prev.periodo.fim)}</div>
+          <div>Entradas R$ {fmt(prev.entradas)} · saídas R$ {fmt(prev.saidas)} · {prev.transf} transferência(s) entre contas (fora da DRE)</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Contas: {prev.bancos.join(', ')}</div>
+          {prev.bancos.length < 2 && (
+            <div className="alert-banner warning" style={{ marginTop: 6 }}>O arquivo tem só uma conta. Exporte com "Todas contas" para o caixa completo.</div>
+          )}
           <button className="btn btn-primary btn-sm" style={{ marginTop: 8 }} onClick={importar} disabled={salvando}>
             {salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Importar
           </button>
@@ -1012,7 +1097,10 @@ function Classificar() {
         buscarTudo(() => supabase.from('dre_caixa').select('mes, tipo, categoria, valor')),
         buscarTudo(() => supabase.from('dre_mapa').select('origem, categoria, nome, linha')),
       ])
-      setDados({ contas, caixa, mapaDB }); setEscolhas({})
+      let caixaLanc = []
+      try { caixaLanc = await buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, data, tipo, categoria, nome, historico, valor, banco')) }
+      catch (e) { if (!semTabela(e)) throw e }
+      setDados({ contas, caixa, caixaLanc, mapaDB }); setEscolhas({})
     } catch (e) { setErro(semTabela(e) ? AVISO_SQL : e.message || String(e)) }
   }
   useEffect(() => { carregar() }, [])
@@ -1026,11 +1114,8 @@ function Classificar() {
       if (!resolverLinha('competencia', cat, c.nome, dados.mapaDB))
         add(pend, `competencia|${cat}|${c.nome || ''}`, { origem: 'competencia', categoria: cat, nome: c.nome || '' }, c.valor)
     }
-    for (const c of dados.caixa) {
-      if (c.tipo === 'transferencia') continue
-      const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
-      if (!resolverLinha(origem, c.categoria, '', dados.mapaDB))
-        add(pend, `${origem}|${c.categoria}|`, { origem, categoria: c.categoria, nome: '' }, c.valor)
+    for (const i of itensCaixa(dados)) {
+      if (!i.linha) add(pend, `${i.origem}|${i.categoria}|${i.chaveNome}`, { origem: i.origem, categoria: i.categoria, nome: i.chaveNome }, i.valor)
     }
     return {
       pendentes: [...pend.values()].sort((a, b) => a.categoria.localeCompare(b.categoria) || b.valor - a.valor),
@@ -1145,7 +1230,7 @@ function MapaPorLinha({ dados, seletor }) {
 
   const meses = useMemo(() => [...new Set(visao === 'competencia'
     ? dados.contas.map(c => (c.competencia || '').slice(0, 7))
-    : dados.caixa.map(c => c.mes))].filter(Boolean).sort().reverse(), [dados, visao])
+    : itensCaixa(dados).map(c => c.mes))].filter(Boolean).sort().reverse(), [dados, visao])
 
   const grupos = useMemo(() => {
     const g = {}
@@ -1166,11 +1251,12 @@ function MapaPorLinha({ dados, seletor }) {
         somar(linha, `competencia|${cat}|${porNome ? nome : ''}`, { origem: 'competencia', categoria: cat, nome: porNome ? nome : '' }, c.valor, c)
       }
     } else {
-      for (const c of dados.caixa) {
-        if (c.tipo === 'transferencia' || (mes && c.mes !== mes)) continue
-        const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
-        const linha = resolverLinha(origem, c.categoria, '', dados.mapaDB) || (c.tipo === 'receita' ? 'rec_nao_class' : 'nao_class')
-        somar(linha, `${origem}|${c.categoria}|`, { origem, categoria: c.categoria, nome: '' }, c.valor, null)
+      for (const i of itensCaixa(dados)) {
+        if (mes && i.mes !== mes) continue
+        const linha = i.linha || (i.tipo === 'receita' ? 'rec_nao_class' : 'nao_class')
+        if (linha === 'ignorar') continue
+        somar(linha, `${i.origem}|${i.categoria}|${i.chaveNome}`, { origem: i.origem, categoria: i.categoria, nome: i.chaveNome }, i.valor,
+          i.balancete ? null : { nome: i.nome, categoria: i.categoria, observacoes: i.historico, valor: i.valor, competencia: i.data, situacao: i.banco })
       }
     }
     return ORDEM_LINHAS.filter(l => g[l]).map(l => {
@@ -1201,7 +1287,7 @@ function MapaPorLinha({ dados, seletor }) {
       </div>
       {visao === 'caixa' && (
         <div style={{ padding: '0 16px 10px', fontSize: 12, color: 'var(--gray-500)' }}>
-          O Balancete traz só o total de cada categoria principal do Bling. Para ver as contas uma a uma, use a visão de competência.
+          Meses com o extrato de Caixas e Bancos mostram os lançamentos um a um; meses só com o Balancete mostram o total de cada categoria.
         </div>
       )}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

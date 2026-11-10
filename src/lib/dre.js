@@ -145,7 +145,8 @@ export const MAPA_PADRAO = {
     'Tarifa bancária': 'fin_despesas', 'Acréscimos pagos': 'fin_despesas', 'Juros pagos': 'fin_despesas',
     // Abaixo da linha / fora
     'Equipamento': 'investimento', 'Mobília': 'investimento', 'Estrutural': 'investimento',
-    'Transferências': 'ignorar', 'Transferências de saída': 'ignorar',
+    'Transferências': 'ignorar', 'Transferências de saída': 'ignorar', 'Transferências de entrada': 'ignorar',
+    'Ajuste de saldo': 'ignorar',
   },
   caixa_despesa: {
     'CMV': 'cmv',
@@ -165,7 +166,10 @@ export const MAPA_PADRAO = {
     'Receitas adicionais em operações financeiras': 'fin_receitas',
     'Rendimento de aplicação financeira': 'fin_receitas',
     'Venda de ativo': 'rec_outras', 'Outras Receitas': 'rec_outras',
-    'Transferências recebidas': 'ignorar', 'Transferências': 'ignorar',
+    'Transferências recebidas': 'ignorar', 'Transferências': 'ignorar', 'Transferências de entrada': 'ignorar',
+    // extrato de Caixas e Bancos (categorias detalhadas)
+    'iFood': 'rec_delivery', '99 Food': 'rec_delivery', 'Keeta': 'rec_delivery', 'Anota.Ai': 'rec_delivery', 'Anota.AI': 'rec_delivery',
+    'Juros recebidos': 'fin_receitas',
   },
 }
 
@@ -238,6 +242,86 @@ export function lerContasCompetencia(texto) {
   return contas
 }
 
+// "Caixas e Bancos" › Exportar extrato (todas as contas, qualquer período) →
+// { periodo: {ini, fim}, bancos: [...], lancamentos: [{id_bling, data, mes, tipo, categoria, nome, cnpj, historico, valor, banco}] }
+// Tipo C = receita, D = despesa; categorias "Transferências…" e "Ajuste de saldo" = transferência (fora da DRE).
+export function lerExtratoCaixa(texto) {
+  const linhas = lerCSV(texto)
+  const cab = (linhas.shift() || []).map(h => h.trim().toLowerCase())
+  const col = nome => cab.indexOf(nome)
+  const ix = { data: col('data'), nome: col('cliente/fornecedor'), doc: col('cpf/cnpj'), cat: col('categoria'), hist: col('histórico'),
+    tipo: col('tipo'), valor: col('valor'), banco: col('banco'), periodo: col('período'), id: col('id') }
+  if (ix.data < 0 || ix.tipo < 0 || ix.valor < 0 || ix.cat < 0) {
+    throw new Error('Não reconheci o arquivo: esperava o extrato de Caixas e Bancos do Bling (colunas Data, Categoria, Tipo e Valor).')
+  }
+  const lancamentos = [], bancos = new Set()
+  let periodo = null
+  for (const r of linhas) {
+    const data = dataBR(r[ix.data])
+    const t = (r[ix.tipo] || '').trim().toUpperCase()
+    if (!data || !['C', 'D'].includes(t)) continue // saldo, totais
+    const categoria = (r[ix.cat] || '').trim()
+    const transf = /^transfer[eê]ncias?/i.test(categoria) || /^ajuste de saldo$/i.test(categoria)
+    const banco = ix.banco >= 0 ? (r[ix.banco] || '').trim() : ''
+    if (banco) bancos.add(banco)
+    if (!periodo && ix.periodo >= 0) {
+      const p = String(r[ix.periodo] || '').match(/(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/)
+      if (p) periodo = { ini: dataBR(p[1]), fim: dataBR(p[2]) }
+    }
+    lancamentos.push({
+      id_bling: ix.id >= 0 ? String(r[ix.id] || '').trim() || null : null,
+      data, mes: data.slice(0, 7),
+      tipo: transf ? 'transferencia' : t === 'C' ? 'receita' : 'despesa',
+      categoria, nome: ix.nome >= 0 ? (r[ix.nome] || '').trim() : '',
+      cnpj: ix.doc >= 0 ? (r[ix.doc] || '').replace(/\D/g, '') || null : null,
+      historico: ix.hist >= 0 ? (r[ix.hist] || '').trim() : '', valor: numBR(r[ix.valor]), banco,
+    })
+  }
+  if (!periodo && lancamentos.length) {
+    const ds = lancamentos.map(l => l.data).sort()
+    periodo = { ini: ds[0], fim: ds[ds.length - 1] }
+  }
+  return { periodo, bancos: [...bancos].sort(), lancamentos }
+}
+
+// Itens do caixa já classificados, num formato só (DRE, detalhe, Classificar, composição).
+// Mês com extrato (dre_caixa_lancamentos) usa os lançamentos um a um; mês sem extrato usa o Balancete.
+//   despesa  → mesma classificação da competência (mesmas categorias do Bling, inclusive por fornecedor)
+//   receita  → categorias de venda; entrada SEM categoria (pedido de venda/NF sem categoria) segue a linha
+//              que o mesmo cliente tem nos recebimentos com categoria; se não houver, fica para classificar
+export function itensCaixa({ caixa = [], caixaLanc = [], mapaDB = [] }) {
+  const mesesLanc = new Set(caixaLanc.map(l => l.mes))
+  const porCliente = {}
+  for (const l of caixaLanc) {
+    if (l.tipo !== 'receita' || !l.categoria || !l.nome) continue
+    const li = resolverLinha('caixa_receita', l.categoria, l.nome, mapaDB)
+    if (!li || li === 'ignorar') continue
+    const a = porCliente[l.nome] || (porCliente[l.nome] = {})
+    a[li] = (a[li] || 0) + (Number(l.valor) || 0)
+  }
+  const doCliente = n => { const a = porCliente[n]; return a ? Object.entries(a).sort((x, y) => y[1] - x[1])[0][0] : null }
+  const out = []
+  for (const l of caixaLanc) {
+    if (l.tipo === 'transferencia') continue
+    const receita = l.tipo === 'receita'
+    const origem = receita ? 'caixa_receita' : 'competencia'
+    let linha = resolverLinha(origem, l.categoria, l.nome, mapaDB), sugerido = false
+    if (!linha && receita && !l.categoria) { linha = doCliente(l.nome); sugerido = !!linha }
+    // classificação por fornecedor/cliente: categoria vazia ou ambígua, ou já classificada por nome
+    const porNome = !l.categoria || (!receita && AMBIGUAS.includes(l.categoria)) ||
+      mapaDB.some(m => m.origem === origem && m.categoria === l.categoria && m.nome === l.nome)
+    out.push({ mes: l.mes, tipo: l.tipo, origem, categoria: l.categoria || '', nome: l.nome || '', chaveNome: porNome ? (l.nome || '') : '',
+      historico: l.historico || '', data: l.data, banco: l.banco || '', valor: Number(l.valor) || 0, linha, sugerido })
+  }
+  for (const c of caixa) {
+    if (mesesLanc.has(c.mes) || c.tipo === 'transferencia') continue
+    const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
+    out.push({ mes: c.mes, tipo: c.tipo, origem, categoria: c.categoria, nome: '', chaveNome: '', historico: 'total do mês no Balancete',
+      data: null, banco: '', valor: Number(c.valor) || 0, linha: resolverLinha(origem, c.categoria, '', mapaDB), sugerido: false, balancete: true })
+  }
+  return out
+}
+
 // "Balancete" do mês → { mes, linhas: [{tipo, categoria, valor}], totais }
 export function lerBalancete(texto) {
   const linhas = lerCSV(texto)
@@ -267,7 +351,7 @@ export function lerBalancete(texto) {
 // ── Montagem ──────────────────────────────────────────────────────────────────
 // Devolve { porMes: { 'AAAA-MM': { linha: valor } }, extras: { mes: { cmvFonte, cmvCompras } }, pendentes }
 // valores em módulo (positivos); o sinal vem de LINHAS
-export function montarDRE({ visao, meses, contas = [], caixa = [], receitas = [], canais = [], cmvSistema = {}, mapaDB = [] }) {
+export function montarDRE({ visao, meses, contas = [], caixa = [], caixaLanc = [], receitas = [], canais = [], cmvSistema = {}, mapaDB = [] }) {
   const porMes = {}, extras = {}, pendentes = new Map()
   for (const m of meses) { porMes[m] = {}; extras[m] = {} }
   const somar = (m, linha, v) => { if (porMes[m]) porMes[m][linha] = (porMes[m][linha] || 0) + v }
@@ -310,18 +394,16 @@ export function montarDRE({ visao, meses, contas = [], caixa = [], receitas = []
       extras[m].temReceita = RECEITAS.some(l => porMes[m][l])
     }
   } else {
-    for (const c of caixa) {
-      const m = c.mes
-      if (!porMes[m] || c.tipo === 'transferencia') continue
-      const valor = Number(c.valor) || 0
-      const origem = c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa'
-      const linha = resolverLinha(origem, c.categoria, '', mapaDB)
-      if (!linha) {
-        somar(m, c.tipo === 'receita' ? 'rec_nao_class' : 'nao_class', valor)
-        pendente(origem, c.categoria, '', valor); continue
-      }
-      if (linha !== 'ignorar') somar(m, linha, valor)
+    for (const it of itensCaixa({ caixa, caixaLanc, mapaDB })) {
+      const m = it.mes
+      if (!porMes[m]) continue
       extras[m].temCaixa = true
+      if (!it.balancete) extras[m].extrato = true
+      if (!it.linha) {
+        somar(m, it.tipo === 'receita' ? 'rec_nao_class' : 'nao_class', it.valor)
+        pendente(it.origem, it.categoria, it.chaveNome, it.valor); continue
+      }
+      if (it.linha !== 'ignorar') somar(m, it.linha, it.valor)
     }
   }
   return { porMes, extras, pendentes: [...pendentes.values()].sort((a, b) => b.valor - a.valor) }
@@ -420,15 +502,27 @@ export function conferir({ visao, mes, dados, dre, mesInfo }) {
           detalhe: `Compras de MP e embalagem do produto lançadas no Bling: ${brl(ex.cmvCompras)}.` }
       : { status: 'aviso', titulo: 'CMV pelas compras do mês', detalhe: 'Mês sem fechamento de CMV no sistema.' })
   } else {
-    const temCaixa = dados.caixa.some(c => c.mes === mes)
-    out.push(temCaixa ? { status: 'ok', titulo: 'Balancete do mês importado' }
-      : { status: 'erro', titulo: 'Balancete do mês não importado' })
+    const itens = itensCaixa(dados).filter(i => i.mes === mes)
+    const lanc = (dados.caixaLanc || []).filter(l => l.mes === mes)
+    const soma = (lista, tipo) => lista.filter(l => l.tipo === tipo).reduce((s, l) => s + Number(l.valor), 0)
+    out.push(lanc.length
+      ? { status: 'ok', titulo: `Extrato do mês importado: ${lanc.length} lançamento(s) de ${new Set(lanc.map(l => l.banco).filter(Boolean)).size} conta(s)`,
+          detalhe: `Entradas ${brl(soma(lanc, 'receita'))} · saídas ${brl(soma(lanc, 'despesa'))} · transferências entre contas ficam fora da DRE.` }
+      : itens.length ? { status: 'aviso', titulo: 'Só o Balancete do mês (totais por categoria)', detalhe: 'Importe o extrato de Caixas e Bancos para ver os lançamentos um a um.' }
+        : { status: 'erro', titulo: 'Caixa do mês não importado' })
 
-    const semCls = dados.caixa.filter(c => c.mes === mes && c.tipo !== 'transferencia' &&
-      !resolverLinha(c.tipo === 'receita' ? 'caixa_receita' : 'caixa_despesa', c.categoria, '', dados.mapaDB))
+    const semCls = itens.filter(i => !i.linha)
+    const agrup = {}
+    for (const i of semCls) { const k = `${i.categoria || '(sem categoria)'}${i.chaveNome ? ' · ' + i.chaveNome : ''}`; agrup[k] = (agrup[k] || 0) + i.valor }
     out.push(semCls.length
-      ? { status: 'aviso', titulo: `${semCls.length} categoria(s) sem linha na DRE`, itens: semCls.map(c => `${c.categoria} · ${brl(c.valor)}`) }
-      : { status: 'ok', titulo: 'Todas as categorias do balancete estão classificadas' })
+      ? { status: 'aviso', titulo: `${Object.keys(agrup).length} categoria(s)/cliente(s) sem linha na DRE (${brl(semCls.reduce((s, i) => s + i.valor, 0))})`,
+          detalhe: 'Classifique em Importar e classificar › Classificar categorias.',
+          itens: Object.entries(agrup).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} · ${brl(v)}`) }
+      : { status: 'ok', titulo: 'Todas as entradas e saídas do caixa estão classificadas' })
+    const sug = itens.filter(i => i.sugerido)
+    if (sug.length) out.push({ status: 'info', titulo: `${sug.length} recebimento(s) sem categoria classificados pelo cliente (${brl(sug.reduce((s, i) => s + i.valor, 0))})`,
+      detalhe: 'Mesma linha dos outros recebimentos do cliente. Para mudar, classifique o cliente em Classificar categorias.',
+      itens: sug.map(i => `${i.nome} · ${LINHAS[i.linha]?.nome || i.linha} · ${brl(i.valor)}`) })
 
     // Contas vencidas até o fim do mês e ainda sem baixa no Bling
     const pend = dados.contas.filter(c => { const v = mesVencimento(c); return SEM_BAIXA.includes(c.situacao) && !!v && v <= mes })
