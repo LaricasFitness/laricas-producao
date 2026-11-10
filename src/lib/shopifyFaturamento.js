@@ -6,7 +6,8 @@
 //                  menos o valor coberto por voucher de influenciador (ver abaixo)
 //   Descontos      cupons, ofertas de upsell (QIKIFY…), descontos automáticos, frete grátis por desconto
 //                  e devoluções (reembolsos) dos pedidos do mês
-//   Voucher        cupons "voucher…" (influenciadoras e nutricionistas): o valor coberto pelo voucher é
+//   Voucher        cupons de influenciadoras e nutricionistas — "voucher…" ou código aleatório de 12 letras e
+//                  números (TCFD8B4XVMNP; usado até jul/26; "CONSUMIDOR20" e afins não contam): o valor coberto é
 //                  produto dado, não venda nem desconto — fica FORA da receita e dos descontos; o custo
 //                  real (matéria-prima, embalagem) já está no CMV do fechamento de estoque. Se o pedido
 //                  passou do voucher, o que a influenciadora pagou é receita normal.
@@ -18,7 +19,13 @@
 // Conferência: receita − descontos = total dos pedidos − reembolsos.
 
 export const CODIGO_REGUA = 'QIKIFY-OKEVSB'
-export const ehVoucher = code => /^voucher/i.test(code || '')
+export const ehVoucher = code => {
+  const c = String(code || '')
+  if (/^voucher/i.test(c)) return true
+  // código gerado em lote: 12 letras/números maiúsculos com algum dígito, que não seja palavra + número
+  // (CONSUMIDOR20, VIPBLACK2026)
+  return /^[A-Z0-9]{12}$/.test(c) && /\d/.test(c) && !/^[A-Z]+\d{2,}$/.test(c)
+}
 const NAO_PAGOS = ['PENDING', 'VOIDED', 'EXPIRED']
 
 const v = m => Number(m?.shopMoney?.amount) || 0
