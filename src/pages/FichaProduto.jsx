@@ -246,7 +246,7 @@ function MontagemCategoria({ produtos }) {
     <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <div style={{ flex: '1 1 220px', minWidth: 0 }}>
         <div style={{ fontWeight: 800, fontSize: 14 }}>Montagem por categoria</div>
-        <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Uma página com todos os produtos da categoria: o que vai em cada um (g por unidade), peso e embalagem.</div>
+        <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Uma página para a bancada: massa crua a porcionar, recheio e cobertura de cada produto, peso, embalagem e quanto rende cada receita.</div>
       </div>
       <select className="form-input" value={atual} onChange={e => { setCat(e.target.value); gravarLS(LS_CAT_MONT, e.target.value) }}
         style={{ flex: '1 1 220px', minWidth: 0, maxWidth: 320, fontSize: 13, fontWeight: 600 }}>
