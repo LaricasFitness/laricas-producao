@@ -661,7 +661,7 @@ function FaturamentoPlataformas({ onMudou }) {
           <div style={{ fontWeight: 800, fontSize: 14 }}>Faturamento das plataformas (competência)</div>
           <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, marginTop: 2 }}>
             <b>iFood:</b> Financeiro › Faturamento do mês, uma loja por print (com os grupos abertos); envie ou cole (Ctrl+V).{' '}
-            <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa por mês do pedido.
+            <b>99 Food:</b> planilha "Detalhes da fatura" (.xlsx) de cada loja; pode ser de vários meses, o sistema separa pelo mês da cobrança.
             Você confere cada loja × mês antes de salvar.
           </div>
         </div>
