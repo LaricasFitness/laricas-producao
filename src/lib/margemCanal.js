@@ -13,10 +13,25 @@ export const CMV_PADRAO_CANAL = { Revenda: 34 }   // tabela de revenda ~35% abai
 
 // Canais da margem: plataformas e Mercado Pago/Bling (dre_canal_competencia) + contas a receber do Bling
 const CANAL_DO_RECEBER = { rec_revenda: 'Revenda', rec_direta: 'Venda Direta', rec_balcao: 'Balcão', rec_outras: null }
-// Frete pago às transportadoras e embalagem de envio (caixa) são do e-commerce próprio: rateados entre esses
-// canais pela receita bruta (delivery e Mercado Livre já trazem a logística nas taxas da plataforma)
-export const CANAIS_ENVIO = ['Site', 'Clube']
-const CAT_FRETE = ['Frete', 'Fretes e seguros']
+// Embalagem do pedido e frete (caixa), cada um nos canais que usam, rateado pela receita bruta:
+//   sacolas  → delivery, site e clube (pedidos de SP capital) e ativações
+//   caixa de papelão, fita, etiqueta, gelo → site, clube e Mercado Livre
+//   frete (Correios, Lalamove, Melhor Envio, motoboy, Uber) → site e clube (o do Mercado Livre já vem nas taxas)
+// A embalagem do produto (pote, vidro, lata, rótulo, filme, lacre) já está no % de custo da ficha técnica.
+export const POOLS_ENVIO = {
+  sacola: { nome: 'Sacolas', canais: ['iFood', '99 Food', 'Keeta', 'Anota.AI', 'Site', 'Clube', 'Ativação'] },
+  caixa:  { nome: 'Caixa, fita e gelo', canais: ['Site', 'Clube', 'Mercado Livre'] },
+  frete:  { nome: 'Frete', canais: ['Site', 'Clube'] },
+}
+const CAT_FRETE = /^fretes?( e seguros)?$/i
+const CAT_ENVIO = /embalage(m|ns) (de )?envio/i
+const ehSacola = i => /sacola/i.test(`${i.categoria} ${i.nome} ${i.historico}`)
+export function poolEnvio(i) {
+  if (i.tipo !== 'despesa') return null
+  if (CAT_FRETE.test(i.categoria)) return 'frete'
+  if (i.linha === 'cmv_envio' || CAT_ENVIO.test(i.categoria)) return ehSacola(i) ? 'sacola' : 'caixa'
+  return null
+}
 export const ORDEM_CANAIS = ['iFood', '99 Food', 'Keeta', 'Anota.AI', 'Site', 'Clube', 'Mercado Livre', 'Revenda', 'Venda Direta', 'Balcão', 'Ativação']
 
 export const pctCustoDe = (canal, tabela = {}) =>
@@ -39,18 +54,23 @@ export function margemPorCanal({ meses, canais = [], receber = [], caixa = [], c
     linha(canal).bruta += i.valor
   }
   const doCaixa = itensCaixa({ caixa, caixaLanc, mapaDB }).filter(i => dentro(i.mes))
-  const envioTotal = doCaixa.filter(i => i.linha === 'cmv_envio' || (i.tipo === 'despesa' && CAT_FRETE.includes(i.categoria))).reduce((s, i) => s + i.valor, 0)
-  const baseEnvio = Object.values(g).filter(x => CANAIS_ENVIO.includes(x.canal)).reduce((s, x) => s + x.bruta, 0)
+  const pools = Object.fromEntries(Object.keys(POOLS_ENVIO).map(k => [k, 0]))
+  for (const i of doCaixa) { const p = poolEnvio(i); if (p) pools[p] += i.valor }
+  const base = Object.fromEntries(Object.entries(POOLS_ENVIO).map(([k, p]) =>
+    [k, Object.values(g).filter(x => p.canais.includes(x.canal)).reduce((s, x) => s + x.bruta, 0)]))
   const linhas = Object.values(g).filter(x => Math.abs(x.bruta) >= 0.005).map(x => {
     const pct = pctCustoDe(x.canal, pctCanal)
-    const envio = CANAIS_ENVIO.includes(x.canal) && baseEnvio ? envioTotal * x.bruta / baseEnvio : 0
+    const envioPor = {}
+    for (const [k, p] of Object.entries(POOLS_ENVIO))
+      envioPor[k] = p.canais.includes(x.canal) && base[k] ? pools[k] * x.bruta / base[k] : 0
+    const envio = Object.values(envioPor).reduce((s, v) => s + v, 0)
     const liquida = x.bruta - x.descontos - x.taxas
     const cmv = x.bruta * pct / 100
-    return { ...x, pct, liquida, cmv, envio, margem: liquida - cmv - envio }
+    return { ...x, pct, liquida, cmv, envio, envioPor, margem: liquida - cmv - envio }
   }).sort((a, b) => (ORDEM_CANAIS.indexOf(a.canal) + 100) % 100 - (ORDEM_CANAIS.indexOf(b.canal) + 100) % 100 || b.bruta - a.bruta)
   const soma = k => linhas.reduce((s, x) => s + x[k], 0)
   const total = { canal: 'Total', bruta: soma('bruta'), descontos: soma('descontos'), taxas: soma('taxas'), liquida: soma('liquida'), cmv: soma('cmv'), envio: soma('envio'), margem: soma('margem') }
   // CMV real do período pelo caixa: compras de matéria-prima e embalagem do produto
   const compras = doCaixa.filter(i => i.linha === 'cmv').reduce((s, i) => s + i.valor, 0)
-  return { linhas, total, compras }
+  return { linhas, total, compras, pools }
 }

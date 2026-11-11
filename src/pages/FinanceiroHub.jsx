@@ -10,7 +10,7 @@ import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { lerPlanilha99 } from '../lib/planilha99'
 import { lerPlanilhaKeeta } from '../lib/planilhaKeeta'
 import { lerRelatorioMercadoPago } from '../lib/relatorioMercadoPago'
-import { margemPorCanal, CMV_PADRAO, CMV_PADRAO_CANAL } from '../lib/margemCanal'
+import { margemPorCanal, CMV_PADRAO, CMV_PADRAO_CANAL, POOLS_ENVIO } from '../lib/margemCanal'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -475,7 +475,7 @@ function TelaMargem() {
                 <th style={{ ...th, textAlign: 'left' }}>Canal</th>
                 <th style={th}>Receita bruta</th><th style={th}>Descontos</th><th style={th}>Comissões e taxas</th>
                 <th style={th}>Receita líquida</th><th style={th} title="% de custo do produto sobre a receita bruta (ficha técnica)">% custo</th>
-                <th style={th}>CMV teórico</th><th style={th} title="Frete pago às transportadoras e embalagem de envio (caixa), rateados entre Site e Clube pela receita">Envio</th><th style={th}>Margem</th><th style={th}>Margem %</th><th style={th}>Peso na margem</th>
+                <th style={th}>CMV teórico</th><th style={th} title="Sacolas, caixa/fita/gelo e frete pagos no caixa, cada um rateado pela receita entre os canais que usam">Embalagem do pedido e frete</th><th style={th}>Margem</th><th style={th}>Margem %</th><th style={th}>Peso na margem</th>
               </tr>
             </thead>
             <tbody>
@@ -500,7 +500,9 @@ function TelaMargem() {
                     )}
                   </td>
                   <td style={td}>{fmt(x.cmv, 0)}</td>
-                  <td style={td}>{x.envio ? fmt(x.envio, 0) : '—'}</td>
+                  <td style={td} title={Object.entries(x.envioPor || {}).filter(([, v]) => v).map(([k, v]) => `${POOLS_ENVIO[k].nome}: R$ ${fmt(v, 0)}`).join('\n')}>
+                    {x.envio ? <>{fmt(x.envio, 0)} <span style={{ color: 'var(--gray-400)', fontSize: 11 }}>{pctDe(x.envio, x.bruta)}</span></> : '—'}
+                  </td>
                   <td style={{ ...td, fontWeight: 800, color: x.margem < 0 ? 'var(--danger)' : undefined }}>{fmt(x.margem, 0)}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{pctDe(x.margem, x.bruta)}</td>
                   <td style={td}>{pctDe(x.margem, res.total.margem)}</td>
@@ -520,6 +522,9 @@ function TelaMargem() {
             {res.compras > 0 && <> · diferença <b>R$ {fmt(res.compras - res.total.cmv, 0)}</b> ({pctDe(res.compras - res.total.cmv, res.total.bruta)} da receita bruta):
               perdas, brindes, vouchers, testes e estoque que sobrou ou faltou no período.</>}
             {' '}O % de custo de cada canal pode ser ajustado na coluna "% custo".
+            <br /><b>Embalagem do pedido e frete</b> (caixa do período, rateados pela receita entre os canais que usam):{' '}
+            {Object.entries(POOLS_ENVIO).map(([k, p]) => `${p.nome} R$ ${fmt(res.pools[k], 0)} → ${p.canais.join(', ')}`).join(' · ')}.
+            {' '}A embalagem do produto (pote, vidro, lata, rótulo, filme, lacre) já está no % de custo.
           </div>
         </div>
       )}
