@@ -2,34 +2,30 @@ import { custoCanal, marketingCanal, itensReceber, itensCaixa } from './dre'
 
 // Margem de contribuição por canal (competência, só receitas + CMV teórico):
 //   receita bruta − descontos − comissões e taxas (inclui anúncios da plataforma) = receita líquida
-//   receita líquida − CMV teórico (% de custo do canal × receita bruta) − envio    = margem do canal
-// O % de custo sai da ficha técnica (custo do produto ÷ preço de tabela do canal). Como os produtos são os
-// mesmos em todos os canais, o que muda é o preço: no B2B a tabela é mais baixa, então o % é maior.
-// Conferência: CMV teórico do período × compras de matéria-prima e embalagem no caixa (diferença = perdas,
+//   receita líquida − CMV (% de custo do canal × receita bruta) − frete            = margem do canal
+// O % de custo de cada canal vem da DRE-3.0 - 2026 da planilha (CMV ÷ faturamento do canal, jul a set/26),
+// que já inclui embalagem do produto, rótulo, sacola e caixa. Fica editável por canal (dre_cmv_canal).
+// Conferência: CMV do período × compras de matéria-prima e embalagens no caixa (diferença = perdas,
 // brindes, vouchers, estoque que sobrou ou faltou).
 
-export const CMV_PADRAO = 22          // % de custo sobre o preço de tabela do site (ficha técnica, out/26)
-export const CMV_PADRAO_CANAL = { Revenda: 34 }   // tabela de revenda ~35% abaixo do site
+export const CMV_PADRAO = 27          // canal novo, sem histórico na planilha
+export const CMV_PADRAO_CANAL = {     // DRE-3.0 - 2026, média jul a set/26
+  'iFood': 28.2, '99 Food': 22.9, 'Keeta': 22.9, 'Anota.AI': 23.7,
+  'Site': 24.1, 'Clube': 32.3, 'Mercado Livre': 24.1,
+  'Revenda': 41.7, 'Venda Direta': 48.2, 'Balcão': 26.0, 'Ativação': 30.4,
+}
 
 // Canais da margem: plataformas e Mercado Pago/Bling (dre_canal_competencia) + contas a receber do Bling
 const CANAL_DO_RECEBER = { rec_revenda: 'Revenda', rec_direta: 'Venda Direta', rec_balcao: 'Balcão', rec_outras: null }
-// Embalagem do pedido e frete (caixa), cada um nos canais que usam, rateado pela receita bruta:
-//   sacolas  → delivery, site e clube (pedidos de SP capital) e ativações
-//   caixa de papelão, fita, etiqueta, gelo → site, clube e Mercado Livre
-//   frete (Correios, Lalamove, Melhor Envio, motoboy, Uber) → site e clube (o do Mercado Livre já vem nas taxas)
-// A embalagem do produto (pote, vidro, lata, rótulo, filme, lacre) já está no % de custo da ficha técnica.
+// Frete pago no caixa (Correios, Lalamove, Melhor Envio, motoboy, Uber) → site e clube, rateado pela receita
+// bruta (o do Mercado Livre já vem nas taxas; sacola e caixa já estão no % de custo).
 export const POOLS_ENVIO = {
-  sacola: { nome: 'Sacolas', canais: ['iFood', '99 Food', 'Keeta', 'Anota.AI', 'Site', 'Clube', 'Ativação'] },
-  caixa:  { nome: 'Caixa, fita e gelo', canais: ['Site', 'Clube', 'Mercado Livre'] },
-  frete:  { nome: 'Frete', canais: ['Site', 'Clube'] },
+  frete: { nome: 'Frete', canais: ['Site', 'Clube'] },
 }
 const CAT_FRETE = /^fretes?( e seguros)?$/i
-const CAT_ENVIO = /embalage(m|ns) (de )?envio/i
-const ehSacola = i => /sacola/i.test(`${i.categoria} ${i.nome} ${i.historico}`)
 export function poolEnvio(i) {
   if (i.tipo !== 'despesa') return null
   if (CAT_FRETE.test(i.categoria)) return 'frete'
-  if (i.linha === 'cmv_envio' || CAT_ENVIO.test(i.categoria)) return ehSacola(i) ? 'sacola' : 'caixa'
   return null
 }
 export const ORDEM_CANAIS = ['iFood', '99 Food', 'Keeta', 'Anota.AI', 'Site', 'Clube', 'Mercado Livre', 'Revenda', 'Venda Direta', 'Balcão', 'Ativação']
@@ -70,7 +66,7 @@ export function margemPorCanal({ meses, canais = [], receber = [], caixa = [], c
   }).sort((a, b) => (ORDEM_CANAIS.indexOf(a.canal) + 100) % 100 - (ORDEM_CANAIS.indexOf(b.canal) + 100) % 100 || b.bruta - a.bruta)
   const soma = k => linhas.reduce((s, x) => s + x[k], 0)
   const total = { canal: 'Total', bruta: soma('bruta'), descontos: soma('descontos'), taxas: soma('taxas'), liquida: soma('liquida'), cmv: soma('cmv'), envio: soma('envio'), margem: soma('margem') }
-  // CMV real do período pelo caixa: compras de matéria-prima e embalagem do produto
-  const compras = doCaixa.filter(i => i.linha === 'cmv').reduce((s, i) => s + i.valor, 0)
+  // CMV real do período pelo caixa: compras de matéria-prima, embalagem do produto e do pedido (sacola, caixa)
+  const compras = doCaixa.filter(i => i.linha === 'cmv' || i.linha === 'cmv_envio').reduce((s, i) => s + i.valor, 0)
   return { linhas, total, compras, pools }
 }

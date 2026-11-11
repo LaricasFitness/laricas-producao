@@ -447,7 +447,7 @@ function TelaMargem() {
             <div style={{ fontWeight: 800, fontSize: 14 }}>Margem por canal</div>
             <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5 }}>
               Receita por competência (plataformas, Shopify, Mercado Pago e Bling) menos descontos, comissões e taxas,
-              menos o CMV teórico (% de custo da ficha técnica sobre o preço de tabela do canal).
+              menos o CMV (% de custo de cada canal pela DRE-3.0 da planilha, com embalagens, sacolas e caixas) e o frete do e-commerce.
             </div>
           </div>
           <select className="form-input" value={ano} onChange={e => setAno(+e.target.value)} style={{ width: 100 }}>
@@ -461,7 +461,7 @@ function TelaMargem() {
             {mesesComDado.map(m => <option key={m} value={m}>{rotuloMes(m)}</option>)}
           </select>
         </div>
-        {semTab && <div className="alert-banner info" style={{ marginTop: 10 }}>{AVISO_SQL_6} Até lá a tela usa {CMV_PADRAO}% (B2B {CMV_PADRAO_CANAL.Revenda}%).</div>}
+        {semTab && <div className="alert-banner info" style={{ marginTop: 10 }}>{AVISO_SQL_6} Até lá a tela usa os % da DRE-3.0 da planilha (jul a set/26).</div>}
         {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
       </div>
 
@@ -474,8 +474,8 @@ function TelaMargem() {
               <tr style={{ borderBottom: '1px solid var(--gray-200)' }}>
                 <th style={{ ...th, textAlign: 'left' }}>Canal</th>
                 <th style={th}>Receita bruta</th><th style={th}>Descontos</th><th style={th}>Comissões e taxas</th>
-                <th style={th}>Receita líquida</th><th style={th} title="% de custo do produto sobre a receita bruta (ficha técnica)">% custo</th>
-                <th style={th}>CMV teórico</th><th style={th} title="Sacolas, caixa/fita/gelo e frete pagos no caixa, cada um rateado pela receita entre os canais que usam">Embalagem do pedido e frete</th><th style={th}>Margem</th><th style={th}>Margem %</th><th style={th}>Peso na margem</th>
+                <th style={th}>Receita líquida</th><th style={th} title="% de custo sobre a receita bruta do canal (DRE-3.0 da planilha, jul a set/26), com embalagens, sacolas e caixas">% custo</th>
+                <th style={th}>CMV</th><th style={th} title="Frete pago no caixa, rateado pela receita entre Site e Clube">Frete</th><th style={th}>Margem</th><th style={th}>Margem %</th><th style={th}>Peso na margem</th>
               </tr>
             </thead>
             <tbody>
@@ -517,14 +517,13 @@ function TelaMargem() {
             </tbody>
           </table>
           <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--gray-600)', lineHeight: 1.6, borderTop: '1px solid var(--gray-100)' }}>
-            <b>CMV teórico × compras no caixa</b> ({rotuloMes(meses[0])} a {rotuloMes(meses[meses.length - 1])}): teórico R$ {fmt(res.total.cmv, 0)} ·
-            compras de matéria-prima e embalagem do produto R$ {fmt(res.compras, 0)}
+            <b>CMV × compras no caixa</b> ({rotuloMes(meses[0])} a {rotuloMes(meses[meses.length - 1])}): teórico R$ {fmt(res.total.cmv, 0)} ·
+            compras de matéria-prima e embalagens R$ {fmt(res.compras, 0)}
             {res.compras > 0 && <> · diferença <b>R$ {fmt(res.compras - res.total.cmv, 0)}</b> ({pctDe(res.compras - res.total.cmv, res.total.bruta)} da receita bruta):
               perdas, brindes, vouchers, testes e estoque que sobrou ou faltou no período.</>}
             {' '}O % de custo de cada canal pode ser ajustado na coluna "% custo".
-            <br /><b>Embalagem do pedido e frete</b> (caixa do período, rateados pela receita entre os canais que usam):{' '}
-            {Object.entries(POOLS_ENVIO).map(([k, p]) => `${p.nome} R$ ${fmt(res.pools[k], 0)} → ${p.canais.join(', ')}`).join(' · ')}.
-            {' '}A embalagem do produto (pote, vidro, lata, rótulo, filme, lacre) já está no % de custo.
+            <br /><b>Frete</b> pago no caixa no período: R$ {fmt(res.pools.frete, 0)}, rateado pela receita entre {POOLS_ENVIO.frete.canais.join(' e ')}.
+            {' '}Embalagens, sacolas e caixas já estão no % de custo.
           </div>
         </div>
       )}
