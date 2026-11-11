@@ -54,6 +54,7 @@ export const MENU = [
     id: 'financeiro', label: 'Financeiro', Icon: Wallet,
     subs: [
       { id: 'dre',      label: 'DRE' },
+      { id: 'margem',   label: 'Margem por canal' },
       { id: 'importar', label: 'Importar e classificar' },
     ],
   },

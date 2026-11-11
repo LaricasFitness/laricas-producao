@@ -10,6 +10,7 @@ import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { lerPlanilha99 } from '../lib/planilha99'
 import { lerPlanilhaKeeta } from '../lib/planilhaKeeta'
 import { lerRelatorioMercadoPago } from '../lib/relatorioMercadoPago'
+import { margemPorCanal, CMV_PADRAO, CMV_PADRAO_CANAL } from '../lib/margemCanal'
 
 // Financeiro: DRE por competência e por caixa a partir das exportações do Bling.
 // Regras e desenho da DRE em src/lib/dre.js.
@@ -44,9 +45,11 @@ export default function FinanceiroHub({ sub: subMenu, onSub }) {
     <>
       <div className="tabs hub-tabs" style={{ marginBottom: 0 }}>
         <button className={`tab${sub === 'dre' ? ' active' : ''}`} onClick={() => setSub('dre')}>📋 DRE</button>
+        <button className={`tab${sub === 'margem' ? ' active' : ''}`} onClick={() => setSub('margem')}>📊 Margem por canal</button>
         <button className={`tab${sub === 'importar' ? ' active' : ''}`} onClick={() => setSub('importar')}>⬆️ Importar e classificar</button>
       </div>
       {sub === 'dre' && <TelaDRE irImportar={() => setSub('importar')} />}
+      {sub === 'margem' && <TelaMargem />}
       {sub === 'importar' && <TelaImportar />}
     </>
   )
@@ -99,7 +102,7 @@ function aplicarFechados(vivo, dados, visao) {
 function TelaDRE({ irImportar }) {
   const anoAtual = new Date().getFullYear()
   const [ano, setAno] = useState(anoAtual)
-  const [visao, setVisao] = useState('competencia')
+  const [visao, setVisao] = useState('caixa') // caixa é a DRE oficial do mês; competência fica de apoio
   const [dados, setDados] = useState(null)
   const [erro, setErro] = useState('')
   const [carregando, setCarregando] = useState(true)
@@ -159,7 +162,7 @@ function TelaDRE({ irImportar }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div className="card" style={{ padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 4 }}>
-          {[['competencia', 'Competência'], ['caixa', 'Caixa']].map(([v, l]) => (
+          {[['caixa', 'Caixa'], ['competencia', 'Competência']].map(([v, l]) => (
             <button key={v} className={`btn btn-sm ${visao === v ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setVisao(v)}>{l}</button>
           ))}
         </div>
@@ -391,6 +394,135 @@ function ModalDetalhe({ mes, linha, visao, dados, extras, onClose }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Margem por canal (competência das receitas + CMV teórico) ────────────────
+const AVISO_SQL_6 = 'Aplique o arquivo financeiro_dre_6.sql no Supabase para guardar o % de custo de cada canal.'
+function TelaMargem() {
+  const anoAtual = new Date().getFullYear()
+  const [ano, setAno] = useState(anoAtual)
+  const [dados, setDados] = useState(null)
+  const [pctCanal, setPctCanal] = useState({})
+  const [editando, setEditando] = useState({})
+  const [de, setDe] = useState('')
+  const [ate, setAte] = useState('')
+  const [msg, setMsg] = useState(null)
+  const [semTab, setSemTab] = useState(false)
+
+  useEffect(() => {
+    setDados(null)
+    carregarAno(ano).then(setDados).catch(e => setMsg({ tipo: 'danger', txt: semTabela(e) ? AVISO_SQL : e.message || String(e) }))
+    supabase.from('dre_cmv_canal').select('canal, pct').then(({ data, error }) => {
+      if (error) { setSemTab(semTabela(error)); return }
+      setPctCanal(Object.fromEntries((data || []).map(r => [r.canal, Number(r.pct)])))
+    })
+  }, [ano])
+
+  // meses com receita de plataformas ou do Bling; padrão: do primeiro ao último
+  const mesesComDado = useMemo(() => !dados ? [] : [...new Set([...dados.canais.map(r => r.mes), ...(dados.receber || []).map(r => r.mes)])]
+    .filter(m => m.startsWith(String(ano))).sort(), [dados, ano])
+  useEffect(() => { if (mesesComDado.length) { setDe(mesesComDado[0]); setAte(mesesComDado[mesesComDado.length - 1]) } }, [mesesComDado])
+  const meses = mesesComDado.filter(m => (!de || m >= de) && (!ate || m <= ate))
+  const res = useMemo(() => dados && meses.length ? margemPorCanal({ meses, ...dados, pctCanal }) : null, [dados, de, ate, pctCanal])
+
+  async function salvarPct(canal) {
+    const v = parseFloat(String(editando[canal]).replace(',', '.'))
+    if (!Number.isFinite(v) || v < 0 || v > 100) { setMsg({ tipo: 'danger', txt: 'Use um % entre 0 e 100.' }); return }
+    const { error } = await supabase.from('dre_cmv_canal').upsert({ canal, pct: v, atualizado_em: new Date().toISOString() }, { onConflict: 'canal' })
+    if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL_6 : error.message }); return }
+    setPctCanal(p => ({ ...p, [canal]: v })); setEditando(e => { const n = { ...e }; delete n[canal]; return n })
+    setMsg({ tipo: 'ok', txt: `% de custo de ${canal} salvo: ${fmt(v, 1)}%.` })
+  }
+
+  const th = { padding: '8px 10px', textAlign: 'right', fontSize: 11, color: 'var(--gray-500)', fontWeight: 700, whiteSpace: 'nowrap' }
+  const td = { padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }
+  const pctDe = (v, base) => base ? fmtPct(v / base) : '—'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="card card-pad">
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 300px' }}>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>Margem por canal</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5 }}>
+              Receita por competência (plataformas, Shopify, Mercado Pago e Bling) menos descontos, comissões e taxas,
+              menos o CMV teórico (% de custo da ficha técnica sobre o preço de tabela do canal).
+            </div>
+          </div>
+          <select className="form-input" value={ano} onChange={e => setAno(+e.target.value)} style={{ width: 100 }}>
+            {[anoAtual, anoAtual - 1].map(a => <option key={a}>{a}</option>)}
+          </select>
+          <select className="form-input" value={de} onChange={e => setDe(e.target.value)} style={{ width: 110 }}>
+            {mesesComDado.map(m => <option key={m} value={m}>{rotuloMes(m)}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>a</span>
+          <select className="form-input" value={ate} onChange={e => setAte(e.target.value)} style={{ width: 110 }}>
+            {mesesComDado.map(m => <option key={m} value={m}>{rotuloMes(m)}</option>)}
+          </select>
+        </div>
+        {semTab && <div className="alert-banner info" style={{ marginTop: 10 }}>{AVISO_SQL_6} Até lá a tela usa {CMV_PADRAO}% (B2B {CMV_PADRAO_CANAL.Revenda}%).</div>}
+        {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+      </div>
+
+      {!dados ? <div className="card card-pad" style={{ color: 'var(--gray-500)' }}><RefreshCw size={14} className="spin" /> Carregando…</div> : !res ? (
+        <div className="card card-pad" style={{ color: 'var(--gray-500)' }}>Sem receita lançada no período.</div>
+      ) : (
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 1000 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--gray-200)' }}>
+                <th style={{ ...th, textAlign: 'left' }}>Canal</th>
+                <th style={th}>Receita bruta</th><th style={th}>Descontos</th><th style={th}>Comissões e taxas</th>
+                <th style={th}>Receita líquida</th><th style={th} title="% de custo do produto sobre a receita bruta (ficha técnica)">% custo</th>
+                <th style={th}>CMV teórico</th><th style={th} title="Frete pago às transportadoras e embalagem de envio (caixa), rateados entre Site e Clube pela receita">Envio</th><th style={th}>Margem</th><th style={th}>Margem %</th><th style={th}>Peso na margem</th>
+              </tr>
+            </thead>
+            <tbody>
+              {res.linhas.map(x => (
+                <tr key={x.canal} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{x.canal}</td>
+                  <td style={td}>{fmt(x.bruta, 0)}</td>
+                  <td style={td}>{fmt(x.descontos, 0)} <span style={{ color: 'var(--gray-400)', fontSize: 11 }}>{pctDe(x.descontos, x.bruta)}</span></td>
+                  <td style={td}>{fmt(x.taxas, 0)} <span style={{ color: 'var(--gray-400)', fontSize: 11 }}>{pctDe(x.taxas, x.bruta)}</span></td>
+                  <td style={td}>{fmt(x.liquida, 0)} <span style={{ color: 'var(--gray-400)', fontSize: 11 }}>{pctDe(x.liquida, x.bruta)}</span></td>
+                  <td style={td}>
+                    {editando[x.canal] != null ? (
+                      <span style={{ display: 'inline-flex', gap: 4 }}>
+                        <input className="form-input" value={editando[x.canal]} onChange={e => setEditando(s => ({ ...s, [x.canal]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && salvarPct(x.canal)} style={{ width: 60, padding: '2px 6px', textAlign: 'right' }} autoFocus />
+                        <button className="btn btn-primary btn-sm" onClick={() => salvarPct(x.canal)}><Save size={12} /></button>
+                      </span>
+                    ) : (
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditando(s => ({ ...s, [x.canal]: String(x.pct).replace('.', ',') }))} title="Alterar o % de custo deste canal">
+                        {fmt(x.pct, 1)}% <Pencil size={11} />
+                      </button>
+                    )}
+                  </td>
+                  <td style={td}>{fmt(x.cmv, 0)}</td>
+                  <td style={td}>{x.envio ? fmt(x.envio, 0) : '—'}</td>
+                  <td style={{ ...td, fontWeight: 800, color: x.margem < 0 ? 'var(--danger)' : undefined }}>{fmt(x.margem, 0)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{pctDe(x.margem, x.bruta)}</td>
+                  <td style={td}>{pctDe(x.margem, res.total.margem)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: '2px solid var(--gray-300)', fontWeight: 800 }}>
+                <td style={{ ...td, textAlign: 'left' }}>Total</td>
+                <td style={td}>{fmt(res.total.bruta, 0)}</td><td style={td}>{fmt(res.total.descontos, 0)}</td><td style={td}>{fmt(res.total.taxas, 0)}</td>
+                <td style={td}>{fmt(res.total.liquida, 0)}</td><td style={td}>{pctDe(res.total.cmv, res.total.bruta)}</td>
+                <td style={td}>{fmt(res.total.cmv, 0)}</td><td style={td}>{fmt(res.total.envio, 0)}</td><td style={td}>{fmt(res.total.margem, 0)}</td><td style={td}>{pctDe(res.total.margem, res.total.bruta)}</td><td style={td} />
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--gray-600)', lineHeight: 1.6, borderTop: '1px solid var(--gray-100)' }}>
+            <b>CMV teórico × compras no caixa</b> ({rotuloMes(meses[0])} a {rotuloMes(meses[meses.length - 1])}): teórico R$ {fmt(res.total.cmv, 0)} ·
+            compras de matéria-prima e embalagem do produto R$ {fmt(res.compras, 0)}
+            {res.compras > 0 && <> · diferença <b>R$ {fmt(res.compras - res.total.cmv, 0)}</b> ({pctDe(res.compras - res.total.cmv, res.total.bruta)} da receita bruta):
+              perdas, brindes, vouchers, testes e estoque que sobrou ou faltou no período.</>}
+            {' '}O % de custo de cada canal pode ser ajustado na coluna "% custo".
+          </div>
+        </div>
+      )}
     </div>
   )
 }
