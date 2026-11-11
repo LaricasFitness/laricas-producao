@@ -44,6 +44,7 @@ export const LINHAS = {
   fin_receitas:   { nome: 'Receitas financeiras (rendimentos, juros)', sinal: +1 },
   fin_despesas:   { nome: 'Despesas financeiras (tarifas, juros, acréscimos)', sinal: -1 },
   investimento:   { nome: 'Investimentos (equipamento, mobília, estrutura)', sinal: -1 },
+  aporte:         { nome: 'Aportes dos sócios',                   sinal: +1 },
   ignorar:        { nome: 'Não entra na DRE (transferências entre contas)', sinal: 0 },
 }
 
@@ -68,6 +69,9 @@ export const ESTRUTURA = [
   { tipo: 'total', id: 'liquido',    nome: '= Lucro líquido', destaque: true },
   { tipo: 'grupo', id: 'abaixo',     nome: '(−) Investimentos (abaixo da linha)', linhas: ['investimento'] },
   { tipo: 'total', id: 'pos_invest', nome: '= Resultado depois dos investimentos' },
+  // dinheiro dos sócios: fora do resultado, só para ver quanto o caixa precisou de aporte
+  { tipo: 'grupo', id: 'socios',     nome: '(+) Aportes dos sócios (fora do resultado)', linhas: ['aporte'] },
+  { tipo: 'total', id: 'geracao_caixa', nome: '= Variação do caixa no mês' },
 ]
 
 // ── Plataformas de delivery (faturamento por canal e unidade) ────────────────
@@ -358,7 +362,7 @@ export function itensCaixa({ caixa = [], caixaLanc = [], mapaDB = [] }) {
     // "Transferências recebidas": aporte/empréstimo fica fora; multa de cancelamento, reembolso etc. é outra receita
     const porNomeMapa = mapaDB.some(m => m.origem === origem && m.categoria === l.categoria && m.nome === l.nome)
     if (receita && /^transfer[eê]ncias recebidas$/i.test(l.categoria) && !porNomeMapa)
-      linha = /aporte|empr[eé]stimo|capital|m[uú]tuo/i.test(l.historico || '') ? 'ignorar' : 'rec_outras'
+      linha = /aporte|capital/i.test(l.historico || '') ? 'aporte' : /empr[eé]stimo|m[uú]tuo/i.test(l.historico || '') ? 'ignorar' : 'rec_outras'
     // classificação por fornecedor/cliente: categoria vazia ou ambígua, ou já classificada por nome
     const porNome = !l.categoria || (!receita && AMBIGUAS.includes(l.categoria)) ||
       mapaDB.some(m => m.origem === origem && m.categoria === l.categoria && m.nome === l.nome)
