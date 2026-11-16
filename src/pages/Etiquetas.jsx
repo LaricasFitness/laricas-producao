@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Printer, Save, Check, Trash2 } from 'lucide-react'
+import { RefreshCw, Printer, Save, Camera } from 'lucide-react'
+import { LeitorQR, FichaEtiqueta } from './EtiquetaQR'
 import { CONSERVACOES, calcularValidade, fmtDataHora, fmtValidade, fmtPrazo, numeroEtiqueta, imprimirEtiquetas, faixaConservacao } from '../lib/etiquetas'
 
 // Etiquetas de validade das preparações (massas, recheios, cremes, coberturas).
 //   Imprimir  → escolhe a preparação e a conservação; a validade sai do prazo cadastrado
 //   Validades → etiquetas ativas, do vencimento mais próximo; baixa como usada ou descartada
+//   Ler QR    → câmera lê o QR da etiqueta e abre a baixa (o link ?etiqueta=123 também abre aqui)
 //   Prazos    → prazo de validade de cada preparação por conservação + dados da empresa na etiqueta
 
 const AVISO_SQL = 'Aplique o arquivo etiquetas_validade.sql no Supabase para usar as etiquetas.'
@@ -26,6 +28,19 @@ export default function Etiquetas() {
   const [preps, setPreps] = useState(null)
   const [empresa, setEmpresa] = useState({})
   const [erro, setErro] = useState('')
+  const [leitor, setLeitor] = useState(false)
+  const [codigo, setCodigo] = useState(null)   // etiqueta aberta (link ou número)
+  const [versao, setVersao] = useState(0)      // recarrega Validades depois de uma baixa
+
+  // Link do QR lido pela câmera do celular (?etiqueta=123): abre a etiqueta e limpa o endereço
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search)
+    const n = p.get('etiqueta')
+    if (!n) return
+    setCodigo(n); setAba('validades')
+    p.delete('etiqueta')
+    window.history.replaceState(null, '', window.location.pathname + (p.toString() ? '?' + p : ''))
+  }, [])
 
   async function carregar() {
     setErro('')
@@ -44,12 +59,17 @@ export default function Etiquetas() {
         {[['imprimir', '🏷️ Imprimir'], ['validades', '⏳ Validades'], ['prazos', '⚙️ Prazos']].map(([id, l]) => (
           <button key={id} className={`btn btn-sm ${aba === id ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setAba(id)}>{l}</button>
         ))}
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={() => setLeitor(true)}><Camera size={13} /> Ler QR</button>
       </div>
+      {leitor && <LeitorQR onFechar={() => setLeitor(false)} onLido={t => { setLeitor(false); setCodigo(t) }} />}
+      {codigo && <FichaEtiqueta codigo={codigo} onFechar={() => setCodigo(null)} onBaixa={() => setVersao(v => v + 1)}
+        onLerOutra={() => { setCodigo(null); setLeitor(true) }} />}
       {erro && <div className="alert-banner danger">{erro}</div>}
       {preps === null ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : (
         <>
           {aba === 'imprimir' && <Imprimir preps={preps} empresa={empresa} irPrazos={() => setAba('prazos')} />}
-          {aba === 'validades' && <Validades empresa={empresa} />}
+          {aba === 'validades' && <Validades key={versao} empresa={empresa} onAbrir={n => setCodigo(String(n))} />}
           {aba === 'prazos' && <Prazos preps={preps} empresa={empresa} onSalvo={carregar} />}
         </>
       )}
@@ -87,7 +107,7 @@ function Imprimir({ preps, empresa, irPrazos }) {
     const { data, error } = await supabase.from('etiquetas').insert(linhas).select('*').order('numero')
     setImprimindo(false)
     if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return }
-    imprimirEtiquetas(data, empresa)
+    await imprimirEtiquetas(data, empresa)
     setMsg({ tipo: 'ok', txt: `${n} etiqueta${n > 1 ? 's' : ''} de ${prep.nome} (${numeroEtiqueta(data[0].numero)}${n > 1 ? ' a ' + numeroEtiqueta(data[n - 1].numero) : ''}) enviada${n > 1 ? 's' : ''} para impressão.` })
     setQtd(1); setObs('')
   }
@@ -179,14 +199,17 @@ function PreviaEtiqueta({ e, empresa }) {
           {[empresa?.nome, empresa?.cnpj && `CNPJ ${empresa.cnpj}`].filter(Boolean).join(' · ')}
           {empresa?.endereco && <div>{empresa.endereco}</div>}
         </div>
-        <b style={{ fontSize: 12 }}>{e.numero ? numeroEtiqueta(e.numero) : '#000000'}</b>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ width: 52, height: 52, border: '1px dashed #999', display: 'grid', placeItems: 'center', fontSize: 9, color: '#999', marginLeft: 'auto' }}>QR</div>
+          <b style={{ fontSize: 12 }}>{e.numero ? numeroEtiqueta(e.numero) : '#000000'}</b>
+        </div>
       </div>
     </div>
   )
 }
 
 // ── Validades ─────────────────────────────────────────────────────────────────
-function Validades({ empresa }) {
+function Validades({ empresa, onAbrir }) {
   const [lista, setLista] = useState(null)
   const [busca, setBusca] = useState('')
   const [msg, setMsg] = useState(null)
@@ -197,19 +220,6 @@ function Validades({ empresa }) {
     setLista(data || [])
   }
   useEffect(() => { carregar() }, [])
-
-  async function baixar(e, status) {
-    let motivo = null
-    if (status === 'descartada') {
-      motivo = window.prompt(`Descartar ${e.nome} ${numeroEtiqueta(e.numero)}?\n\nMotivo (ex.: vencida, contaminada, sobra):`, new Date(e.validade) < new Date() ? 'Vencida' : '')
-      if (motivo === null) return
-    }
-    const { error } = await supabase.from('etiquetas')
-      .update({ status, motivo, baixa_em: new Date().toISOString(), baixa_por: usuarioAtual() || null }).eq('id', e.id)
-    if (error) { setMsg({ tipo: 'danger', txt: error.message }); return }
-    setMsg({ tipo: 'ok', txt: `${numeroEtiqueta(e.numero)} ${e.nome}: ${status}.` })
-    setLista(l => l.filter(x => x.id !== e.id))
-  }
 
   const grupos = useMemo(() => {
     if (!lista) return []
@@ -230,7 +240,7 @@ function Validades({ empresa }) {
       <div className="card card-pad" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 260px' }}>
           <div style={{ fontWeight: 800, fontSize: 14 }}>Validades das preparações</div>
-          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Etiquetas impressas e ainda não baixadas. Ao terminar um pote, dê baixa como usada; se for para o lixo, como descartada.</div>
+          <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Etiquetas impressas e ainda não baixadas. Ao terminar um pote, leia o QR da etiqueta (botão Ler QR) e dê baixa como usada; se for para o lixo, como descartada.</div>
         </div>
         <input className="form-input" placeholder="Buscar nome ou nº da etiqueta" value={busca} onChange={e => setBusca(e.target.value)} style={{ width: 230 }} />
         <button className="btn btn-ghost btn-sm" onClick={carregar}><RefreshCw size={13} /></button>
@@ -254,8 +264,7 @@ function Validades({ empresa }) {
               </div>
               <div style={{ fontWeight: 800, color: g.cor, minWidth: 140 }}>{fmtValidade(e.validade)}</div>
               <button className="btn btn-ghost btn-sm" onClick={() => imprimirEtiquetas([e], empresa)} title="Reimprimir"><Printer size={13} /></button>
-              <button className="btn btn-ghost btn-sm" onClick={() => baixar(e, 'usada')} title="Usada (acabou)"><Check size={13} /> Usada</button>
-              <button className="btn btn-ghost btn-sm" onClick={() => baixar(e, 'descartada')} title="Descartada" style={{ color: 'var(--danger)' }}><Trash2 size={13} /> Descartar</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => onAbrir(e.numero)}>Dar baixa</button>
             </div>
           ))}
         </div>

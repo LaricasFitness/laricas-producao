@@ -25,13 +25,16 @@ function temPermissao(abas, pageId) {
     Object.entries(PERM_MAP).some(([old,novo]) => novo===pageId && abas.includes(old))
 }
 
+// Link do QR Code da etiqueta de validade (?etiqueta=123): abre Produção › Etiquetas, também depois do login
+const etiquetaNaUrl = () => new URLSearchParams(window.location.search).has('etiqueta')
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
   })
-  const [page, setPage] = useState('estoque')
+  const [page, setPage] = useState(() => etiquetaNaUrl() ? 'producao' : 'estoque')
   const [csvLogistica, setCsvLogistica] = useState(null)
-  const [subs, setSubs] = useState({})          // subtela escolhida em cada área
+  const [subs, setSubs] = useState(() => etiquetaNaUrl() ? { producao: 'etiquetas' } : {})  // subtela escolhida em cada área
   const [aberto, setAberto] = useState(null)    // área expandida no menu lateral
   const [menuAberto, setMenuAberto] = useState(false)  // gaveta do celular (☰)
 
@@ -58,7 +61,7 @@ export default function App() {
     return () => { window.removeEventListener('keydown', fechar); window.removeEventListener('resize', telaGrande) }
   }, [menuAberto])
 
-  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage('estoque') }} />
+  if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage(etiquetaNaUrl() ? 'producao' : 'estoque') }} />
 
   const abas = usuario.abas_permitidas || []
   const pages = MENU.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
