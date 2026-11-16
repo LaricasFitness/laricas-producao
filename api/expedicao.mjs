@@ -158,14 +158,16 @@ function resumo(d) {
 async function listarPedidos(tk, atendidos = false) {
   const sit = await situacoes(tk)
   const inicio = new Date(Date.now() - (atendidos ? DIAS_ATENDIDOS : DIAS_LISTA) * 864e5).toISOString().slice(0, 10)
+  // só até hoje (horário de Brasília): pedidos com data futura ficam de fora
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
   const lista = []
   for (let pagina = 1; pagina <= 10; pagina++) {
-    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': atendidos ? sit.atendido : sit.aberto, dataInicial: inicio })
+    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': atendidos ? sit.atendido : sit.aberto, dataInicial: inicio, dataFinal: hoje })
     const dados = (await bling(tk, `/pedidos/vendas?${q}`))?.data || []
     lista.push(...dados.map(resumo))
     if (dados.length < 100) break
   }
-  return lista
+  return lista.filter(p => !p.data || p.data.slice(0, 10) <= hoje)
 }
 
 async function detalhes(tk, ids) {
