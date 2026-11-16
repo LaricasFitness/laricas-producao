@@ -6,6 +6,7 @@ import { Plus, Pencil, Trash2, RefreshCw, Save } from 'lucide-react'
 import Usuarios from './Usuarios'
 import { SelectCategoria } from '../lib/categorias'
 import { ehSazonal, ocultoSazonal, semOcultos, categoriaOculta, definirTemporada } from '../lib/sazonal'
+import { feriados, carregarDiasSemProducao, salvarDiasSemProducao, rotuloDia, hojeISO } from '../lib/diasProducao'
 
 // Botão "mostrar sazonais fora de temporada" das listas do Admin
 function BotaoOcultos({ qtd, ver, onClick }) {
@@ -353,13 +354,17 @@ function AdminDeliveryPrevisao() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [editados, setEditados] = useState(new Set())
+  const [produtos, setProdutos] = useState([])   // produtos (rótulos) ativos, para incluir na previsão
+  const [novo, setNovo] = useState('')
 
   async function load() {
     setLoading(true)
     const [{ data }, { data: embsCat }] = await Promise.all([
       supabase.from('delivery_previsao').select('*').order('nome'),
-      supabase.from('embalagens').select('codigo, categoria'),
+      supabase.from('embalagens').select('codigo, nome, categoria, tipo, ativo'),
     ])
+    setProdutos(semOcultos((embsCat || []).filter(e => e.ativo && e.tipo === 'rotulo' && e.codigo))
+      .sort((a, b) => (a.categoria || '').localeCompare(b.categoria || '') || a.nome.localeCompare(b.nome)))
     // Sazonal fora de temporada não aparece (e não entra na previsão do Planejamento)
     const ocultos = new Set((embsCat || []).filter(ocultoSazonal).map(e => e.codigo))
     const map = {}
@@ -380,18 +385,25 @@ function AdminDeliveryPrevisao() {
     setEditados(prev => new Set([...prev, sku]))
   }
 
+  // Produto novo entra zerado e marcado como editado: grava ao salvar
+  function incluir() {
+    const p = produtos.find(e => e.codigo === novo)
+    if (!p || dados.some(r => r.sku === p.codigo)) return
+    setDados(prev => [...prev, { sku: p.codigo, nome: p.nome, seg:0,ter:0,qua:0,qui:0,sex:0,sab:0,dom:0 }])
+    setEditados(prev => new Set([...prev, p.codigo]))
+    setNovo('')
+  }
+
   async function salvar() {
     setSaving(true)
-    for (const r of dados.filter(r => editados.has(r.sku))) {
-      for (const dia of DIAS) {
-        await supabase.from('delivery_previsao')
-          .update({ quantidade: r[dia], nome: r.nome })
-          .eq('sku', r.sku).eq('dia_semana', dia)
-      }
-    }
-    setEditados(new Set())
+    const linhas = dados.filter(r => editados.has(r.sku))
+      .flatMap(r => DIAS.map(dia => ({ sku: r.sku, nome: r.nome, dia_semana: dia, quantidade: r[dia] || 0, atualizado_em: new Date().toISOString() })))
+    const { error } = await supabase.from('delivery_previsao').upsert(linhas, { onConflict: 'sku,dia_semana' })
+    if (error) alert('Não consegui salvar: ' + error.message)
+    else setEditados(new Set())
     setSaving(false)
   }
+  const foraDaPrevisao = produtos.filter(p => !dados.some(r => r.sku === p.codigo))
 
   const totalSemana = r => DIAS.reduce((s, d) => s + (r[d]||0), 0)
   const totalSexta  = r => (r.sex||0)+(r.sab||0)+(r.dom||0)+(r.seg||0)
@@ -405,7 +417,16 @@ function AdminDeliveryPrevisao() {
             Valores usados para pré-preencher a coluna Delivery no Planejamento · Sexta = Sex+Sáb+Dom+Seg acumulado
           </div>
         </div>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          {foraDaPrevisao.length > 0 && (
+            <span style={{ display:'inline-flex', gap:6 }}>
+              <select className="form-input" value={novo} onChange={e => setNovo(e.target.value)} style={{ width:230, fontSize:13 }}>
+                <option value="">Incluir produto…</option>
+                {foraDaPrevisao.map(p => <option key={p.codigo} value={p.codigo}>{p.nome} ({p.categoria})</option>)}
+              </select>
+              <button className="btn btn-ghost" onClick={incluir} disabled={!novo}><Plus size={14}/> Incluir</button>
+            </span>
+          )}
           {editados.size > 0 && (
             <span style={{ fontSize:12, color:'var(--gold)', fontWeight:700 }}>
               {editados.size} SKU(s) editado(s)
@@ -1627,6 +1648,62 @@ function SecaoSazonais() {
   )
 }
 
+// ── Dias sem produção: não são cobrados na conferência de fechamento ─────────
+function SecaoDiasSemProducao() {
+  const [lista, setLista] = useState(null)
+  const [data, setData] = useState('')
+  const [motivo, setMotivo] = useState('')
+  const [salvando, setSalvando] = useState(false)
+  const ano = new Date().getFullYear()
+  const hoje = hojeISO()
+  const proximosFeriados = Object.entries({ ...feriados(ano), ...feriados(ano + 1) })
+    .filter(([d]) => d >= hoje && new Date(d + 'T12:00').getDay() % 6 !== 0).sort().slice(0, 6)
+
+  useEffect(() => { carregarDiasSemProducao().then(setLista) }, [])
+
+  async function gravar(nova) {
+    setSalvando(true)
+    try { await salvarDiasSemProducao(nova); setLista(nova) }
+    catch (e) { alert('Não consegui salvar: ' + (e.message || e)) }
+    setSalvando(false)
+  }
+  async function adicionar() {
+    if (!data || lista.some(x => x.data === data)) return
+    await gravar([...lista, { data, motivo: motivo.trim() || 'Sem produção' }].sort((a, b) => a.data.localeCompare(b.data)))
+    setData(''); setMotivo('')
+  }
+
+  return (
+    <div style={{ border: '2px solid var(--gray-200)', borderRadius: 10, padding: 16, background: '#fafafa' }}>
+      <div style={{ fontWeight: 800, fontSize: 14 }}>📅 Dias sem produção</div>
+      <div style={{ fontSize: 13, color: 'var(--gray-500)', marginTop: 4, marginBottom: 12 }}>
+        Na conferência de fechamento da semana (último dia trabalhado, normalmente sexta) e do mês (último dia trabalhado do mês),
+        o sistema exige a produção lançada em todos os dias trabalhados do período. Fins de semana e feriados (nacionais e de São Paulo)
+        já ficam de fora. Cadastre aqui os outros dias de semana em que não houve produção (recesso, folga coletiva).
+      </div>
+      {lista === null ? <RefreshCw size={14} className="spin" /> : (
+        <>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            <input type="date" className="form-input" value={data} onChange={e => setData(e.target.value)} style={{ width: 160 }} />
+            <input className="form-input" placeholder="Motivo (ex.: recesso de fim de ano)" value={motivo} onChange={e => setMotivo(e.target.value)} style={{ flex: '1 1 220px' }} />
+            <button className="btn btn-primary btn-sm" onClick={adicionar} disabled={!data || salvando}><Plus size={13} /> Adicionar</button>
+          </div>
+          {lista.length === 0 ? <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>Nenhum dia cadastrado.</div> : lista.map(x => (
+            <div key={x.data} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderTop: '1px solid var(--gray-200)', fontSize: 13 }}>
+              <b style={{ width: 120 }}>{rotuloDia(x.data)}/{x.data.slice(0, 4)}</b>
+              <span style={{ flex: 1, color: 'var(--gray-600)' }}>{x.motivo}</span>
+              <button className="btn btn-ghost btn-sm" disabled={salvando} onClick={() => gravar(lista.filter(y => y.data !== x.data))} title="Remover"><Trash2 size={13} /></button>
+            </div>
+          ))}
+          <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 10 }}>
+            Próximos feriados já considerados: {proximosFeriados.map(([d, n]) => `${rotuloDia(d)} ${n}`).join(' · ')}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Configurações do Sistema ──────────────────────────────────────────────────
 function AdminSistema() {
   const [configs, setConfigs] = useState({})
@@ -1724,6 +1801,7 @@ function AdminSistema() {
           })}
 
           <SecaoSazonais />
+          <SecaoDiasSemProducao />
 
           {/* Percentuais de desperdício */}
           <div style={{ border:'2px solid var(--warning)', borderRadius:10, padding:16, background:'#fffbf0' }}>

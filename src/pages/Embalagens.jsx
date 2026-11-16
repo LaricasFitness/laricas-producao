@@ -6,6 +6,7 @@ import LogGeral from './LogGeral'
 import { supabase } from '../supabase'
 import { calcularEstoqueCronologico } from '../lib/data'
 import { semOcultos } from '../lib/sazonal'
+import { useBloqueioConferencia, podeLancarConferencia, AvisoProducaoPendente } from '../lib/diasProducao'
 import { RefreshCw, Save, CheckCircle, Pencil } from 'lucide-react'
 
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
@@ -22,6 +23,7 @@ export function ConferenciaEstoque({ onSalvo }) {
   const ordenarPor = campo => setOrd(o =>
     o.campo === campo ? { campo, dir: o.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'desc' })
   const [aba, setAba] = useState('conferir')
+  const bloqueio = useBloqueioConferencia() // fechamento da semana/mês exige a produção lançada
 
   async function load() {
     setLoading(true)
@@ -77,6 +79,7 @@ export function ConferenciaEstoque({ onSalvo }) {
   async function confirmarConferencia() {
     const itensComDivergencia = embs.filter(e => contagens[e.id] !== undefined && contagens[e.id] !== '')
     if (!itensComDivergencia.length) { alert('Nenhuma contagem lançada.'); return }
+    if (!(await podeLancarConferencia())) { bloqueio.recarregar(); return }
     setSaving(true)
 
     for (const emb of itensComDivergencia) {
@@ -168,6 +171,7 @@ export function ConferenciaEstoque({ onSalvo }) {
 
       {aba === 'conferir' && (
         <>
+          <AvisoProducaoPendente bloqueio={bloqueio} />
           {/* Cabeçalho */}
           <div className="card card-pad" style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
             <div>
@@ -274,7 +278,8 @@ export function ConferenciaEstoque({ onSalvo }) {
           {itensLancados.length > 0 && (
             <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
               <button className="btn btn-ghost" onClick={()=>setContagens({})}>Limpar</button>
-              <button className="btn btn-primary" onClick={confirmarConferencia} disabled={saving}>
+              <button className="btn btn-primary" onClick={confirmarConferencia} disabled={saving || bloqueio.bloqueado}
+                title={bloqueio.bloqueado ? 'Falta lançar a produção de dias da semana/mês' : undefined}>
                 {saving
                   ? <><RefreshCw size={14} className="spin"/> Salvando...</>
                   : <><CheckCircle size={14}/> Confirmar e ajustar estoque ({itensLancados.length} itens)</>

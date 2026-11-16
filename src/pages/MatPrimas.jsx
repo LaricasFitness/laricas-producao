@@ -8,6 +8,7 @@ import { perguntar } from '../lib/perguntar'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { BotaoCadeado, conferido, descreverConferencia, erroCadeado } from '../lib/cadeado'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
+import { useBloqueioConferencia, podeLancarConferencia, AvisoProducaoPendente } from '../lib/diasProducao'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -2902,6 +2903,7 @@ export function ConferenciaMP() {
   const [editQtd, setEditQtd] = useState('')
   const [dataFiltro, setDataFiltro] = useState('todas')
   const [ord, setOrd] = useState({ campo: 'data', dir: 'desc' })
+  const bloqueio = useBloqueioConferencia() // fechamento da semana/mês exige a produção lançada
 
   // Clicar no mesmo campo inverte; em outro, começa decrescente
   const ordenarPor = campo => setOrd(o =>
@@ -2930,6 +2932,7 @@ export function ConferenciaMP() {
   async function confirmar() {
     const lancados = mps.filter(m => contagens[m.id] !== undefined && contagens[m.id] !== '')
     if (!lancados.length) { alert('Nenhuma contagem lançada.'); return }
+    if (!(await podeLancarConferencia())) { bloqueio.recarregar(); return }
     setSaving(true)
     const hoje = new Date().toISOString().slice(0,10)
 
@@ -3039,6 +3042,7 @@ export function ConferenciaMP() {
 
       {aba === 'conferir' && (
         <>
+          <AvisoProducaoPendente bloqueio={bloqueio} />
           <div className="card card-pad" style={{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
             <div>
               <div style={{fontWeight:800,fontSize:14}}>🔍 Conferência de Matéria-Prima</div>
@@ -3143,7 +3147,8 @@ export function ConferenciaMP() {
           {lancados.length > 0 && (
             <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
               <button className="btn btn-ghost" onClick={()=>setContagens({})}>Limpar</button>
-              <button className="btn btn-primary" onClick={confirmar} disabled={saving}>
+              <button className="btn btn-primary" onClick={confirmar} disabled={saving || bloqueio.bloqueado}
+                title={bloqueio.bloqueado ? 'Falta lançar a produção de dias da semana/mês' : undefined}>
                 {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</>
                         : <>✓ Confirmar e ajustar estoque ({lancados.length} itens)</>}
               </button>
