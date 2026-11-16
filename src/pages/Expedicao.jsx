@@ -90,6 +90,8 @@ function LeitorCodigos({ onCodigo, onFechar }) {
 export default function Expedicao() {
   const [status, setStatus] = useState(null)         // { bling, shopify }
   const [pedidos, setPedidos] = useState([])          // Bling "Em aberto"
+  const [atendidos, setAtendidos] = useState([])      // Bling "Atendido" dos últimos dias (só para avisar)
+  const [carregandoAtendidos, setCarregandoAtendidos] = useState(false)
   const [carregando, setCarregando] = useState(false)
   const [detalhando, setDetalhando] = useState(0)     // pedidos ainda sem rastreio/CEP carregados
   const [erro, setErro] = useState('')
@@ -144,9 +146,28 @@ export default function Expedicao() {
     } catch (e) {
       setErro(e.message)
       if (e.reconectar) setStatus(s => ({ ...s, bling: false }))
+      return
     } finally {
       setCarregando(false); setDetalhando(0)
     }
+    carregarAtendidos()
+  }
+
+  // Pedidos que a nota já deixou Atendido (B2B, venda direta...): carregados em segundo plano,
+  // só para a leitura avisar que não precisam de baixa em vez de dar erro
+  async function carregarAtendidos() {
+    setCarregandoAtendidos(true)
+    try {
+      const { pedidos: lista } = await chamarExpedicao('pedidos&lista=atendidos')
+      setAtendidos(lista)
+      const ids = lista.map(p => p.id)
+      for (let i = 0; i < ids.length; i += DETALHES_POR_VEZ) {
+        const { pedidos: det } = await chamarExpedicao('detalhes', { ids: ids.slice(i, i + DETALHES_POR_VEZ) })
+        const porId = Object.fromEntries(det.filter(d => !d.erro).map(d => [d.id, d]))
+        setAtendidos(ps => ps.map(p => porId[p.id] ? { ...p, ...porId[p.id] } : p))
+      }
+    } catch { /* é só aviso: sem a lista, a leitura dá o erro de sempre */ }
+    finally { setCarregandoAtendidos(false) }
   }
 
   const porId = useMemo(() => Object.fromEntries(pedidos.map(p => [p.id, p])), [pedidos])
@@ -169,10 +190,20 @@ export default function Expedicao() {
     const r = acharPedido(codigo, pedidos)
     if (r.tipo === 'ok') return marcar(r.pedido, r.por)
     if (r.tipo === 'varios') { bipe(true); setEscolher(r.pedidos); return }
+    // Já Atendido no Bling (a nota fecha o pedido em B2B, venda direta etc., ou já foi baixado)
+    const a = acharPedido(codigo, atendidos)
+    if (a.tipo !== 'nada') {
+      const ps = a.tipo === 'ok' ? [a.pedido] : a.pedidos
+      bipe('aviso')
+      setAviso({ tipo: 'warning', texto: `${ps.length > 1 ? 'Pedidos' : 'Pedido'} ${ps.map(p => `${p.numero} · ${p.cliente}`).join(' / ')} já ${ps.length > 1 ? 'estão' : 'está'} Atendido no Bling. Não precisa de baixa.` })
+      return
+    }
     bipe(false)
     setAviso({ tipo: 'danger', texto: detalhando
       ? `"${codigo}" ainda não apareceu: os rastreios estão carregando. Leia de novo em instantes.`
-      : `"${codigo}" não é de nenhum pedido em aberto no Bling (já foi baixado, ou é de outra etiqueta).` })
+      : carregandoAtendidos
+        ? `"${codigo}" não é de nenhum pedido em aberto. Os pedidos já atendidos ainda estão carregando: leia de novo em instantes.`
+        : `"${codigo}" não é de nenhum pedido em aberto no Bling, nem de um atendido nos últimos dias (confira se é o código da etiqueta de envio).` })
   }
 
   async function darBaixa() {
@@ -193,6 +224,7 @@ export default function Expedicao() {
     }
     const feitos = new Set(ok.map(r => r.bling_id))
     setLidos(ls => ls.filter(id => !feitos.has(id)))
+    setAtendidos(as => [...pedidos.filter(p => feitos.has(p.id)), ...as])   // ler de novo → "já está Atendido"
     setPedidos(ps => ps.filter(p => !feitos.has(p.id)))
     setFalhas(erros)
     setBaixando(null)

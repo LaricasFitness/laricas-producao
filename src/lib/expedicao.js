@@ -52,16 +52,17 @@ export function acharPedido(codigo, pedidos) {
 // "CORREIOS - SEDEX · AE157753677BR"
 export const envioDoPedido = p => [p.transportadora || p.servico, (p.rastreios || []).join(', ')].filter(Boolean).join(' · ')
 
-// Bipe curto: agudo = leu, grave = não achou
+// Bipe curto: agudo = leu, médio = aviso (ex.: já atendido), grave = não achou
 let audio
 export function bipe(ok = true) {
+  const aviso = ok === 'aviso'
   try {
     audio ??= new (window.AudioContext || window.webkitAudioContext)()
     const o = audio.createOscillator(), g = audio.createGain()
-    o.frequency.value = ok ? 1250 : 330
+    o.frequency.value = aviso ? 700 : ok ? 1250 : 330
     g.gain.value = 0.12
     o.connect(g); g.connect(audio.destination)
-    o.start(); o.stop(audio.currentTime + (ok ? 0.09 : 0.3))
+    o.start(); o.stop(audio.currentTime + (aviso ? 0.18 : ok ? 0.09 : 0.3))
   } catch { /* sem áudio */ }
-  navigator.vibrate?.(ok ? 60 : [80, 60, 80])
+  navigator.vibrate?.(aviso ? 150 : ok ? 60 : [80, 60, 80])
 }

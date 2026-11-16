@@ -13,6 +13,8 @@
 // GET  ?acao=conectar    abre a autorização do Bling (uma vez; o acesso se renova sozinho por 30 dias a cada uso)
 // GET  ?acao=callback    volta da autorização do Bling
 // GET  ?acao=pedidos     pedidos "Em aberto" (lista rápida)
+// GET  ?acao=pedidos&lista=atendidos   pedidos "Atendido" dos últimos dias (B2B, venda direta etc. ficam
+//                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 
@@ -25,6 +27,7 @@ const ORIGENS = [/^https:\/\/laricas-producao[\w-]*\.vercel\.app$/, /^http:\/\/l
 const BLING = 'https://api.bling.com.br/Api/v3'
 const SHOPIFY_VERSAO = '2026-07'
 const DIAS_LISTA = 45          // pedidos em aberto dos últimos 45 dias
+const DIAS_ATENDIDOS = 10      // pedidos já atendidos dos últimos 10 dias
 
 const dormir = ms => new Promise(ok => setTimeout(ok, ms))
 
@@ -152,12 +155,12 @@ function resumo(d) {
   }
 }
 
-async function listarPedidos(tk) {
-  const { aberto } = await situacoes(tk)
-  const inicio = new Date(Date.now() - DIAS_LISTA * 864e5).toISOString().slice(0, 10)
+async function listarPedidos(tk, atendidos = false) {
+  const sit = await situacoes(tk)
+  const inicio = new Date(Date.now() - (atendidos ? DIAS_ATENDIDOS : DIAS_LISTA) * 864e5).toISOString().slice(0, 10)
   const lista = []
   for (let pagina = 1; pagina <= 10; pagina++) {
-    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': aberto, dataInicial: inicio })
+    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': atendidos ? sit.atendido : sit.aberto, dataInicial: inicio })
     const dados = (await bling(tk, `/pedidos/vendas?${q}`))?.data || []
     lista.push(...dados.map(resumo))
     if (dados.length < 100) break
@@ -319,7 +322,7 @@ export default async function handler(req, res) {
       })
     }
     const tk = await tokenBling(db)
-    if (acao === 'pedidos') return res.status(200).json({ pedidos: await listarPedidos(tk) })
+    if (acao === 'pedidos') return res.status(200).json({ pedidos: await listarPedidos(tk, req.query.lista === 'atendidos') })
 
     const ids = [...new Set((req.body?.ids || []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))]
     if (acao === 'detalhes') {
