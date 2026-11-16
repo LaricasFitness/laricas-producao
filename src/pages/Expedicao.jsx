@@ -156,7 +156,13 @@ export default function Expedicao() {
     if (lidos.includes(p.id)) { bipe(false); setAviso({ tipo: 'warning', texto: `Pedido ${p.numero} já estava lido.` }); return }
     bipe(true)
     setLidos(ls => [p.id, ...ls])
-    setAviso({ tipo: 'ok', texto: `✓ Pedido ${p.numero} · ${p.cliente}${por ? ` (pelo ${por})` : ''}` })
+    setAviso({ tipo: 'ok', texto: `Lido: pedido ${p.numero} · ${p.cliente}${por ? ` (pelo ${por})` : ''}. Falta dar baixa.` })
+  }
+
+  // Tirar da leitura: o aviso verde do pedido some (nada foi baixado ainda)
+  function tirar(p) {
+    setLidos(ls => ls.filter(id => id !== p.id))
+    setAviso({ tipo: 'warning', texto: `Pedido ${p.numero} tirado da lista (não foi baixado).` })
   }
 
   function ler(codigo) {
@@ -257,7 +263,7 @@ export default function Expedicao() {
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--danger)', fontWeight: 700 }}> · sem NF</span>}
               </div>
             </div>
-            {!baixando && <button className="btn btn-ghost btn-sm" onClick={() => setLidos(ls => ls.filter(id => id !== p.id))} title="Tirar da lista"><X size={13} /></button>}
+            {!baixando && <button className="btn btn-ghost btn-sm" onClick={() => tirar(p)} title="Tirar da lista"><X size={13} /></button>}
           </div>
         ))}
         {listaLidos.length > 0 && (
