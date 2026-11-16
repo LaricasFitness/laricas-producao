@@ -15,6 +15,7 @@ export const MENU = [
       { id: 'log',          label: 'Log' },
       { id: 'historico',    label: 'Histórico' },
       { id: 'rendimentos',  label: 'Rendimentos' },
+      { id: 'etiquetas',    label: 'Etiquetas de validade' },
       { id: 'acoes',        label: 'Minhas ações' },
     ],
   },

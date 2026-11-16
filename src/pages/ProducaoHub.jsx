@@ -6,6 +6,7 @@ import Log from './Log'
 import HistoricoPlanejamento from './HistoricoPlanejamento'
 import LogGeral from './LogGeral'
 import Rendimentos from './Rendimentos'
+import Etiquetas from './Etiquetas'
 
 // sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
 export default function ProducaoHub({ onIrLogistica, sub: subMenu, onSub }) {
@@ -34,6 +35,9 @@ export default function ProducaoHub({ onIrLogistica, sub: subMenu, onSub }) {
         <button className={`tab${sub === 'rendimentos' ? ' active' : ''}`} onClick={() => setSub('rendimentos')}>
           📊 Rendimentos
         </button>
+        <button className={`tab${sub === 'etiquetas' ? ' active' : ''}`} onClick={() => setSub('etiquetas')}>
+          🏷️ Etiquetas
+        </button>
         <button className={`tab${sub === 'acoes' ? ' active' : ''}`} onClick={() => setSub('acoes')}>
           🕓 Minhas ações
         </button>
@@ -45,6 +49,7 @@ export default function ProducaoHub({ onIrLogistica, sub: subMenu, onSub }) {
       {sub === 'log'          && <Log />}
       {sub === 'historico'    && <HistoricoPlanejamento />}
       {sub === 'rendimentos'  && <Rendimentos />}
+      {sub === 'etiquetas'    && <Etiquetas />}
       {sub === 'acoes'        && <div className="card card-pad"><LogGeral /></div>}
     </>
   )
