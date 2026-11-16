@@ -37,7 +37,7 @@ O sistema tem 5 menus. Cada um é uma página com abas internas.
 | 📋 **Produção** | `ProducaoHub.jsx` | Registro, Planejamento, Análise, Log, Histórico, Rendimentos |
 | 📥 **Estoque** | `EstoqueHub.jsx` | Situação, Conferência, Compras, Preços, Consumo, Pedidos à gráfica |
 | 💰 **Custos** | `Precificacao.jsx` | Ficha de Custo, Markup e Canais, Ranking de Margem, Evolução do CMV, CMV do Mês, Custo de Preparações, Overhead, Criar Produto |
-| 🚚 **Logística** | `Logistica.jsx` | Roteiros por zona, CSVs |
+| 🚚 **Logística** | `Logistica.jsx` | Roteiros por zona, CSVs, Expedição (`Expedicao.jsx`) |
 | ⚙️ **Admin** | `Admin.jsx` | Cadastro de Embalagens, Previsão Delivery, Preparações, Composição e Embalagem, Canais, Custos Fixos, Sistema, Usuários |
 
 As abas de Estoque e Custos reutilizam componentes exportados de
@@ -48,6 +48,21 @@ O menu **Financeiro** foi removido. Os arquivos `Fin*.jsx` continuam no
 repositório mas não são importados por nada.
 
 ---
+
+## Expedição (baixa dos pedidos enviados)
+
+Logística › Expedição. O operador lê o código de barras da etiqueta de cada pacote que saiu
+(câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez pela função
+`api/expedicao.mjs`: na Shopify o pedido vira enviado (com rastreio, e-mail ao cliente opcional) e
+arquivado; no Bling passa de "Em andamento" para "Atendido". Cada baixa fica em `expedicao_envios`.
+
+- Leitura: rastreio (Correios, J&T), Data Matrix dos Correios, CEP (Lalamove), nº do pedido no Bling
+  ou na loja. Pacote sem código (motoboy) é marcado à mão na lista.
+- Acesso ao Bling: app privado (Central de Extensões › Área do integrador), OAuth com
+  `enable-jwt: 1`. Os tokens ficam em `integracao_tokens` (RLS sem política: só a função lê,
+  com a service_role). O refresh token vale 30 dias e se renova a cada uso.
+- Variáveis no Vercel: `BLING_CLIENT_ID`, `BLING_CLIENT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
+  e as da Shopify (o app precisa de `write_orders` e `write_merchant_managed_fulfillment_orders`).
 
 ## Conceitos do domínio
 

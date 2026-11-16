@@ -24,6 +24,7 @@ export const MENU = [
     subs: [
       { id: 'roteiro',   label: 'Roteiro' },
       { id: 'historico', label: 'Histórico' },
+      { id: 'expedicao', label: 'Expedição' },
     ],
   },
   {
