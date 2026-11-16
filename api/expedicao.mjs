@@ -110,13 +110,19 @@ async function bling(tk, caminho, opc = {}) {
   throw new Error('Bling: limite de requisições. Tente de novo em instantes.')
 }
 
-// IDs das situações "Em andamento" e "Atendido" do módulo de Vendas (padrão do Bling: 15 e 9)
+// IDs das situações "Em andamento" e "Atendido" do módulo de Vendas (padrão do Bling: 15 e 9).
+// Consultar as situações pede o escopo "Gerenciador de transições"; sem ele, ficam os IDs padrão.
 let SITUACOES = null
 async function situacoes(tk) {
   if (SITUACOES) return SITUACOES
-  const mods = (await bling(tk, '/situacoes/modulos'))?.data || []
-  const mod = mods.find(m => /^vendas$/i.test(m.nome?.trim())) || mods.find(m => /pedidos? de venda/i.test(m.descricao || ''))
-  const lista = mod ? (await bling(tk, `/situacoes/modulos/${mod.id}`))?.data || [] : []
+  let lista = []
+  try {
+    const mods = (await bling(tk, '/situacoes/modulos'))?.data || []
+    const mod = mods.find(m => /^vendas$/i.test(m.nome?.trim())) || mods.find(m => /pedidos? de venda/i.test(m.descricao || ''))
+    if (mod) lista = (await bling(tk, `/situacoes/modulos/${mod.id}`))?.data || []
+  } catch (e) {
+    if (e instanceof ErroConexao) throw e
+  }
   const achar = nome => lista.find(s => s.nome?.trim().toLowerCase() === nome)?.id
   SITUACOES = { andamento: achar('em andamento') ?? 15, atendido: achar('atendido') ?? 9 }
   return SITUACOES
