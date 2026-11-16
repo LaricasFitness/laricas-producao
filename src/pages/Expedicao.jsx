@@ -89,7 +89,7 @@ function LeitorCodigos({ onCodigo, onFechar }) {
 // ───────────── Tela ─────────────
 export default function Expedicao() {
   const [status, setStatus] = useState(null)         // { bling, shopify }
-  const [pedidos, setPedidos] = useState([])          // Bling "Em andamento"
+  const [pedidos, setPedidos] = useState([])          // Bling "Em aberto"
   const [carregando, setCarregando] = useState(false)
   const [detalhando, setDetalhando] = useState(0)     // pedidos ainda sem rastreio/CEP carregados
   const [erro, setErro] = useState('')
@@ -131,7 +131,7 @@ export default function Expedicao() {
     try {
       const { pedidos: lista } = await chamarExpedicao('pedidos')
       setPedidos(lista)
-      setLidos(ls => ls.filter(id => lista.some(p => p.id === id)))   // o que já saiu de "Em andamento" sai da leitura
+      setLidos(ls => ls.filter(id => lista.some(p => p.id === id)))   // o que já saiu de "Em aberto" sai da leitura
       // rastreio, CEP e transportadora vêm do pedido completo: carrega aos poucos
       const ids = lista.map(p => p.id)
       setDetalhando(ids.length)
@@ -172,7 +172,7 @@ export default function Expedicao() {
     bipe(false)
     setAviso({ tipo: 'danger', texto: detalhando
       ? `"${codigo}" ainda não apareceu: os rastreios estão carregando. Leia de novo em instantes.`
-      : `"${codigo}" não é de nenhum pedido em andamento no Bling (já foi baixado, ou é de outra etiqueta).` })
+      : `"${codigo}" não é de nenhum pedido em aberto no Bling (já foi baixado, ou é de outra etiqueta).` })
   }
 
   async function darBaixa() {
@@ -211,7 +211,7 @@ export default function Expedicao() {
     <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 560 }}>
       <div style={{ fontWeight: 800, fontSize: 15 }}>Conectar o Bling</div>
       <div style={{ fontSize: 13, color: 'var(--gray-600)' }}>
-        A expedição precisa de acesso ao Bling para ler os pedidos em andamento e marcar como atendidos.
+        A expedição precisa de acesso ao Bling para ler os pedidos em aberto e marcar como atendidos.
         A autorização é feita uma vez, no próprio Bling, por quem tem acesso de administrador.
       </div>
       {erro && <div className="alert-banner danger">{erro}</div>}
@@ -227,7 +227,7 @@ export default function Expedicao() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 800, fontSize: 15, flex: 1 }}>Ler pacotes enviados</div>
           <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-            {carregando && !pedidos.length ? 'Carregando pedidos…' : `${pedidos.length} em andamento no Bling`}
+            {carregando && !pedidos.length ? 'Carregando pedidos…' : `${pedidos.length} em aberto no Bling`}
             {detalhando > 0 && ' · carregando rastreios…'}
           </span>
           <button className="btn btn-ghost btn-sm" onClick={carregar} disabled={carregando} title="Recarregar pedidos do Bling">
@@ -286,10 +286,10 @@ export default function Expedicao() {
         )}
       </div>
 
-      {/* Em andamento, não lidos */}
+      {/* Em aberto, não lidos */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Em andamento, não lidos ({naoLidos.length})</div>
+          <div style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Em aberto, não lidos ({naoLidos.length})</div>
           <div style={{ position: 'relative' }}>
             <Search size={13} style={{ position: 'absolute', left: 8, top: 9, color: 'var(--gray-400)' }} />
             <input className="form-input" style={{ paddingLeft: 26, width: 200 }} placeholder="Buscar" value={busca} onChange={e => setBusca(e.target.value)} />

@@ -1,6 +1,6 @@
 // Vercel Function — Expedição: baixa dos pedidos enviados.
 // Para cada pedido lido na expedição: Shopify → marca como enviado (com rastreio) e arquiva;
-// Bling → muda a situação de "Em andamento" para "Atendido". Tudo fica registrado em expedicao_envios.
+// Bling → muda a situação de "Em aberto" para "Atendido". Tudo fica registrado em expedicao_envios.
 //
 // Variáveis de ambiente (Vercel › Settings › Environment Variables):
 //   BLING_CLIENT_ID, BLING_CLIENT_SECRET   app privado do Bling (Central de Extensões › Área do integrador)
@@ -12,7 +12,7 @@
 // GET  ?acao=status      Bling conectado? Shopify configurada?
 // GET  ?acao=conectar    abre a autorização do Bling (uma vez; o acesso se renova sozinho por 30 dias a cada uso)
 // GET  ?acao=callback    volta da autorização do Bling
-// GET  ?acao=pedidos     pedidos "Em andamento" (lista rápida)
+// GET  ?acao=pedidos     pedidos "Em aberto" (lista rápida)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 
@@ -24,7 +24,7 @@ export const config = { maxDuration: 60 }
 const ORIGENS = [/^https:\/\/laricas-producao[\w-]*\.vercel\.app$/, /^http:\/\/localhost(:\d+)?$/]
 const BLING = 'https://api.bling.com.br/Api/v3'
 const SHOPIFY_VERSAO = '2026-07'
-const DIAS_LISTA = 45          // pedidos em andamento dos últimos 45 dias
+const DIAS_LISTA = 45          // pedidos em aberto dos últimos 45 dias
 
 const dormir = ms => new Promise(ok => setTimeout(ok, ms))
 
@@ -110,7 +110,7 @@ async function bling(tk, caminho, opc = {}) {
   throw new Error('Bling: limite de requisições. Tente de novo em instantes.')
 }
 
-// IDs das situações "Em andamento" e "Atendido" do módulo de Vendas (padrão do Bling: 15 e 9).
+// IDs das situações "Em aberto" e "Atendido" do módulo de Vendas (padrão do Bling: 6 e 9).
 // Consultar as situações pede o escopo "Gerenciador de transições"; sem ele, ficam os IDs padrão.
 let SITUACOES = null
 async function situacoes(tk) {
@@ -124,7 +124,7 @@ async function situacoes(tk) {
     if (e instanceof ErroConexao) throw e
   }
   const achar = nome => lista.find(s => s.nome?.trim().toLowerCase() === nome)?.id
-  SITUACOES = { andamento: achar('em andamento') ?? 15, atendido: achar('atendido') ?? 9 }
+  SITUACOES = { aberto: achar('em aberto') ?? 6, atendido: achar('atendido') ?? 9 }
   return SITUACOES
 }
 
@@ -153,11 +153,11 @@ function resumo(d) {
 }
 
 async function listarPedidos(tk) {
-  const { andamento } = await situacoes(tk)
+  const { aberto } = await situacoes(tk)
   const inicio = new Date(Date.now() - DIAS_LISTA * 864e5).toISOString().slice(0, 10)
   const lista = []
   for (let pagina = 1; pagina <= 10; pagina++) {
-    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': andamento, dataInicial: inicio })
+    const q = new URLSearchParams({ pagina, limite: 100, 'idsSituacoes[]': aberto, dataInicial: inicio })
     const dados = (await bling(tk, `/pedidos/vendas?${q}`))?.data || []
     lista.push(...dados.map(resumo))
     if (dados.length < 100) break
@@ -252,7 +252,7 @@ async function baixarShopify(gql, p, notificar) {
   return o.name
 }
 
-// Um pedido: Shopify primeiro (se falhar, o pedido continua "Em andamento" no Bling e dá para tentar de novo)
+// Um pedido: Shopify primeiro (se falhar, o pedido continua "Em aberto" no Bling e dá para tentar de novo)
 async function baixarPedido(ctx, id, notificar, operador) {
   const reg = { bling_id: id, operador: operador || null, ok_bling: false, ok_shopify: null }
   try {

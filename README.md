@@ -54,7 +54,7 @@ repositório mas não são importados por nada.
 Logística › Expedição. O operador lê o código de barras da etiqueta de cada pacote que saiu
 (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez pela função
 `api/expedicao.mjs`: na Shopify o pedido vira enviado (com rastreio, e-mail ao cliente opcional) e
-arquivado; no Bling passa de "Em andamento" para "Atendido". Cada baixa fica em `expedicao_envios`.
+arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `expedicao_envios`.
 
 - Leitura: rastreio (Correios, J&T), Data Matrix dos Correios, CEP (Lalamove), nº do pedido no Bling
   ou na loja. Pacote sem código (motoboy) é marcado à mão na lista.
