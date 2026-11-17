@@ -37,7 +37,7 @@ O sistema tem 5 menus. Cada um é uma página com abas internas.
 | 📋 **Produção** | `ProducaoHub.jsx` | Registro, Planejamento, Análise, Log, Histórico, Rendimentos |
 | 📥 **Estoque** | `EstoqueHub.jsx` | Situação, Conferência, Compras, Preços, Consumo, Pedidos à gráfica |
 | 💰 **Custos** | `Precificacao.jsx` | Ficha de Custo, Markup e Canais, Ranking de Margem, Evolução do CMV, CMV do Mês, Custo de Preparações, Overhead, Criar Produto |
-| 🚚 **Logística** | `Logistica.jsx` | Roteiros por zona, CSVs, Expedição (`Expedicao.jsx`) |
+| 🚚 **Logística** | `Logistica.jsx` | Roteiros por zona, CSVs, Expedição (`Expedicao.jsx`), Delivery BV (`DeliveryBV.jsx`) |
 | ⚙️ **Admin** | `Admin.jsx` | Cadastro de Embalagens, Previsão Delivery, Preparações, Composição e Embalagem, Canais, Custos Fixos, Sistema, Usuários |
 
 As abas de Estoque e Custos reutilizam componentes exportados de
@@ -66,6 +66,22 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   com a service_role). O refresh token vale 30 dias e se renova a cada uso.
 - Variáveis no Vercel: `BLING_CLIENT_ID`, `BLING_CLIENT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
   e as da Shopify (o app precisa de `write_orders` e `write_merchant_managed_fulfillment_orders`).
+
+## Delivery BV (contagem diária do delivery)
+
+Logística › Delivery BV. Substitui a planilha "Controle Delivery" e o print no grupo. Todo fim de dia,
+depois do restock, o operador lança por SKU a **geladeira** do delivery da Bela Vista, a **armazenagem**
+(estoque da produção) e a **validade mais antiga** da armazenagem. Uma linha por (data, sku) em
+`delivery_contagens` (`delivery_contagens.sql`); lançar de novo no mesmo dia corrige.
+
+- Produtos: os SKUs de `delivery_previsao` com rótulo ativo e em temporada (Admin › Previsão delivery).
+- **Demanda a cobrir**: soma da previsão do dia seguinte até a próxima contagem. Conta-se de segunda a
+  quinta, então a de quinta cobre Sex+Sáb+Dom+Seg (como na planilha; são os mesmos dias da produção de sexta no Planejamento).
+- **Falta produzir** = demanda a cobrir − (geladeira + armazenagem), quando positivo.
+- **Valor em estoque** = quantidade × CMV direto do produto (`cmv_historico`, mês mais recente, com
+  rendimento real quando houver; sem overhead), o mesmo da Ficha do Produto.
+- Demanda e custo ficam congelados na linha da contagem: o histórico não muda quando a previsão ou o custo mudam.
+- É só controle: não debita estoque de MP/embalagem nem altera o Planejamento.
 
 ## Conceitos do domínio
 
@@ -189,6 +205,9 @@ Só o **registro de produção** (`Producao.jsx`), nunca o planejamento:
 **Custos** — `overhead_producao`, `canal_custos`, `preco_produto_canal`,
 `cmv_historico`, `produto_simulacoes`
 
+**Delivery** — `delivery_previsao` (previsão por dia da semana), `delivery_contagens`
+(contagem diária da Bela Vista)
+
 **Sistema** — `configuracoes`, `usuarios`
 
 Tabelas `fin_*` pertencem ao módulo financeiro desativado.
@@ -227,5 +246,5 @@ Supabase. Não há ferramenta de migração.
 - `MatPrimas.jsx` tem ~2.800 linhas e hospeda componentes de duas páginas
 - Conferência de embalagem lê o custo atual do cadastro, enquanto a de MP
   congela o custo na data — comparação entre meses fica distorcida
-- Estoque de produto acabado não é controlado, então o CMV é custo de
-  produção, não custo de vendas
+- Estoque de produto acabado não é controlado (a contagem do Delivery BV é só
+  acompanhamento), então o CMV é custo de produção, não custo de vendas

@@ -5,6 +5,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import JSZip from 'jszip'
 import Expedicao from './Expedicao'
+import DeliveryBV from './DeliveryBV'
 
 const PICKUP = {
   endereco: 'R. Pedroso 258 - Bela Vista São Paulo/SP 01322-010',
@@ -622,10 +623,14 @@ export default function Logistica({ csvInicial, sub, onSub }) {
           📋 Histórico
         </button>
         <button className={`tab${abaLog==='expedicao'?' active':''}`} onClick={()=>setAbaLog('expedicao')}>📦 Expedição</button>
+        <button className={`tab${abaLog==='delivery'?' active':''}`} onClick={()=>setAbaLog('delivery')}>🧊 Delivery BV</button>
       </div>
 
       {/* ── ABA EXPEDIÇÃO (baixa dos pedidos enviados no Bling e na Shopify) ── */}
       {abaLog==='expedicao' && <Expedicao />}
+
+      {/* ── ABA DELIVERY BV (contagem diária da geladeira e da armazenagem) ── */}
+      {abaLog==='delivery' && <DeliveryBV />}
 
       {/* ── ABA HISTÓRICO ── */}
       {abaLog==='historico' && (

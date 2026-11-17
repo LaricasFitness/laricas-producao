@@ -25,6 +25,7 @@ export const MENU = [
       { id: 'roteiro',   label: 'Roteiro' },
       { id: 'historico', label: 'Histórico' },
       { id: 'expedicao', label: 'Expedição' },
+      { id: 'delivery',  label: 'Delivery BV' },
     ],
   },
   {
