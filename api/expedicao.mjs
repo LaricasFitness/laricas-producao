@@ -13,6 +13,8 @@
 // GET  ?acao=conectar    abre a autorização do Bling (uma vez; o acesso se renova sozinho por 30 dias a cada uso)
 // GET  ?acao=callback    volta da autorização do Bling
 // GET  ?acao=pedidos     pedidos "Em aberto" (lista rápida)
+// GET  ?acao=diagnostico  só leitura, sem dados de cliente: naturezas de operação, logísticas e quantas NFs
+//                        dos últimos 60 dias saíram com cada natureza por loja (base das regras de NF)
 // GET  ?acao=pedidos&lista=atendidos   pedidos "Atendido" dos últimos dias (B2B, venda direta etc. ficam
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
@@ -228,6 +230,37 @@ async function notasShopify(pedidos) {
   } catch { /* sem a nota da Shopify o picking sai do mesmo jeito */ }
 }
 
+// Diagnóstico para desenhar a emissão de NF e etiquetas: só leitura e só totais (nenhum nome de cliente).
+// Cada parte pede um escopo no app do Bling; a que faltar volta com o erro, sem derrubar as outras.
+async function diagnostico(tk) {
+  const parte = async f => { try { return await f() } catch (e) { if (e instanceof ErroConexao) throw e; return { erro: e.message } } }
+  const naturezas = await parte(async () => ((await bling(tk, '/naturezas-operacoes?limite=100'))?.data || [])
+    .map(n => ({ id: n.id, descricao: n.descricao, padrao: n.padrao, situacao: n.situacao })))
+  const logisticas = await parte(async () => ((await bling(tk, '/logisticas?limite=100'))?.data || [])
+    .map(l => ({ id: l.id, descricao: l.descricao, tipoIntegracao: l.tipoIntegracao, integracaoNativa: l.integracaoNativa, situacao: l.situacao,
+      servicos: (l.servicos || []).map(s => s.descricao || s.codigo || s.id) })))
+  const notas = await parte(async () => {
+    const inicio = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10)
+    const nomesNat = Object.fromEntries((Array.isArray(naturezas) ? naturezas : []).map(n => [n.id, n.descricao]))
+    const nomesLoja = await lojas(tk)
+    const cont = {}
+    let total = 0
+    for (let pagina = 1; pagina <= 5; pagina++) {
+      const q = new URLSearchParams({ pagina, limite: 100, tipo: 1, dataEmissaoInicial: `${inicio} 00:00:00` })
+      const dados = (await bling(tk, `/nfe?${q}`))?.data || []
+      for (const nf of dados) {
+        const nat = nomesNat[nf.naturezaOperacao?.id] || `natureza ${nf.naturezaOperacao?.id ?? '?'}`
+        const loja = nomesLoja[nf.loja?.id] || (nf.loja?.id ? `loja ${nf.loja.id}` : 'sem loja')
+        const k = `${loja} → ${nat}`
+        cont[k] = (cont[k] || 0) + 1; total++
+      }
+      if (dados.length < 100) break
+    }
+    return { desde: inicio, total, porLojaENatureza: Object.fromEntries(Object.entries(cont).sort((a, b) => b[1] - a[1])) }
+  })
+  return { naturezas, logisticas, notas }
+}
+
 async function detalhes(tk, ids) {
   const saida = []
   for (let i = 0; i < ids.length; i += 3) {
@@ -395,6 +428,7 @@ export default async function handler(req, res) {
       })
     }
     const tk = await tokenBling(db)
+    if (acao === 'diagnostico') return res.status(200).json(await diagnostico(tk))
     if (acao === 'pedidos') {
       const pedidos = await listarPedidos(tk, req.query.lista === 'atendidos')
       return res.status(200).json({ pedidos, lojas: req.query.lista === 'atendidos' ? {} : await lojas(tk) })
