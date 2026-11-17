@@ -94,7 +94,10 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   mapeamento só olha o status financeiro, então não há como configurar isso no Bling. Ao abrir a Expedição,
   `acao=pedidos` recoloca em "Atendido" (só no Bling) os pedidos com baixa registrada em `expedicao_envios`
   que o Bling reabriu, exceto os cancelados na Shopify.
-- Notas do dia (Expedição › Notas do dia, só admin; `src/pages/ExpedicaoNotas.jsx`): para os pedidos do
+- Etapas (abas da Expedição, na ordem do processo): 1. Picking (gerado ao fechar o planejamento) →
+  2. Notas fiscais → 3. Etiquetas e DANFE simplificada (em construção) → 4. Baixa, no dia seguinte, pelo líder
+  de expedição. Notas e etiquetas: só admin. A aba escolhida fica guardada no aparelho.
+- Notas fiscais (Expedição › 2. Notas fiscais, só admin; `src/pages/ExpedicaoNotas.jsx`): para os pedidos do
   picking (ou números digitados) mostra a natureza que a regra pede e o motivo (`acao:'notas'`, só leitura),
   gera as notas como rascunho pendente no Bling (`rascunhoNF`) e transmite à Sefaz (`transmitirNF`) só as
   que conferem, depois do clique e da confirmação. A conferência é refeita no servidor antes de transmitir.
@@ -102,8 +105,12 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   para PJ, a do cadastro para clientes com ST); o sistema compara com a regra:
   - Shopify: pago qualquer valor → venda ao consumidor final; total R$ 0 com cupom `voucher*` → bonificação
     (R$ 0 sem voucher ou pedido não achado na Shopify: manual).
-  - Clube/Rits/Mercado Livre → consumidor final; Marketing e Bonificação → bonificação (unificada, não usar
-    "Saída em bonificação"); Reenvio → reposição de mercadoria; Laricas Experience → entrega de presente.
+  - Não levam NF: lojas Ativação (Envio e Degustação), Marketing, Bonificação/Outros e Laricas Experience.
+    Se alguém emitir uma à mão, a natureza ainda é conferida (bonificação; Experience: entrega de presente).
+  - Nas outras lojas, pedido que não leva NF (ex.: separação para evento) é marcado "Sem NF" com o motivo; a
+    marca fica no picking do dia (`expedicao_pickings.pedidos[].semNF`) e é mantida se o picking for gerado de novo.
+  - Clube/Rits/Mercado Livre → consumidor final; Reenvio → reposição de mercadoria. Bonificação é sempre
+    "BONIFICAÇÃO" (não usar "Saída em bonificação").
   - Revenda e Venda Direta → qualquer natureza de venda do cadastro do cliente (ST já configurado lá).
     Consignação é sempre manual, pelo Bling. Loja sem regra: manual.
   - Gerar a nota pela API deixa o pedido Atendido: com a nota pendente, o sistema devolve para Em aberto

@@ -19,11 +19,15 @@ export async function gerarPickingDoDia(dataProducao, numeros, geradoPor, onProg
     lojas = { ...lojas, ...(r.lojas || {}) }
     onProgresso?.(Math.min(lista.length, i + POR_CHAMADA), lista.length)
   }
+  // gerar de novo mantém o que as etapas seguintes já marcaram (ex.: "Sem NF" na etapa de notas)
+  const { data: antes } = await supabase.from('expedicao_pickings').select('pedidos').eq('data_producao', dataProducao).maybeSingle()
+  const semNF = Object.fromEntries((antes?.pedidos || []).filter(p => p.semNF).map(p => [String(p.numero), p.semNF]))
   // só o que o PDF usa
   const guardar = pedidos.map(p => ({
     id: p.id, numero: p.numero, numeroLoja: p.numeroLoja, data: p.data, cliente: p.cliente, nf: p.nf,
     transportadora: p.transportadora, servico: p.servico, cidade: p.cidade, uf: p.uf,
     loja: nomeLoja(p, lojas), itens: p.itens, obs: p.obs, obsInterna: p.obsInterna,
+    ...(semNF[String(p.numero)] ? { semNF: semNF[String(p.numero)] } : {}),
   }))
   const { error } = await supabase.from('expedicao_pickings').upsert({
     data_producao: dataProducao, pedidos: guardar, faltando,

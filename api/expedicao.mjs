@@ -361,9 +361,11 @@ function regraNatureza(loja, numeroLoja, shp) {
     return fixa(NAT.consumidor, `Shopify: pago R$ ${shp.total.toFixed(2).replace('.', ',')}${shp.cupons.length ? ` (cupom ${shp.cupons.join(', ')})` : ''}`)
   }
   if (/CLUBE|RITS|MERCADO LIVRE/.test(L)) return fixa(NAT.consumidor, `${loja}: venda ao consumidor final`)
-  if (/MARKETING|BONIFICACAO/.test(L)) return fixa(NAT.bonificacao, `${loja}: bonificação`)
+  // Lojas que não levam NF (combinado em 17/11/2026). Se alguém emitir uma à mão, a natureza ainda é conferida.
+  if (/ATIVACAO/.test(L)) return { ...fixa(NAT.bonificacao, `${loja}: não leva NF`), semNF: true }
+  if (/MARKETING|BONIFICACAO/.test(L)) return { ...fixa(NAT.bonificacao, `${loja}: não leva NF`), semNF: true }
   if (/REENVIO/.test(L)) return fixa(NAT.reposicao, 'Reenvio: reposição de mercadoria')
-  if (/EXPERIENCE/.test(L)) return fixa(NAT.presente, 'Laricas Experience: entrega de presente')
+  if (/EXPERIENCE/.test(L)) return { ...fixa(NAT.presente, `${loja}: não leva NF`), semNF: true }
   if (/REVENDA|VENDA DIRETA/.test(L))
     return { esperada: null, aceita: ehNaturezaDeVenda, motivo: `${loja}: a natureza de venda do cadastro do cliente no Bling (consignação: escolher à mão)`, manual: false }
   return { esperada: null, aceita: () => false, motivo: `${loja || 'Pedido sem loja'}: sem regra, escolha manual`, manual: true }
@@ -408,7 +410,7 @@ async function conferirNotas(tk, numeros) {
     saida.push({
       pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja,
         situacao: nomeSitPedido(d.situacao?.id, sit) },
-      regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
+      regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual, semNF: !!regra.semNF },
       nota: nota && { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) },
       confere: !!nota && !regra.manual && regra.aceita(nota.natureza),
     })
@@ -450,6 +452,7 @@ async function rascunhoNF(tk, numero) {
   const numeroLoja = String(d.numeroLoja || '')
   const shp = /^\d{10,}$/.test(numeroLoja) ? (await shopifyDosPedidos([numeroLoja]))[numeroLoja] || null : null
   const regra = regraNatureza(loja, numeroLoja, shp)
+  if (regra.semNF && !d.notaFiscal?.id) throw new Error(`Pedido ${numero}: ${regra.motivo}.`)
   if (regra.manual && !d.notaFiscal?.id) throw new Error(`Pedido ${numero}: natureza é escolha manual (${regra.motivo}). Emita pelo Bling.`)
   let nota, gerada = false
   if (d.notaFiscal?.id) nota = await lerNota(tk, d.notaFiscal.id, nomesNat)
@@ -470,7 +473,7 @@ async function rascunhoNF(tk, numero) {
   return {
     situacaoPedido: nomeSitPedido(situacao, sit),
     pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja, situacao: nomeSitPedido(situacao, sit) },
-    shopify: shp, regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
+    shopify: shp, regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual, semNF: !!regra.semNF },
     nota: { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) }, gerada,
     confere: !regra.manual && regra.aceita(nota.natureza),
   }

@@ -11,6 +11,14 @@ import NotasDoDia from './ExpedicaoNotas'
 
 const usuarioAtual = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { return '' } }
 const ehAdmin = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.perfil === 'admin' } catch { return false } }
+// Etapas do dia, na ordem do processo. Notas e etiquetas: só administradores.
+const ETAPAS = [
+  { id: 'picking', label: '1. Picking' },
+  { id: 'notas', label: '2. Notas fiscais', admin: true },
+  { id: 'etiquetas', label: '3. Etiquetas e DANFE', admin: true },
+  { id: 'baixa', label: '4. Baixa (envio)' },
+]
+const CHAVE_ETAPA = 'larc_expedicao_etapa'
 const CHAVE_LIDOS = 'expedicao_lidos'
 const POR_VEZ = 8          // pedidos por chamada de baixa
 const DETALHES_POR_VEZ = 30
@@ -109,6 +117,13 @@ export default function Expedicao() {
   const [busca, setBusca] = useState('')
   const [hoje, setHoje] = useState([])                // baixas de hoje (expedicao_envios)
   const campo = useRef(null)
+  const admin = ehAdmin()
+  const [etapa, setEtapa] = useState(() => {
+    const salva = localStorage.getItem(CHAVE_ETAPA)
+    if (ETAPAS.some(e => e.id === salva && (admin || !e.admin))) return salva
+    return admin ? 'picking' : 'baixa'
+  })
+  const irPara = id => { setEtapa(id); localStorage.setItem(CHAVE_ETAPA, id) }
 
   useEffect(() => { localStorage.setItem(CHAVE_LIDOS, JSON.stringify(lidos)) }, [lidos])
 
@@ -259,12 +274,29 @@ export default function Expedicao() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Pickings gerados ao fechar o planejamento de produção */}
-      <Pickings />
+      {/* Etapas do dia: produção fecha o picking → notas → etiquetas e DANFE → no dia seguinte, a baixa */}
+      <div className="tabs" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {ETAPAS.filter(e => admin || !e.admin).map(e => (
+          <button key={e.id} className={etapa === e.id ? 'tab active' : 'tab'} onClick={() => irPara(e.id)}>{e.label}</button>
+        ))}
+      </div>
 
-      {/* Notas fiscais dos pedidos do picking (só administradores) */}
-      {ehAdmin() && <NotasDoDia />}
+      {/* 1. Pickings gerados ao fechar o planejamento de produção */}
+      {etapa === 'picking' && <Pickings />}
 
+      {/* 2. Notas fiscais dos pedidos do picking (só administradores) */}
+      {etapa === 'notas' && admin && <NotasDoDia />}
+
+      {/* 3. Etiquetas de transporte e DANFE simplificada (só administradores) */}
+      {etapa === 'etiquetas' && admin && (
+        <div className="card card-pad" style={{ fontSize: 13, color: 'var(--gray-500)' }}>
+          <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--gray-800)', marginBottom: 6 }}>Etiquetas e DANFE simplificada</div>
+          Em construção: aqui vão sair as etiquetas de transporte e a DANFE simplificada dos pedidos do picking.
+        </div>
+      )}
+
+      {/* 4. Baixa: leitura dos pacotes que saíram */}
+      {etapa === 'baixa' && <>
       {/* Leitura */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -391,6 +423,7 @@ export default function Expedicao() {
           </div>
         </div>
       )}
+      </>}
     </div>
   )
 }
