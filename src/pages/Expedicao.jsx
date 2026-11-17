@@ -132,8 +132,9 @@ export default function Expedicao() {
   async function carregar() {
     setCarregando(true); setErro('')
     try {
-      const { pedidos: lista } = await chamarExpedicao('pedidos')
+      const { pedidos: lista, recolocados = [] } = await chamarExpedicao('pedidos')
       setPedidos(lista)
+      if (recolocados.length) setAviso({ tipo: 'ok', texto: `O Bling tinha reaberto ${recolocados.length} pedido(s) que já tiveram baixa (${recolocados.join(', ')}). Voltaram para Atendido.` })
       setLidos(ls => ls.filter(id => lista.some(p => p.id === id)))   // o que já saiu de "Em aberto" sai da leitura
       // rastreio, CEP e transportadora vêm do pedido completo: carrega aos poucos
       const ids = lista.map(p => p.id)

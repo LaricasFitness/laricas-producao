@@ -12,7 +12,8 @@
 // GET  ?acao=status      Bling conectado? Shopify configurada?
 // GET  ?acao=conectar    abre a autorização do Bling (uma vez; o acesso se renova sozinho por 30 dias a cada uso)
 // GET  ?acao=callback    volta da autorização do Bling
-// GET  ?acao=pedidos     pedidos "Em aberto" (lista rápida)
+// GET  ?acao=pedidos     pedidos "Em aberto" (lista rápida). Os que já tiveram baixa e o Bling reabriu
+//                        (reimportação da Shopify) voltam para "Atendido" e vêm em `recolocados`
 // GET  ?acao=diagnostico  só leitura, sem dados de cliente: naturezas de operação, logísticas e quantas NFs
 //                        dos últimos 60 dias saíram com cada natureza por loja (base das regras de NF)
 // GET  ?acao=pedidos&lista=atendidos   pedidos "Atendido" dos últimos dias (B2B, venda direta etc. ficam
@@ -195,6 +196,41 @@ async function listarPedidos(tk, atendidos = false) {
     if (dados.length < 100) break
   }
   return lista.filter(p => !p.data || p.data.slice(0, 10) <= hoje)
+}
+
+// Pedidos que já tiveram baixa e voltaram para "Em aberto".
+// Por quê: a integração Shopify do Bling reimporta o pedido a cada alteração na Shopify (envio marcado,
+// arquivamento, "entregue", edição) e reaplica o mapeamento "Pago → Em aberto", por cima do "Atendido".
+// Aqui eles voltam para "Atendido" (só no Bling; na Shopify nada muda) e saem da lista.
+const MAX_RECOLOCAR = 20
+async function recolocarAtendidos(tk, db, lista) {
+  if (!lista.length) return []
+  const desde = new Date(Date.now() - DIAS_LISTA * 864e5).toISOString()
+  const { data, error } = await db.from('expedicao_envios').select('bling_id')
+    .eq('ok_bling', true).gte('criado_em', desde).in('bling_id', lista.map(p => p.id))
+  if (error) return []
+  const baixados = new Set((data || []).map(r => String(r.bling_id)))
+  let alvo = lista.filter(p => baixados.has(String(p.id))).slice(0, MAX_RECOLOCAR)
+  // pedido cancelado na Shopify depois da baixa: não mexe (o Bling cuida do cancelamento)
+  const daShopify = alvo.filter(p => /^\d{10,}$/.test(p.numeroLoja || ''))
+  if (daShopify.length) {
+    try {
+      const gql = await shopify()
+      const d = await gql(`query Canc($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id cancelledAt } } }`,
+        { ids: daShopify.map(p => `gid://shopify/Order/${p.numeroLoja}`) })
+      const cancelados = new Set((d?.nodes || []).filter(o => o?.cancelledAt).map(o => o.id.split('/').pop()))
+      alvo = alvo.filter(p => !cancelados.has(p.numeroLoja))
+    } catch { alvo = alvo.filter(p => !daShopify.includes(p)) }   // sem Shopify agora: tenta na próxima
+  }
+  const sit = await situacoes(tk)
+  const feitos = []
+  for (const p of alvo) {
+    try {
+      await bling(tk, `/pedidos/vendas/${p.id}/situacoes/${sit.atendido}`, { method: 'PATCH' })
+      feitos.push(p.numero)
+    } catch (e) { if (e instanceof ErroConexao) throw e }
+  }
+  return feitos
 }
 
 // Picking: acha cada pedido pelo número no Bling (o da planilha do planejamento) e traz o pedido completo
@@ -598,8 +634,11 @@ export default async function handler(req, res) {
     const tk = await tokenBling(db)
     if (acao === 'diagnostico') return res.status(200).json(await diagnostico(tk))
     if (acao === 'pedidos') {
-      const pedidos = await listarPedidos(tk, req.query.lista === 'atendidos')
-      return res.status(200).json({ pedidos, lojas: req.query.lista === 'atendidos' ? {} : await lojas(tk) })
+      if (req.query.lista === 'atendidos') return res.status(200).json({ pedidos: await listarPedidos(tk, true), lojas: {} })
+      let pedidos = await listarPedidos(tk)
+      const recolocados = await recolocarAtendidos(tk, db, pedidos)
+      if (recolocados.length) pedidos = pedidos.filter(p => !recolocados.includes(p.numero))
+      return res.status(200).json({ pedidos, recolocados, lojas: await lojas(tk) })
     }
 
     const ids = [...new Set((req.body?.ids || []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))]
