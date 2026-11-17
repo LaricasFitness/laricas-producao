@@ -95,8 +95,16 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   `acao=pedidos` recoloca em "Atendido" (só no Bling) os pedidos com baixa registrada em `expedicao_envios`
   que o Bling reabriu, exceto os cancelados na Shopify.
 - Etapas (abas da Expedição, na ordem do processo): 1. Picking (gerado ao fechar o planejamento) →
-  2. Notas fiscais → 3. Etiquetas e DANFE simplificada (em construção) → 4. Baixa, no dia seguinte, pelo líder
-  de expedição. Notas e etiquetas: só admin. A aba escolhida fica guardada no aparelho.
+  2. Notas fiscais → 3. Etiquetas e DANFE simplificada → 4. Baixa, no dia seguinte, pelo líder de expedição.
+  Notas fiscais: só admin; o resto, a expedição toda (o Gabriel baixa o picking e o PDF de etiquetas na Expedição,
+  sem acesso ao Planejamento). A aba escolhida fica guardada no aparelho.
+- Etiquetas e DANFE (Expedição › 3, `src/pages/ExpedicaoEtiquetas.jsx` + `src/lib/documentosEnvio.js`): um PDF por dia,
+  na ordem do picking: a etiqueta de cada pedido (`GET /logisticas/etiquetas`, a que a logística já gerou no Bling)
+  e, se há nota autorizada, a DANFE simplificada (10 × 15 cm) montada pelo sistema com o XML da nota (chave com
+  Code 128, protocolo, emitente, destinatário, valor): o Bling não entrega a DANFE simplificada pela API. Só leitura
+  (`acao:'documentos'`): não gera etiqueta nem contrata frete. Etiqueta dos Correios (contrato) e do Bling Envios
+  (J&T, Jadlog) sai sozinha no Bling quando a NF é autorizada; a da Lalamove existe sem NF. Os PDFs do Bling ficam
+  no S3 com link de 1 h e bloqueiam o navegador (CORS), por isso a função baixa e devolve em base64.
 - Notas fiscais (Expedição › 2. Notas fiscais, só admin; `src/pages/ExpedicaoNotas.jsx`): para os pedidos do
   picking (ou números digitados) mostra a natureza que a regra pede e o motivo (`acao:'notas'`, só leitura),
   gera as notas como rascunho pendente no Bling (`rascunhoNF`) e transmite à Sefaz (`transmitirNF`) só as

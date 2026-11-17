@@ -4,6 +4,7 @@ import { RefreshCw, Camera, X, Check, AlertTriangle, Link2, Plus, Search } from 
 import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedicao'
 import Pickings from './ExpedicaoPickings'
 import NotasDoDia from './ExpedicaoNotas'
+import EtiquetasDoDia from './ExpedicaoEtiquetas'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
 // (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez:
@@ -11,11 +12,11 @@ import NotasDoDia from './ExpedicaoNotas'
 
 const usuarioAtual = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { return '' } }
 const ehAdmin = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.perfil === 'admin' } catch { return false } }
-// Etapas do dia, na ordem do processo. Notas e etiquetas: só administradores.
+// Etapas do dia, na ordem do processo. Notas fiscais: só administradores; o resto, a expedição toda.
 const ETAPAS = [
   { id: 'picking', label: '1. Picking' },
   { id: 'notas', label: '2. Notas fiscais', admin: true },
-  { id: 'etiquetas', label: '3. Etiquetas e DANFE', admin: true },
+  { id: 'etiquetas', label: '3. Etiquetas e DANFE' },
   { id: 'baixa', label: '4. Baixa (envio)' },
 ]
 const CHAVE_ETAPA = 'larc_expedicao_etapa'
@@ -287,13 +288,8 @@ export default function Expedicao() {
       {/* 2. Notas fiscais dos pedidos do picking (só administradores) */}
       {etapa === 'notas' && admin && <NotasDoDia />}
 
-      {/* 3. Etiquetas de transporte e DANFE simplificada (só administradores) */}
-      {etapa === 'etiquetas' && admin && (
-        <div className="card card-pad" style={{ fontSize: 13, color: 'var(--gray-500)' }}>
-          <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--gray-800)', marginBottom: 6 }}>Etiquetas e DANFE simplificada</div>
-          Em construção: aqui vão sair as etiquetas de transporte e a DANFE simplificada dos pedidos do picking.
-        </div>
-      )}
+      {/* 3. Etiquetas de transporte e DANFE simplificada do dia (só leitura) */}
+      {etapa === 'etiquetas' && <EtiquetasDoDia />}
 
       {/* 4. Baixa: leitura dos pacotes que saíram */}
       {etapa === 'baixa' && <>

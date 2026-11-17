@@ -23,6 +23,7 @@
 // POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
 //                        (natureza de escolha manual, ex. consignação: não gera, fica para o Bling)
 // POST {acao:'etiquetas', ids, formato}   só leitura, até 10: link da etiqueta que a logística já gerou
+// POST {acao:'documentos', ids}   só leitura, até 8: PDF da etiqueta (base64) + dados da DANFE simplificada
 // POST {acao:'notas', numeros}   só leitura, até 10: natureza que a regra pede + nota existente de cada pedido
 // POST {acao:'transmitirNF', numero}   transmite à Sefaz a nota pendente/rejeitada de UM pedido, só se a
 //                        natureza conferir (conferência refeita no servidor)
@@ -462,6 +463,66 @@ async function etiquetas(tk, ids, formato = 'PDF') {
   return saida
 }
 
+// Documentos de envio (só leitura), até 8 pedidos por chamada: o PDF da etiqueta que a logística já gerou
+// (em base64: o S3 do Bling não deixa o navegador baixar direto) e os dados da DANFE simplificada, tirados
+// do XML da nota autorizada. O PDF do dia é montado no navegador (src/lib/documentosEnvio.js).
+const tag = (xml, nome) => (xml.match(new RegExp(`<${nome}[^>]*>([^<]*)</${nome}>`)) || [])[1] || ''
+const bloco = (xml, nome) => (xml.match(new RegExp(`<${nome}[^>]*>([\\s\\S]*?)</${nome}>`)) || [])[1] || ''
+function dadosDanfe(xml) {
+  const ide = bloco(xml, 'ide'), emit = bloco(xml, 'emit'), dest = bloco(xml, 'dest'), prot = bloco(xml, 'infProt')
+  return {
+    chave: (xml.match(/Id="NFe(\d{44})"/) || [])[1] || tag(prot, 'chNFe'),
+    tipo: tag(ide, 'tpNF'), numero: tag(ide, 'nNF'), serie: tag(ide, 'serie'), emissao: tag(ide, 'dhEmi'),
+    protocolo: tag(prot, 'nProt'), autorizadaEm: tag(prot, 'dhRecbto'),
+    emitente: { nome: tag(emit, 'xNome'), doc: tag(emit, 'CNPJ') || tag(emit, 'CPF'), ie: tag(emit, 'IE'), uf: tag(bloco(emit, 'enderEmit'), 'UF') },
+    destinatario: { nome: tag(dest, 'xNome'), doc: tag(dest, 'CNPJ') || tag(dest, 'CPF'), ie: tag(dest, 'IE'), uf: tag(bloco(dest, 'enderDest'), 'UF') },
+    valor: tag(bloco(xml, 'ICMSTot'), 'vNF'),
+  }
+}
+async function baixar(url) {
+  const r = await fetch(url, { redirect: 'follow' })
+  if (!r.ok) throw new Error(`download ${r.status}`)
+  return Buffer.from(await r.arrayBuffer())
+}
+async function documentosEnvio(tk, ids) {
+  const saida = []
+  for (const id of ids) {
+    const item = { id, etiqueta: null, nota: null, danfe: null, avisos: [] }
+    try {
+      const d = (await bling(tk, `/pedidos/vendas/${id}`))?.data
+      if (!d) throw new Error('Pedido não encontrado no Bling.')
+      item.numero = String(d.numero)
+      item.cliente = d.contato?.nome || ''
+      item.transportadora = d.transporte?.contato?.nome || ''
+      try {
+        const q = new URLSearchParams({ formato: 'PDF' }); q.append('idsVendas[]', id)
+        const e = ((await bling(tk, '/logisticas/etiquetas?' + q))?.data || [])[0]
+        if (e?.link) item.etiqueta = (await baixar(e.link)).toString('base64')
+        else item.avisos.push('Sem etiqueta no Bling.')
+      } catch (e) {
+        if (e instanceof ErroConexao) throw e
+        item.avisos.push(/não foi encontrado/i.test(e.message) ? 'Sem etiqueta no Bling (Correios/Bling Envios: sai quando a NF é autorizada).' : 'Etiqueta: ' + e.message)
+      }
+      if (d.notaFiscal?.id) {
+        const n = (await bling(tk, `/nfe/${d.notaFiscal.id}`))?.data || {}
+        item.nota = { id: n.id, numero: n.numero, situacao: n.situacao }
+        if ([5, 6, 7].includes(n.situacao) && n.xml) {
+          try {
+            const xml = /^https?:/i.test(n.xml) ? (await baixar(n.xml)).toString('utf8') : String(n.xml)
+            item.danfe = dadosDanfe(xml)
+            if (!item.danfe.chave || !item.danfe.protocolo) { item.danfe = null; item.avisos.push('XML da nota sem chave ou protocolo.') }
+          } catch (e) { item.avisos.push('XML da nota: ' + e.message) }
+        } else if (![5, 6, 7].includes(n.situacao)) item.avisos.push(`Nota ${n.numero} não autorizada (${SITUACAO_NF[n.situacao] || n.situacao}).`)
+      }
+    } catch (e) {
+      if (e instanceof ErroConexao) throw e
+      item.erro = e.message
+    }
+    saida.push(item)
+  }
+  return saida
+}
+
 // Gera a NF de UM pedido como rascunho (pendente no Bling, NÃO transmite) e confere a natureza.
 // Se o pedido já tem NF, só confere a existente.
 async function rascunhoNF(tk, numero) {
@@ -747,6 +808,11 @@ export default async function handler(req, res) {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
       if (!ids.length || ids.length > 10) return res.status(400).json({ erro: 'Envie de 1 a 10 pedidos.' })
       return res.status(200).json({ etiquetas: await etiquetas(tk, ids, req.body?.formato === 'ZPL' ? 'ZPL' : 'PDF') })
+    }
+    if (acao === 'documentos') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      if (!ids.length || ids.length > 8) return res.status(400).json({ erro: 'Envie de 1 a 8 pedidos.' })
+      return res.status(200).json({ pedidos: await documentosEnvio(tk, ids) })
     }
     if (acao === 'notas') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
