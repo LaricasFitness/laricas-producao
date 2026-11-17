@@ -94,11 +94,33 @@ const numeroRua = p => (String(p.numero_end || '').match(/^\s*(\d+)/) || [])[1] 
 const enderecoTexto = p => [`${p.rua || ''}, ${p.numero_end || ''}`, p.complemento, p.bairro, `${p.cidade || ''}/${p.uf || ''}`, soDigitos(p.cep)]
   .filter(s => s && s.trim() && s.trim() !== ',').join(' - ')
 
+// ── Trava de custo do Google (geocode_trava.sql): no máximo 250 consultas por dia e 8.000 por mês
+// (o grátis do Google é 10.000/mês). Passou, o Google fica de fora até virar o dia/mês e vale só o OpenStreetMap.
+// Endereço já localizado fica em geocode_cache e não consulta de novo.
+const LIMITE_DIA = 250, LIMITE_MES = 8000
+let DB = null
+const db = () => (DB ??= banco())
+const hojeBR = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+let GOOGLE = { ultimoStatus: null, mensagem: '', travado: false, noDia: null, noMes: null }
+
+async function liberaGoogle() {
+  if (!process.env.GOOGLE_MAPS_API_KEY) return false
+  const { data, error } = await db().rpc('geocode_contar_google', { p_dia: hojeBR() })
+  if (error) { GOOGLE.mensagem = 'Trava do Google sem o geocode_trava.sql aplicado: Google desligado.'; return false }   // sem trava, não usa
+  const linha = Array.isArray(data) ? data[0] : data
+  GOOGLE.noDia = linha?.no_dia ?? null; GOOGLE.noMes = linha?.no_mes ?? null
+  GOOGLE.travado = !(GOOGLE.noDia <= LIMITE_DIA && GOOGLE.noMes <= LIMITE_MES)
+  return !GOOGLE.travado
+}
+
 async function porGoogle(p, num) {
+  if (!(await liberaGoogle())) return null
   const r = await fetch('https://maps.googleapis.com/maps/api/geocode/json?' + new URLSearchParams({
     address: `${p.rua}, ${num} - ${p.bairro || ''}, ${p.cidade} - ${p.uf}, ${soDigitos(p.cep)}`, region: 'br', language: 'pt-BR',
     key: process.env.GOOGLE_MAPS_API_KEY }))
   const j = await r.json().catch(() => ({}))
+  GOOGLE.ultimoStatus = j.status || `HTTP ${r.status}`
+  GOOGLE.mensagem = j.error_message || ''
   const a = (j.results || [])[0]
   if (!a) return null
   const nr = a.address_components?.find(c => c.types.includes('street_number'))?.long_name
@@ -122,14 +144,21 @@ async function geocodificar(p) {
   const num = numeroRua(p)
   if (!p.rua || !p.cidade) return { problema: 'endereço incompleto (sem rua ou cidade)' }
   if (!num) return { problema: `sem o número do prédio/casa (veio "${p.numero_end || ''}")` }
-  const chave = `${p.rua}|${num}|${p.cidade}`.toLowerCase()
+  const chave = `${p.rua}|${num}|${p.cidade}`.toLowerCase().replace(/\s+/g, ' ').trim()
   if (CACHE_GEO.has(chave)) return CACHE_GEO.get(chave)
+  try {
+    const { data } = await db().from('geocode_cache').select('lat, lng, fonte').eq('chave', chave).maybeSingle()
+    if (data) { const out = { lat: data.lat, lng: data.lng, fonte: `${data.fonte || ''} (guardado)`.trim() }; CACHE_GEO.set(chave, out); return out }
+  } catch { /* sem a tabela: segue sem guardar */ }
   let c = null
   if (process.env.GOOGLE_MAPS_API_KEY) c = await porGoogle(p, num).catch(() => null)
   if (!c) c = await porNominatim(p, num).catch(() => null)
-  const out = c || { problema: `não achei "${p.rua}, ${num}" no mapa com o número exato` }
-  CACHE_GEO.set(chave, out)
-  return out
+  if (c) {
+    try { await db().from('geocode_cache').upsert({ chave, lat: c.lat, lng: c.lng, fonte: c.fonte }) } catch { /* idem */ }
+    CACHE_GEO.set(chave, c)
+    return c
+  }
+  return { problema: `não achei "${p.rua}, ${num}" no mapa com o número exato` }   // não guarda: pode ser corrigido
 }
 
 // Telefone no formato da Lalamove: +55DDDNÚMERO
@@ -280,7 +309,14 @@ export default async function handler(req, res) {
     if (!ORIGENS.some(r => r.test(req.headers.origin || ''))) return res.status(403).json({ erro: 'Origem não autorizada' })
     const b = req.body || {}
 
-    if (b.acao === 'status') return res.status(200).json({ configurada: configurada(), ambiente: ambiente() })
+    if (b.acao === 'status') return res.status(200).json({ configurada: configurada(), ambiente: ambiente(), google: !!process.env.GOOGLE_MAPS_API_KEY })
+    // Diagnóstico do Google (1 consulta, conta na trava): a resposta do Google, sem expor a chave
+    if (b.acao === 'testeGoogle') {
+      if (!process.env.GOOGLE_MAPS_API_KEY) return res.status(200).json({ configurada: false })
+      const achou = await porGoogle(PICKUP, '258').catch(e => ({ erro: e.message }))
+      return res.status(200).json({ configurada: true, achou: !!achou?.lat, status: GOOGLE.ultimoStatus, mensagem: GOOGLE.mensagem,
+        consultasHoje: GOOGLE.noDia, consultasMes: GOOGLE.noMes, travado: GOOGLE.travado, limites: { dia: LIMITE_DIA, mes: LIMITE_MES } })
+    }
     const db = banco()
     if (b.acao === 'corridas') {
       const numeros = [...new Set((b.pedidos || []).map(String).filter(n => /^\d+$/.test(n)))].slice(0, 200)

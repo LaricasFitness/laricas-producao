@@ -142,7 +142,11 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   ou não localizada bloqueia a cotação (corrige no Bling e gera a rota de novo, ou deixa para amanhã). Endereço
   comercial (sala, cj, conjunto, andar, loja, escritório; destinatário com CNPJ/LTDA) pergunta se deixa para amanhã:
   o pedido sai da leitura e entra em `expedicao_adiamentos` (`expedicao_adiamentos.sql`, RLS sem policy), que aparece
-  no topo da Expedição na manhã seguinte até a baixa (ou "Resolvido"). A corrida fica em `lalamove_corridas` (`lalamove_corridas.sql`, RLS sem policy) e o link de acompanhamento
+  no topo da Expedição na manhã seguinte até a baixa (ou "Resolvido").
+  Trava de custo do Google (`geocode_trava.sql`): no máximo 250 consultas por dia e 8.000 por mês (o grátis é
+  10.000/mês); passou, o Google fica de fora e vale só o OpenStreetMap. Endereço localizado fica em `geocode_cache` e
+  não consulta de novo. Sem o SQL aplicado, o Google não é usado. Chave: Google Cloud › projeto "My First Project",
+  "Maps Platform API Key" restrita à Geocoding API. Diagnóstico: `POST /api/lalamove {acao:'testeGoogle'}`. A corrida fica em `lalamove_corridas` (`lalamove_corridas.sql`, RLS sem policy) e o link de acompanhamento
   vai como rastreio da Shopify na baixa. Não chama duas vezes os mesmos pedidos (3 dias). Variáveis no Vercel:
   `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET` (Partner Portal, mercado Brazil) e `LALAMOVE_AMBIENTE` (`sandbox` ou
   `producao`; em produção a corrida é cobrada).
