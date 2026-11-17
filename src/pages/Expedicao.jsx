@@ -5,6 +5,7 @@ import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedi
 import Pickings from './ExpedicaoPickings'
 import NotasDoDia from './ExpedicaoNotas'
 import EtiquetasDoDia from './ExpedicaoEtiquetas'
+import LalamoveRotas from './ExpedicaoLalamove'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
 // (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez:
@@ -362,6 +363,9 @@ export default function Expedicao() {
           </div>
         )}
       </div>
+
+      {/* Lalamove: rotas do planejamento dos pacotes lidos → chamar a corrida */}
+      <LalamoveRotas lidos={listaLidos} />
 
       {/* Em aberto, não lidos */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

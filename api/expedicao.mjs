@@ -718,7 +718,8 @@ async function baixarShopify(gql, p, notificar) {
   for (const fo of abertos.filter(f => !retirada.includes(f))) {
     const f = { lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: fo.id }], notifyCustomer: !!notificar }
     const empresa = transportadoraShopify(p)
-    if (p.rastreios.length > 1) f.trackingInfo = { company: empresa, numbers: p.rastreios }
+    if (p.lalamove) f.trackingInfo = { company: 'Lalamove', number: p.lalamove.order_id, url: p.lalamove.share_link }
+    else if (p.rastreios.length > 1) f.trackingInfo = { company: empresa, numbers: p.rastreios }
     else if (p.rastreios.length) f.trackingInfo = { company: empresa, number: p.rastreios[0] }
     else if (empresa) f.trackingInfo = { company: empresa }
     const r = (await gql(M_ENVIO, { f }))?.fulfillmentCreate
@@ -740,6 +741,15 @@ async function baixarPedido(ctx, id, notificar, operador) {
     if (!d) throw new Error('Pedido não encontrado no Bling.')
     const p = resumo(d)
     Object.assign(reg, { numero: p.numero, numero_loja: p.numeroLoja || null, cliente: p.cliente, transportadora: p.transportadora || null, rastreio: p.rastreios.join(', ') || null })
+    // Lalamove chamada pela Expedição: o link de acompanhamento vai como rastreio para a Shopify
+    if (/lalamove/i.test(p.transportadora)) {
+      const { data: c } = await ctx.db.from('lalamove_corridas').select('order_id, share_link, status')
+        .contains('pedidos', [p.numero]).order('criado_em', { ascending: false }).limit(1)
+      if (c?.[0]?.share_link && !/CANCEL|REJECT|EXPIRE/i.test(c[0].status || '')) {
+        p.lalamove = c[0]
+        reg.rastreio = c[0].share_link
+      }
+    }
     if (/^\d{6,}$/.test(p.numeroLoja)) {
       try {
         ctx.gql ??= await shopify()

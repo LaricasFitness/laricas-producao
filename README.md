@@ -133,6 +133,15 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
     (quem deixa Atendido é a baixa). O Bling numera a nota já no rascunho.
   - Escopos do app do Bling: Notas Fiscais, Emissão de NF-e, Pedidos de Venda, Gerenciar Pedidos de Venda e
     Gerenciar situações dos Pedidos de Venda (mudar escopo derruba o acesso: reconectar).
+- Lalamove (Baixa, `src/pages/ExpedicaoLalamove.jsx` + `api/lalamove.mjs`): cada pacote lido que está numa rota Lalamove
+  do planejamento (Logística › rotas, `logistica_historico.rotas[].stops`, `stop.id` = nº do pedido no Bling) mostra
+  a rota e quantos pacotes dela foram lidos. "Chamar Lalamove" faz a cotação em moto (paradas na ordem da rota,
+  coleta na R. Pedroso 258) e mostra o preço; o Gabriel confirma e a corrida é criada (API v3, assinatura HMAC,
+  `Market: BR`). Coordenadas pelo OpenStreetMap (Nominatim, 1 consulta/s; aviso quando a localização é só pelo
+  CEP). A corrida fica em `lalamove_corridas` (`lalamove_corridas.sql`, RLS sem policy) e o link de acompanhamento
+  vai como rastreio da Shopify na baixa. Não chama duas vezes os mesmos pedidos (3 dias). Variáveis no Vercel:
+  `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET` (Partner Portal, mercado Brazil) e `LALAMOVE_AMBIENTE` (`sandbox` ou
+  `producao`; em produção a corrida é cobrada).
 - Acesso ao Bling: app privado (Central de Extensões › Área do integrador), OAuth com
   `enable-jwt: 1`. Os tokens ficam em `integracao_tokens` (RLS sem política: só a função lê,
   com a service_role). O refresh token vale 30 dias e se renova a cada uso.
