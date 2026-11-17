@@ -105,7 +105,8 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   total, que deixou de ser obrigatório pela NT 2020.004): o Bling não entrega a DANFE simplificada pela API. A
   etiqueta não é reduzida: o sistema corta só as sobras em branco do modelo do Bling (Correios, Lalamove) e o
   rodapé com o logo do Melhor Envio (J&T, Jadlog); modelo desconhecido é reduzido para caber, com aviso na tela.
-  O picking sai em A4 (aba 1). Só leitura
+  O picking sai em A4 (aba 1). Pedido sem NF só sai por Lalamove ou Retirada: nas abas 2 e 3, pedido sem nota
+  com outra transportadora aparece como problema. Só leitura
   (`acao:'documentos'`): não gera etiqueta nem contrata frete. Etiqueta dos Correios (contrato) e do Bling Envios
   (J&T, Jadlog) sai sozinha no Bling quando a NF é autorizada; a da Lalamove existe sem NF. Os PDFs do Bling ficam
   no S3 com link de 1 h e bloqueiam o navegador (CORS), por isso a função baixa e devolve em base64.

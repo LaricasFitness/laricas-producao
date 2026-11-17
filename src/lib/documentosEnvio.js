@@ -170,6 +170,9 @@ export async function montarPdfEnvio(pedidos, onProgresso) {
           r.danfe = true
         }
       } catch (e) { r.avisos.push('Não consegui montar a etiqueta: ' + e.message) }
+      // sem NF só sai por Lalamove ou Retirada (Correios e Bling Envios precisam da nota)
+      if (!r.nota && r.transportadora && !/LALAMOVE|RETIRADA/i.test(r.transportadora))
+        r.avisos.push(`Sem NF, mas vai por ${r.transportadora}: sem nota só Lalamove ou Retirada.`)
       resumo.push(r)
     }
     onProgresso?.(Math.min(pedidos.length, i + POR_CHAMADA), pedidos.length)

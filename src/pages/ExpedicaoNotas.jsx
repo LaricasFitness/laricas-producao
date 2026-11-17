@@ -35,12 +35,16 @@ function estado(l) {
     return { cor: 'danger', texto: `Nota ${l.nota.numero} com "${l.nota.natureza}": não confere. Corrija no Bling e confira de novo` }
   }
   if (l.nota) return { cor: 'warning', texto: `Nota ${l.nota.numero} ${l.nota.situacaoNome.toLowerCase()}` }
+  // sem NF só sai por Lalamove ou Retirada (Correios e Bling Envios só geram etiqueta com a nota)
+  if ((l.semNF || l.regra.semNF) && !SEM_NF_OK(l.pedido?.transportadora))
+    return { cor: 'danger', texto: `Sem NF, mas vai por ${l.pedido.transportadora || 'transportadora não definida'}: sem nota só Lalamove ou Retirada` }
   if (l.semNF) return { cor: 'ok', texto: `Sem NF: ${l.semNF.motivo}${l.semNF.por ? ` (${l.semNF.por})` : ''}` }
   if (l.regra.semNF) return { cor: 'ok', texto: 'Não leva NF (loja)' }
   if (l.regra.manual) return { cor: 'warning', texto: 'Sem nota. Natureza manual: emita pelo Bling' }
   return { cor: 'neutro', texto: 'Sem nota' }
 }
 
+const SEM_NF_OK = t => /LALAMOVE|RETIRADA/i.test(t || '')
 const COR = { ok: 'var(--success, #15803d)', danger: 'var(--danger)', warning: 'var(--warning, #b45309)', neutro: 'var(--gray-500)' }
 
 export default function NotasDoDia() {

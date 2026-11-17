@@ -412,7 +412,7 @@ async function conferirNotas(tk, numeros) {
     }
     saida.push({
       pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja,
-        situacao: nomeSitPedido(d.situacao?.id, sit) },
+        situacao: nomeSitPedido(d.situacao?.id, sit), transportadora: d.transporte?.contato?.nome || '' },
       regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual, semNF: !!regra.semNF },
       nota: nota && { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) },
       confere: !!nota && !regra.manual && regra.aceita(nota.natureza),
