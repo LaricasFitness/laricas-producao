@@ -19,6 +19,7 @@
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
+// POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
 // POST {acao:'historico', parte, ...}   só leitura: NFs, pedidos, descontos e cupons do período (regras de natureza)
 // POST {acao:'picking', numeros}   pedidos completos (itens, envio, observações) pelo nº no Bling, até 20
 
@@ -268,6 +269,103 @@ async function diagnostico(tk) {
 //   parte 'pedidos'  uma página (100) de pedidos de venda do período
 //   parte 'detalhes' até 90 pedidos: desconto, NF ligada, frete, observação interna
 //   parte 'shopify'  até 50 pedidos da Shopify: cupons, desconto, tags
+// ───────────── Natureza da NF ─────────────
+// Regras combinadas com a Laricas em 17/11/2026 (ver README › Emissão de NF). A natureza não vem no
+// pedido: o Bling escolhe ao gerar a nota. O sistema gera a nota pendente, lê a natureza que o Bling
+// pôs e compara com a regra; só nota que confere pode ser transmitida.
+
+const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim()
+const NAT = {
+  consumidor: 'VENDA DE MERCADORIA PARA CONSUMIDOR FINAL',
+  venda: 'VENDA DE MERCADORIA',
+  bonificacao: 'BONIFICACAO',
+  reposicao: 'REPOSICAO DE MERCADORIA',
+  presente: 'ENTREGA DE PRESENTE - LARICAS EXPERIENCE',
+}
+// Revenda/venda direta: vale a natureza do cadastro do cliente no Bling (PJ, PF, ST...), desde que seja de venda
+const ehNaturezaDeVenda = n => /^VENDA/.test(semAcento(n)) && !/ENTREGA FUTURA/.test(semAcento(n))
+
+let NATUREZAS = null, NATUREZAS_EM = 0
+async function naturezas(tk) {
+  if (NATUREZAS && Date.now() - NATUREZAS_EM < 3600e3) return NATUREZAS
+  const d = (await bling(tk, '/naturezas-operacoes?limite=100'))?.data || []
+  NATUREZAS = Object.fromEntries(d.map(n => [n.id, n.descricao])); NATUREZAS_EM = Date.now()
+  return NATUREZAS
+}
+
+// Dados da Shopify que decidem a natureza: total pago e cupons
+async function shopifyDosPedidos(numerosLoja) {
+  const nums = [...new Set(numerosLoja.filter(n => /^\d{10,}$/.test(n || '')))]
+  if (!nums.length) return {}
+  const gql = await shopify()
+  const saida = {}
+  for (let i = 0; i < nums.length; i += 50) {
+    const d = await gql(`query Nat($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id discountCodes
+      totalPriceSet { shopMoney { amount } } totalDiscountsSet { shopMoney { amount } } } } }`,
+      { ids: nums.slice(i, i + 50).map(n => `gid://shopify/Order/${n}`) })
+    for (const o of d?.nodes || []) if (o) saida[o.id.split('/').pop()] = {
+      total: Number(o.totalPriceSet?.shopMoney?.amount || 0), desconto: Number(o.totalDiscountsSet?.shopMoney?.amount || 0), cupons: o.discountCodes || [] }
+  }
+  return saida
+}
+
+// → { esperada: 'NOME' | null, aceita: fn(nome) → bool, motivo, manual: bool }
+function regraNatureza(loja, numeroLoja, shp) {
+  const L = semAcento(loja)
+  const fixa = (nat, motivo) => ({ esperada: nat, aceita: n => semAcento(n) === nat, motivo, manual: false })
+  if (/SHOPIFY/.test(L) || /^\d{10,}$/.test(numeroLoja || '')) {
+    if (!shp) return { ...fixa(NAT.consumidor, 'Shopify: não achei o pedido na Shopify para conferir o pagamento'), manual: true }
+    const vouchers = shp.cupons.filter(c => /^voucher/i.test(c))
+    if (shp.total <= 0.009 && vouchers.length) return fixa(NAT.bonificacao, `Shopify: ${vouchers.join(', ')} cobre 100% (nada pago)`)
+    if (shp.total <= 0.009) return { ...fixa(NAT.bonificacao, 'Shopify: total R$ 0 sem cupom de voucher'), manual: true }
+    return fixa(NAT.consumidor, `Shopify: pago R$ ${shp.total.toFixed(2).replace('.', ',')}${shp.cupons.length ? ` (cupom ${shp.cupons.join(', ')})` : ''}`)
+  }
+  if (/CLUBE|RITS|MERCADO LIVRE/.test(L)) return fixa(NAT.consumidor, `${loja}: venda ao consumidor final`)
+  if (/MARKETING|BONIFICACAO/.test(L)) return fixa(NAT.bonificacao, `${loja}: bonificação`)
+  if (/REENVIO/.test(L)) return fixa(NAT.reposicao, 'Reenvio: reposição de mercadoria')
+  if (/EXPERIENCE/.test(L)) return fixa(NAT.presente, 'Laricas Experience: entrega de presente')
+  if (/REVENDA|VENDA DIRETA/.test(L))
+    return { esperada: null, aceita: ehNaturezaDeVenda, motivo: `${loja}: a natureza de venda do cadastro do cliente no Bling (consignação: escolher à mão)`, manual: false }
+  return { esperada: null, aceita: () => false, motivo: `${loja || 'Pedido sem loja'}: sem regra, escolha manual`, manual: true }
+}
+
+async function pedidoPorNumero(tk, numero) {
+  const lista = (await bling(tk, `/pedidos/vendas?${new URLSearchParams({ numero, limite: 5 })}`))?.data || []
+  const achado = lista.find(p => String(p.numero) === String(numero))
+  return achado ? (await bling(tk, `/pedidos/vendas/${achado.id}`))?.data : null
+}
+
+async function lerNota(tk, id, nomesNat) {
+  const n = (await bling(tk, `/nfe/${id}`))?.data || {}
+  return { id: n.id, numero: n.numero, serie: n.serie, situacao: n.situacao, valor: n.valorNota,
+    naturezaId: n.naturezaOperacao?.id || null, natureza: nomesNat[n.naturezaOperacao?.id] || '' }
+}
+
+// Gera a NF de UM pedido como rascunho (pendente no Bling, NÃO transmite) e confere a natureza.
+// Se o pedido já tem NF, só confere a existente.
+async function rascunhoNF(tk, numero) {
+  const d = await pedidoPorNumero(tk, numero)
+  if (!d) throw new Error(`Pedido ${numero} não encontrado no Bling.`)
+  const [nomesLoja, nomesNat] = await Promise.all([lojas(tk), naturezas(tk)])
+  const loja = nomesLoja[d.loja?.id] || ''
+  const numeroLoja = String(d.numeroLoja || '')
+  const shp = /^\d{10,}$/.test(numeroLoja) ? (await shopifyDosPedidos([numeroLoja]))[numeroLoja] || null : null
+  const regra = regraNatureza(loja, numeroLoja, shp)
+  let nota, gerada = false
+  if (d.notaFiscal?.id) nota = await lerNota(tk, d.notaFiscal.id, nomesNat)
+  else {
+    const g = await bling(tk, `/pedidos/vendas/${d.id}/gerar-nfe`, { method: 'POST' })
+    const idNota = g?.data?.idNotaFiscal || g?.idNotaFiscal
+    if (!idNota) throw new Error('O Bling não devolveu o ID da nota gerada.')
+    nota = await lerNota(tk, idNota, nomesNat); gerada = true
+  }
+  return {
+    pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja },
+    shopify: shp, regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
+    nota, gerada, confere: !regra.manual && regra.aceita(nota.natureza),
+  }
+}
+
 const dataOk = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '')
 async function historico(tk, b) {
   const pagina = Math.max(1, Math.min(200, Number(b.pagina) || 1))
@@ -500,6 +598,12 @@ export default async function handler(req, res) {
       const numeros = [...new Set((req.body?.numeros || []).map(n => String(n).trim().replace(/^#/, '')).filter(n => /^\d+$/.test(n)))]
       if (!numeros.length || numeros.length > 20) return res.status(400).json({ erro: 'Envie de 1 a 20 números de pedido.' })
       return res.status(200).json({ ...await porNumero(tk, numeros), lojas: await lojas(tk) })
+    }
+    if (acao === 'rascunhoNF') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      const numero = String(req.body?.numero || '').trim().replace(/^#/, '')
+      if (!/^\d+$/.test(numero)) return res.status(400).json({ erro: 'Informe o número do pedido.' })
+      return res.status(200).json(await rascunhoNF(tk, numero))
     }
     if (acao === 'historico') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
