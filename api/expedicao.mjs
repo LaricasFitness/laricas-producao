@@ -239,6 +239,29 @@ async function recolocarAtendidos(tk, db, lista) {
   return feitos
 }
 
+// Pedido da Shopify que ficou "Atendido" no Bling sem passar pela baixa (ex.: NF emitida direto no Bling, que
+// fecha o pedido) e ainda não foi enviado na Shopify: marca faltaShopify, e a leitura deixa dar baixa (a baixa
+// marca o envio na Shopify e não mexe no Bling, que já está Atendido).
+async function marcarFaltaShopify(db, lista) {
+  const daShopify = lista.filter(p => /^\d{10,}$/.test(p.numeroLoja || ''))
+  if (!daShopify.length) return
+  try {
+    const { data } = await db.from('expedicao_envios').select('bling_id').eq('ok_shopify', true).in('bling_id', daShopify.map(p => p.id))
+    const baixados = new Set((data || []).map(r => String(r.bling_id)))
+    const candidatos = daShopify.filter(p => !baixados.has(String(p.id)))
+    if (!candidatos.length) return
+    const gql = await shopify()
+    for (let i = 0; i < candidatos.length; i += 50) {
+      const lote = candidatos.slice(i, i + 50)
+      const d = await gql(`query Envio($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id closed cancelledAt displayFulfillmentStatus } } }`,
+        { ids: lote.map(p => `gid://shopify/Order/${p.numeroLoja}`) })
+      const falta = new Set((d?.nodes || []).filter(o => o && !o.closed && !o.cancelledAt &&
+        ['UNFULFILLED', 'PARTIALLY_FULFILLED', 'SCHEDULED', 'ON_HOLD'].includes(o.displayFulfillmentStatus)).map(o => o.id.split('/').pop()))
+      for (const p of lote) if (falta.has(p.numeroLoja)) p.faltaShopify = true
+    }
+  } catch { /* sem Shopify agora: a leitura só avisa, como antes */ }
+}
+
 // Picking: acha cada pedido pelo número no Bling (o da planilha do planejamento) e traz o pedido completo
 async function porNumero(tk, numeros) {
   const pedidos = [], faltando = []
@@ -785,7 +808,11 @@ export default async function handler(req, res) {
     const tk = await tokenBling(db)
     if (acao === 'diagnostico') return res.status(200).json(await diagnostico(tk))
     if (acao === 'pedidos') {
-      if (req.query.lista === 'atendidos') return res.status(200).json({ pedidos: await listarPedidos(tk, true), lojas: {} })
+      if (req.query.lista === 'atendidos') {
+        const pedidos = await listarPedidos(tk, true)
+        await marcarFaltaShopify(db, pedidos)
+        return res.status(200).json({ pedidos, lojas: {} })
+      }
       let pedidos = await listarPedidos(tk)
       const recolocados = await recolocarAtendidos(tk, db, pedidos)
       if (recolocados.length) pedidos = pedidos.filter(p => !recolocados.includes(p.numero))

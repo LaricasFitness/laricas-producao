@@ -174,17 +174,22 @@ export default function Expedicao() {
   }
 
   // Pedidos que a nota já deixou Atendido (B2B, venda direta...): carregados em segundo plano,
-  // só para a leitura avisar que não precisam de baixa em vez de dar erro
+  // só para a leitura avisar que não precisam de baixa em vez de dar erro.
+  // Exceção: pedido da Shopify Atendido no Bling (NF emitida direto no Bling) que ainda não foi enviado na
+  // Shopify (faltaShopify): entra na lista de baixa, que marca o envio na Shopify e não mexe no Bling.
   async function carregarAtendidos() {
     setCarregandoAtendidos(true)
     try {
       const { pedidos: lista } = await chamarExpedicao('pedidos&lista=atendidos')
-      setAtendidos(lista)
+      const falta = lista.filter(p => p.faltaShopify)
+      setAtendidos(lista.filter(p => !p.faltaShopify))
+      if (falta.length) setPedidos(ps => [...ps, ...falta.filter(f => !ps.some(p => p.id === f.id))])
       const ids = lista.map(p => p.id)
       for (let i = 0; i < ids.length; i += DETALHES_POR_VEZ) {
         const { pedidos: det } = await chamarExpedicao('detalhes', { ids: ids.slice(i, i + DETALHES_POR_VEZ) })
         const porId = Object.fromEntries(det.filter(d => !d.erro).map(d => [d.id, d]))
         setAtendidos(ps => ps.map(p => porId[p.id] ? { ...p, ...porId[p.id] } : p))
+        if (falta.length) setPedidos(ps => ps.map(p => p.faltaShopify && porId[p.id] ? { ...p, ...porId[p.id], faltaShopify: true } : p))
       }
     } catch { /* é só aviso: sem a lista, a leitura dá o erro de sempre */ }
     finally { setCarregandoAtendidos(false) }
@@ -332,6 +337,7 @@ export default function Expedicao() {
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--danger)', fontWeight: 700 }}> · sem NF</span>}
+                {p.faltaShopify && <span style={{ color: 'var(--warning, #b45309)', fontWeight: 700 }}> · Atendido no Bling, falta o envio na Shopify</span>}
               </div>
             </div>
             {!baixando && <button className="btn btn-ghost btn-sm" onClick={() => tirar(p)} title="Tirar da lista"><X size={13} /></button>}
@@ -375,6 +381,7 @@ export default function Expedicao() {
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.cidade ? ` · ${p.cidade}` : ''}
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--warning, #b45309)' }}> · sem NF</span>}
+                {p.faltaShopify && <span style={{ color: 'var(--warning, #b45309)', fontWeight: 700 }}> · Atendido no Bling, falta o envio na Shopify</span>}
               </div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => marcar(p)} title="Marcar como lido"><Plus size={14} /></button>

@@ -88,6 +88,9 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
 - Retirada na loja (Shopify, entrega `PICK_UP`): a baixa marca "pronto para retirada" (a Shopify avisa o
   cliente) e não arquiva; quando o cliente retira, marca-se "Retirado" na Shopify. Pedidos que a NF já deixa
   Atendido (B2B, venda direta, club) só geram aviso na leitura.
+  Exceção: pedido da Shopify Atendido no Bling (NF emitida direto no Bling fecha o pedido) que ainda não foi
+  enviado na Shopify e não tem baixa registrada (`faltaShopify`, conferido na Shopify): entra na lista de baixa,
+  que marca o envio na Shopify e não mexe no Bling.
 - Bling reabrindo pedidos: a integração Shopify do Bling reimporta o pedido a cada alteração na Shopify
   (envio, arquivamento, "entregue", edição) e reaplica o mapeamento de status "Pago → Em aberto"
   (Preferências › Integrações › Shopify › Integração automática de pedidos), por cima do "Atendido". O
