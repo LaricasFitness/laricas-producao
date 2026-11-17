@@ -19,6 +19,7 @@
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
+// POST {acao:'historico', parte, ...}   só leitura: NFs, pedidos, descontos e cupons do período (regras de natureza)
 // POST {acao:'picking', numeros}   pedidos completos (itens, envio, observações) pelo nº no Bling, até 20
 
 import { createClient } from '@supabase/supabase-js'
@@ -261,6 +262,61 @@ async function diagnostico(tk) {
   return { naturezas, logisticas, notas }
 }
 
+// Histórico para desenhar as regras de natureza da NF (só leitura), em partes que cabem nos 60 s da função:
+//   parte 'nfs'      uma página (100) de NFs de saída do período: natureza, loja, cliente
+//   parte 'pedidos'  uma página (100) de pedidos de venda do período
+//   parte 'detalhes' até 90 pedidos: desconto, NF ligada, frete, observação interna
+//   parte 'shopify'  até 50 pedidos da Shopify: cupons, desconto, tags
+const dataOk = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '')
+async function historico(tk, b) {
+  const pagina = Math.max(1, Math.min(200, Number(b.pagina) || 1))
+  if (b.parte === 'nfs' || b.parte === 'pedidos') {
+    if (!dataOk(b.desde) || !dataOk(b.ate)) throw new Error('Informe desde e ate (AAAA-MM-DD).')
+    const nomesLoja = await lojas(tk)
+    if (b.parte === 'nfs') {
+      const q = new URLSearchParams({ pagina, limite: 100, tipo: 1, dataEmissaoInicial: `${b.desde} 00:00:00`, dataEmissaoFinal: `${b.ate} 23:59:59` })
+      return ((await bling(tk, `/nfe?${q}`))?.data || []).map(nf => ({
+        id: nf.id, numero: nf.numero, data: nf.dataEmissao, situacao: nf.situacao, natureza: nf.naturezaOperacao?.id,
+        loja: nomesLoja[nf.loja?.id] || (nf.loja?.id ? String(nf.loja.id) : ''), numeroLoja: nf.loja?.numero || '',
+        cliente: nf.contato?.nome || '', tipoPessoa: nf.contato?.tipoPessoa || '', contribuinte: nf.contato?.contribuinte ?? null,
+        uf: nf.contato?.endereco?.uf || '',
+      }))
+    }
+    const q = new URLSearchParams({ pagina, limite: 100, dataInicial: b.desde, dataFinal: b.ate })
+    return ((await bling(tk, `/pedidos/vendas?${q}`))?.data || []).map(p => ({
+      id: p.id, numero: p.numero, numeroLoja: p.numeroLoja || '', data: p.data, total: p.total, totalProdutos: p.totalProdutos,
+      situacao: p.situacao?.id, loja: nomesLoja[p.loja?.id] || (p.loja?.id ? String(p.loja.id) : ''), cliente: p.contato?.nome || '',
+    }))
+  }
+  if (b.parte === 'detalhes') {
+    const ids = [...new Set((b.ids || []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))].slice(0, 90)
+    const saida = []
+    for (const id of ids) {
+      try {
+        const d = (await bling(tk, `/pedidos/vendas/${id}`))?.data || {}
+        saida.push({ id, nf: d.notaFiscal?.id || null, desconto: d.desconto || null, frete: d.transporte?.frete ?? null,
+          outrasDespesas: d.outrasDespesas ?? null, obsInterna: String(d.observacoesInternas || '').slice(0, 200),
+          naturezasItens: [...new Set((d.itens || []).map(i => i.naturezaOperacao?.id).filter(Boolean))] })
+      } catch (e) { if (e instanceof ErroConexao) throw e; saida.push({ id, erro: e.message }) }
+    }
+    return saida
+  }
+  if (b.parte === 'shopify') {
+    const nums = [...new Set((b.numeros || []).map(String).filter(n => /^\d{10,}$/.test(n)))].slice(0, 50)
+    if (!nums.length) return []
+    const gql = await shopify()
+    const d = await gql(`query Hist($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id name discountCodes tags sourceName
+      subtotalPriceSet { shopMoney { amount } } totalDiscountsSet { shopMoney { amount } } totalPriceSet { shopMoney { amount } } } } }`,
+      { ids: nums.map(n => `gid://shopify/Order/${n}`) })
+    return (d?.nodes || []).filter(Boolean).map(o => ({
+      numeroLoja: o.id.split('/').pop(), nome: o.name, cupons: o.discountCodes || [], tags: o.tags || [], origem: o.sourceName || '',
+      subtotal: Number(o.subtotalPriceSet?.shopMoney?.amount || 0), desconto: Number(o.totalDiscountsSet?.shopMoney?.amount || 0),
+      total: Number(o.totalPriceSet?.shopMoney?.amount || 0),
+    }))
+  }
+  throw new Error('Parte inválida.')
+}
+
 async function detalhes(tk, ids) {
   const saida = []
   for (let i = 0; i < ids.length; i += 3) {
@@ -439,6 +495,10 @@ export default async function handler(req, res) {
       const numeros = [...new Set((req.body?.numeros || []).map(n => String(n).trim().replace(/^#/, '')).filter(n => /^\d+$/.test(n)))]
       if (!numeros.length || numeros.length > 20) return res.status(400).json({ erro: 'Envie de 1 a 20 números de pedido.' })
       return res.status(200).json({ ...await porNumero(tk, numeros), lojas: await lojas(tk) })
+    }
+    if (acao === 'historico') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      return res.status(200).json({ dados: await historico(tk, req.body || {}) })
     }
     if (acao === 'detalhes') {
       if (!ids.length || ids.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 pedidos.' })
