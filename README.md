@@ -59,7 +59,7 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
 - Leitura: rastreio (Correios, J&T), Data Matrix dos Correios, CEP (Lalamove), nº do pedido no Bling
   ou na loja. Pacote sem código (motoboy) é marcado à mão na lista.
 - Picking: botão **Picking** na lista de não lidos gera o PDF de separação (`src/lib/pickingPDF.js`),
-  um bloco por pedido com itens, observações e um QR Code com o nº do pedido no Bling, que a
+  A4 deitada com 2 pedidos lado a lado (linha de corte no meio), cada um com itens, observações e um QR Code com o nº do pedido no Bling, que a
   leitura da Expedição reconhece. Respeita a busca; ordena por transportadora.
 - Retirada na loja (Shopify, entrega `PICK_UP`): a baixa marca "pronto para retirada" (a Shopify avisa o
   cliente) e não arquiva; quando o cliente retira, marca-se "Retirado" na Shopify. Pedidos que a NF já deixa
