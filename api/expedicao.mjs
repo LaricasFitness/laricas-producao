@@ -213,10 +213,14 @@ async function shopify() {
 }
 
 const Q_PEDIDO = `query Pedido($id: ID!) {
-  order(id: $id) { id name closed fulfillmentOrders(first: 10) { nodes { id status } } }
+  order(id: $id) { id name closed fulfillmentOrders(first: 10) { nodes { id status deliveryMethod { methodType } } } }
 }`
 const M_ENVIO = `mutation Envio($f: FulfillmentInput!) {
   fulfillmentCreate(fulfillment: $f) { fulfillment { id status } userErrors { field message } }
+}`
+// Retirada na loja: "pronto para retirada" (a Shopify avisa o cliente sozinha)
+const M_RETIRADA = `mutation Retirada($i: FulfillmentOrderLineItemsPreparedForPickupInput!) {
+  fulfillmentOrderLineItemsPreparedForPickup(input: $i) { userErrors { field message } }
 }`
 const M_ARQUIVAR = `mutation Arquivar($i: OrderCloseInput!) {
   orderClose(input: $i) { order { id closed } userErrors { field message } }
@@ -241,7 +245,14 @@ async function baixarShopify(gql, p, notificar) {
   const nos = o.fulfillmentOrders?.nodes || []
   const espera = nos.find(f => f.status === 'ON_HOLD')
   if (espera) throw new Error(`Shopify: pedido ${o.name} está em espera (retido). Libere na Shopify.`)
-  for (const fo of nos.filter(f => f.status === 'OPEN' || f.status === 'IN_PROGRESS')) {
+  const abertos = nos.filter(f => f.status === 'OPEN' || f.status === 'IN_PROGRESS')
+  const retirada = abertos.filter(f => f.deliveryMethod?.methodType === 'PICK_UP')
+  if (retirada.length) {
+    // o pedido fica aberto até o cliente retirar (aí marca "Retirado" na Shopify)
+    const r = (await gql(M_RETIRADA, { i: { lineItemsByFulfillmentOrder: retirada.map(f => ({ fulfillmentOrderId: f.id })) } }))?.fulfillmentOrderLineItemsPreparedForPickup
+    if (errosShopify(r)) throw new Error(`Shopify (${o.name}): ${errosShopify(r)}`)
+  }
+  for (const fo of abertos.filter(f => !retirada.includes(f))) {
     const f = { lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: fo.id }], notifyCustomer: !!notificar }
     const empresa = transportadoraShopify(p)
     if (p.rastreios.length > 1) f.trackingInfo = { company: empresa, numbers: p.rastreios }
@@ -250,11 +261,12 @@ async function baixarShopify(gql, p, notificar) {
     const r = (await gql(M_ENVIO, { f }))?.fulfillmentCreate
     if (errosShopify(r)) throw new Error(`Shopify (${o.name}): ${errosShopify(r)}`)
   }
+  if (retirada.length) return { nome: o.name, retirada: true }
   if (!o.closed) {
     const r = (await gql(M_ARQUIVAR, { i: { id: o.id } }))?.orderClose
     if (errosShopify(r)) throw new Error(`Shopify (${o.name}): ${errosShopify(r)}`)
   }
-  return o.name
+  return { nome: o.name, retirada: false }
 }
 
 // Um pedido: Shopify primeiro (se falhar, o pedido continua "Em aberto" no Bling e dá para tentar de novo)
@@ -268,9 +280,10 @@ async function baixarPedido(ctx, id, notificar, operador) {
     if (/^\d{6,}$/.test(p.numeroLoja)) {
       try {
         ctx.gql ??= await shopify()
-        const nome = await baixarShopify(ctx.gql, p, notificar)
-        reg.ok_shopify = nome ? true : null
-        if (nome) reg.pedido_shopify = nome
+        const sh = await baixarShopify(ctx.gql, p, notificar)
+        reg.ok_shopify = sh ? true : null
+        if (sh) reg.pedido_shopify = sh.nome
+        if (sh?.retirada) reg.transportadora = 'Retirada: pronto para coleta na Shopify'
       } catch (e) { reg.ok_shopify = false; throw e }
     }
     if (p.situacaoId !== ctx.sit.atendido) await bling(ctx.tk, `/pedidos/vendas/${id}/situacoes/${ctx.sit.atendido}`, { method: 'PATCH' })

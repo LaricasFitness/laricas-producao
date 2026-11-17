@@ -58,6 +58,9 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
 
 - Leitura: rastreio (Correios, J&T), Data Matrix dos Correios, CEP (Lalamove), nº do pedido no Bling
   ou na loja. Pacote sem código (motoboy) é marcado à mão na lista.
+- Retirada na loja (Shopify, entrega `PICK_UP`): a baixa marca "pronto para retirada" (a Shopify avisa o
+  cliente) e não arquiva; quando o cliente retira, marca-se "Retirado" na Shopify. Pedidos que a NF já deixa
+  Atendido (B2B, venda direta, club) só geram aviso na leitura.
 - Acesso ao Bling: app privado (Central de Extensões › Área do integrador), OAuth com
   `enable-jwt: 1`. Os tokens ficam em `integracao_tokens` (RLS sem política: só a função lê,
   com a service_role). O refresh token vale 30 dias e se renova a cada uso.
