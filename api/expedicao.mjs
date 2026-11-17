@@ -359,7 +359,16 @@ async function rascunhoNF(tk, numero) {
     if (!idNota) throw new Error('O Bling não devolveu o ID da nota gerada.')
     nota = await lerNota(tk, idNota, nomesNat); gerada = true
   }
+  // Gerar a NF pela API muda o pedido para "Atendido". Na rotina da Laricas o pedido só fica Atendido na
+  // baixa da Expedição (que também marca o envio na Shopify): com a nota ainda pendente, volta para "Em aberto".
+  const sit = await situacoes(tk)
+  let situacao = gerada ? (await bling(tk, `/pedidos/vendas/${d.id}`))?.data?.situacao?.id : d.situacao?.id
+  if (nota.situacao === 1 && situacao === sit.atendido) {
+    await bling(tk, `/pedidos/vendas/${d.id}/situacoes/${sit.aberto}`, { method: 'PATCH' })
+    situacao = sit.aberto
+  }
   return {
+    situacaoPedido: situacao === sit.aberto ? 'Em aberto' : situacao === sit.atendido ? 'Atendido' : String(situacao ?? ''),
     pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja },
     shopify: shp, regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
     nota, gerada, confere: !regra.manual && regra.aceita(nota.natureza),
