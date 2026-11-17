@@ -84,7 +84,7 @@ export function paginaDanfe(pdf, f, fb, d, pedido) {
 }
 
 // DANFE simplificada compacta, para a faixa de baixo da etiqueta (x, y = canto inferior esquerdo)
-const ALTURA_DANFE = 92
+const ALTURA_DANFE = 104
 function danfeCompacta(page, f, fb, d, x, y, w) {
   const h = ALTURA_DANFE
   page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0, 0, 0), borderWidth: 0.6 })
@@ -105,10 +105,21 @@ function danfeCompacta(page, f, fb, d, x, y, w) {
   cy -= 10.5
   texto(`Protocolo de autorização: ${d.protocolo}  ${fmtDataHora(d.autorizadaEm)}`, x + 4, cy, 6.5)
   cy -= 9.5
-  texto(`Emitente: ${d.emitente.nome}  CNPJ ${fmtDoc(d.emitente.doc)}  IE ${d.emitente.ie || '-'}  ${d.emitente.uf}`, x + 4, cy, 6.5)
+  // emitente: razão social inteira numa linha, documentos (obrigatórios) na de baixo
+  texto(`Emitente: ${d.emitente.nome}`, x + 4, cy, 6.5)
+  cy -= 9
+  texto(`CNPJ ${fmtDoc(d.emitente.doc)}  IE ${d.emitente.ie || '-'}  UF ${d.emitente.uf}`, x + 4, cy, 6.5)
   cy -= 9.5
+  // destinatário: numa linha se couber; senão nome numa linha e documentos na de baixo
   const docDest = String(d.destinatario.doc || '')
-  texto(`Destinatário: ${d.destinatario.nome}  ${docDest.length === 14 ? 'CNPJ' : 'CPF'} ${fmtDoc(docDest)}${d.destinatario.ie ? '  IE ' + d.destinatario.ie : ''}  ${d.destinatario.uf}`, x + 4, cy, 6.5)
+  const docs = `${docDest.length === 14 ? 'CNPJ' : 'CPF'} ${fmtDoc(docDest)}${d.destinatario.ie ? '  IE ' + d.destinatario.ie : ''}  UF ${d.destinatario.uf}`
+  const umaLinha = latin(`Destinatário: ${d.destinatario.nome}  ${docs}`)
+  if (f.widthOfTextAtSize(umaLinha, 6.5) <= w - 8) texto(umaLinha, x + 4, cy, 6.5)
+  else {
+    texto(`Destinatário: ${d.destinatario.nome}`, x + 4, cy, 6.5)
+    cy -= 9
+    texto(docs, x + 4, cy, 6.5)
+  }
 }
 
 // Quanto de cada modelo de etiqueta aproveitar (o resto é branco):
