@@ -115,6 +115,22 @@ async function bling(tk, caminho, opc = {}) {
 
 // IDs das situações "Em aberto" e "Atendido" do módulo de Vendas (padrão do Bling: 6 e 9).
 // Consultar as situações pede o escopo "Gerenciador de transições"; sem ele, ficam os IDs padrão.
+// Nome das lojas (canais de venda) do Bling: { id: 'Shopify Laricas' }. Pede o escopo "Canais de venda"
+// no app do Bling; sem ele, volta vazio e a tela deduz o nome (Shopify pelo nº da loja).
+let LOJAS = null, LOJAS_EM = 0
+async function lojas(tk) {
+  if (LOJAS && Date.now() - LOJAS_EM < 3600e3) return LOJAS
+  const mapa = {}
+  try {
+    const dados = (await bling(tk, '/canais-venda?limite=100'))?.data || []
+    for (const c of dados) mapa[c.id] = c.descricao || c.tipo || ''
+  } catch (e) {
+    if (e instanceof ErroConexao) throw e
+  }
+  LOJAS = mapa; LOJAS_EM = Date.now()
+  return mapa
+}
+
 let SITUACOES = null
 async function situacoes(tk) {
   if (SITUACOES) return SITUACOES
@@ -151,6 +167,7 @@ function resumo(d) {
     rastreios: [...new Set(vols.map(v => String(v.codigoRastreamento || '').replace(/\s/g, '').toUpperCase()).filter(Boolean))],
     cep: soDigitos(d.transporte?.etiqueta?.cep),
     cidade: d.transporte?.etiqueta?.municipio || '',
+    uf: d.transporte?.etiqueta?.uf || '',
     // para o picking (só vêm no pedido completo)
     itens: (d.itens || []).map(i => ({ codigo: i.codigo || '', descricao: i.descricao || '', quantidade: Number(i.quantidade) || 0 })),
     obs: d.observacoes || '',
@@ -341,7 +358,10 @@ export default async function handler(req, res) {
       })
     }
     const tk = await tokenBling(db)
-    if (acao === 'pedidos') return res.status(200).json({ pedidos: await listarPedidos(tk, req.query.lista === 'atendidos') })
+    if (acao === 'pedidos') {
+      const pedidos = await listarPedidos(tk, req.query.lista === 'atendidos')
+      return res.status(200).json({ pedidos, lojas: req.query.lista === 'atendidos' ? {} : await lojas(tk) })
+    }
 
     const ids = [...new Set((req.body?.ids || []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))]
     if (acao === 'detalhes') {

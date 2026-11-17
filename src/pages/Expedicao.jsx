@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, Camera, X, Check, AlertTriangle, Link2, Plus, Search, Printer } from 'lucide-react'
-import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedicao'
+import { chamarExpedicao, acharPedido, envioDoPedido, bipe, nomeLoja } from '../lib/expedicao'
 import { gerarPicking, ordemPicking } from '../lib/pickingPDF'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
@@ -93,6 +93,7 @@ function LeitorCodigos({ onCodigo, onFechar }) {
 export default function Expedicao() {
   const [status, setStatus] = useState(null)         // { bling, shopify }
   const [pedidos, setPedidos] = useState([])          // Bling "Em aberto"
+  const [lojas, setLojas] = useState({})              // { idLoja: nome } (canais de venda do Bling)
   const [atendidos, setAtendidos] = useState([])      // Bling "Atendido" dos últimos dias (só para avisar)
   const [carregandoAtendidos, setCarregandoAtendidos] = useState(false)
   const [carregando, setCarregando] = useState(false)
@@ -136,8 +137,8 @@ export default function Expedicao() {
   async function carregar() {
     setCarregando(true); setErro('')
     try {
-      const { pedidos: lista } = await chamarExpedicao('pedidos')
-      setPedidos(lista)
+      const { pedidos: lista, lojas: ls } = await chamarExpedicao('pedidos')
+      setPedidos(lista); setLojas(ls || {})
       setLidos(ls => ls.filter(id => lista.some(p => p.id === id)))   // o que já saiu de "Em aberto" sai da leitura
       // rastreio, CEP e transportadora vêm do pedido completo: carrega aos poucos
       const ids = lista.map(p => p.id)
@@ -249,7 +250,7 @@ export default function Expedicao() {
     if (!paraPicking.length) return
     setGerandoPicking(true)
     try {
-      await gerarPicking(paraPicking)
+      await gerarPicking(paraPicking.map(p => ({ ...p, loja: nomeLoja(p, lojas) })))
       const novo = { ...impressos }
       for (const p of paraPicking) novo[p.id] = hojeISO()
       for (const id of Object.keys(novo)) if (!porId[id]) delete novo[id]     // já saiu de "Em aberto"

@@ -25,7 +25,7 @@ const envio = p => [p.transportadora, p.servico].filter(Boolean).join(' · ')
 const observacoes = p => [p.obs, p.obsInterna && `Interna: ${p.obsInterna}`].filter(Boolean).join('\n')
 
 // Altura que o pedido ocupa numa meia folha (estimativa folgada)
-const alturaPedido = p => 36 + Math.max(1, (p.itens || []).length) * LINHA + 8 +
+const alturaPedido = p => 39 + Math.max(1, (p.itens || []).length) * LINHA + 8 +
   (observacoes(p) ? 4 + Math.ceil(observacoes(p).length / 70) * 4.2 : 0)
 
 // Desenha o pedido na faixa [x, x + w]
@@ -36,15 +36,21 @@ function desenhar(doc, p, qr, x, w) {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(22)
   doc.text(`#${p.numero}`, x, y + 8)
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90)
-  doc.text([fmtData(p.data), p.nf ? 'NF emitida' : 'sem NF'].join('  ·  '), x + 44, y + 7)
+  doc.text(doc.splitTextToSize([fmtData(p.data), p.nf ? 'NF emitida' : 'sem NF'].join('  ·  '), w - 72)[0], x + 44, y + 7)
   doc.setTextColor(0)
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12)
   doc.text(doc.splitTextToSize(p.cliente || '—', w - 28)[0], x, y + 15)
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10)
-  doc.text(doc.splitTextToSize([envio(p) || 'Sem transportadora', p.cidade].filter(Boolean).join('  ·  '), w - 28)[0], x, y + 21)
+  const local = [p.cidade, p.uf].filter(Boolean).join('/')
+  doc.text(doc.splitTextToSize([envio(p) || 'Sem transportadora', local].filter(Boolean).join('  ·  '), w - 28)[0], x, y + 21)
+  if (p.loja) {
+    doc.setFontSize(9); doc.setTextColor(90)
+    doc.text(doc.splitTextToSize(`Loja: ${p.loja}`, w - 28)[0], x, y + 26)
+    doc.setTextColor(0)
+  }
 
   autoTable(doc, {
-    startY: y + 27,
+    startY: y + 30,
     margin: { left: x, right: LARG - x - w, top: M, bottom: M },
     tableWidth: w,
     head: [['', 'Qtd', 'Produto']],

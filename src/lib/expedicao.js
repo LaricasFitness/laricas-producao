@@ -49,6 +49,13 @@ export function acharPedido(codigo, pedidos) {
   return { tipo: 'nada' }
 }
 
+// Nome da loja do pedido: do Bling (canais de venda) ou deduzido
+export function nomeLoja(p, lojas = {}) {
+  if (p.lojaId && lojas[p.lojaId]) return lojas[p.lojaId]
+  if (/^\d{10,}$/.test(p.numeroLoja || '')) return 'Shopify'
+  return p.lojaId ? String(p.lojaId) : 'Bling (sem loja)'
+}
+
 // "CORREIOS - SEDEX · AE157753677BR"
 export const envioDoPedido = p => [p.transportadora || p.servico, (p.rastreios || []).join(', ')].filter(Boolean).join(' · ')
 
