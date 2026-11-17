@@ -1,11 +1,6 @@
 import { useState } from 'react'
-import { supabase } from '../supabase'
+import { entrar as entrarNoServidor } from '../lib/sessao'
 import { RefreshCw, Eye, EyeOff } from 'lucide-react'
-
-async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
-}
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('')
@@ -18,25 +13,12 @@ export default function Login({ onLogin }) {
     if (!email.trim() || !senha.trim()) { setErro('Preencha e-mail e senha.'); return }
     setLoading(true); setErro('')
     try {
-      const hash = await sha256(senha)
-      const { data, error } = await supabase
-        .from('usuarios')
-        .select('*')
-        .eq('email', email.trim().toLowerCase())
-        .eq('senha_hash', hash)
-        .eq('ativo', true)
-        .single()
-
-      if (error || !data) { setErro('E-mail ou senha incorretos.'); setLoading(false); return }
-
-      // Atualiza último acesso
-      await supabase.from('usuarios').update({ ultimo_acesso: new Date().toISOString() }).eq('id', data.id)
-
-      // Salva sessão no sessionStorage
+      // A senha é conferida no servidor, que devolve o usuário (sem senha) e grava o cookie de sessão
+      const data = await entrarNoServidor(email.trim(), senha)
       sessionStorage.setItem('usuario', JSON.stringify(data))
       onLogin(data)
     } catch(e) {
-      setErro('Erro ao conectar. Tente novamente.')
+      setErro(/incorret/i.test(e.message) ? 'E-mail ou senha incorretos.' : (e.message || 'Erro ao conectar. Tente novamente.'))
     }
     setLoading(false)
   }

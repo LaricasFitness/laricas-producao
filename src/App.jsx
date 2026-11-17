@@ -6,6 +6,7 @@ import { MENU, subPadrao, rotuloSub } from './lib/menu'
 import { observarGradesFixas } from './lib/gradesMobile'
 import { carregarSazonais } from './lib/sazonal'
 import Login from './pages/Login'
+import { conferirSessao, vigiarSessao, sair as sairDaSessao } from './lib/sessao'
 import ProducaoHub from './pages/ProducaoHub'
 import Logistica from './pages/Logistica'
 import Admin from './pages/Admin'
@@ -51,6 +52,16 @@ export default function App() {
     carregarSazonais().finally(() => setSazonalPronto(true))
   }, [usuario])
 
+  // Sessão do servidor (cookie): confere ao abrir e volta ao login quando qualquer /api disser que expirou
+  useEffect(() => vigiarSessao(() => { sessionStorage.removeItem('usuario'); setUsuario(null) }), [])
+  useEffect(() => {
+    if (!usuario?.id) return
+    conferirSessao().then(u => {
+      if (u === null) { sessionStorage.removeItem('usuario'); setUsuario(null) }       // sem sessão: entrar de novo
+      else if (u) { sessionStorage.setItem('usuario', JSON.stringify(u)); setUsuario(u) }  // perfil/abas atualizados
+    })
+  }, [usuario?.id])
+
   // Celular: grades com colunas fixas em px ganham a classe .grade-px (ver App.css)
   useEffect(() => observarGradesFixas(), [])
 
@@ -87,7 +98,7 @@ export default function App() {
   }
 
   function irLogistica(csv) { if (!temPermissao(abas,'logistica')) return; setCsvLogistica(csv); setPage('logistica') }
-  function sair() { sessionStorage.removeItem('usuario'); setUsuario(null) }
+  function sair() { sairDaSessao(); sessionStorage.removeItem('usuario'); setUsuario(null) }
 
   return (
     <div className={`app${menuAberto ? ' menu-aberto' : ''}`}>

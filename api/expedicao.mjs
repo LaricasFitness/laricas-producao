@@ -24,6 +24,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'node:crypto'
+import { exigirSessao } from './_sessao.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -451,6 +452,10 @@ const cookie = (req, nome) => (req.headers.cookie || '').split(';').map(s => s.t
 export default async function handler(req, res) {
   const acao = req.method === 'POST' ? req.body?.acao : req.query.acao
   try {
+    // Tudo exige estar logado no sistema, menos a volta do Bling (protegida pelo state que só o
+    // "conectar", já logado, grava)
+    if (acao !== 'callback' && !(await exigirSessao(req, res))) return
+
     // Autorização do Bling (navegação normal, fora do fetch do sistema)
     if (acao === 'conectar') {
       const state = crypto.randomBytes(16).toString('hex')
@@ -470,7 +475,7 @@ export default async function handler(req, res) {
       res.writeHead(302, { Location: `${site(req)}/?expedicao=conectado` }); return res.end()
     }
 
-    // Daqui para baixo, só o próprio sistema
+    // Daqui para baixo, só o próprio sistema (além da sessão, a origem tem de ser o site)
     const origem = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : '')
     if (req.method === 'POST' ? !ORIGENS.some(r => r.test(origem)) : (origem && !ORIGENS.some(r => r.test(origem))))
       return res.status(403).json({ erro: 'Origem não autorizada' })

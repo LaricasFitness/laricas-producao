@@ -3,6 +3,7 @@
 // Variável de ambiente necessária: ANTHROPIC_API_KEY
 
 import Anthropic from '@anthropic-ai/sdk'
+import { exigirSessao } from './_sessao.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -75,6 +76,7 @@ export default async function handler(req, res) {
 
   const origem = req.headers.origin || ''
   if (origem && !ORIGENS.some(r => r.test(origem))) return res.status(403).json({ erro: 'Origem não autorizada' })
+  if (!(await exigirSessao(req, res))) return
 
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ erro: 'ANTHROPIC_API_KEY não configurada no Vercel' })
 

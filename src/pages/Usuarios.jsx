@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../supabase'
+import { adminUsuarios } from '../lib/sessao'
 import { Plus, Pencil, RefreshCw, Save, Key } from 'lucide-react'
 
 const TODAS_ABAS = [
@@ -24,11 +24,6 @@ function normalizarAbas(abas) {
     if (novo) out.add(novo)
   }
   return [...out]
-}
-
-async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 function ModalUsuario({ usuario, onClose, onSaved }) {
@@ -70,25 +65,20 @@ function ModalUsuario({ usuario, onClose, onSaved }) {
 
     setSaving(true); setErro('')
     try {
+      // O servidor grava (a tabela usuarios é fechada ao navegador) e calcula o hash da senha
       const payload = {
+        id: usuario?.id,
         nome: f.nome.trim(),
         email: f.email.trim().toLowerCase(),
         perfil: f.perfil,
         abas_permitidas: f.abas_permitidas,
         ativo: f.ativo,
       }
-      if (f.senha) payload.senha_hash = await sha256(f.senha)
-
-      let error
-      if (isNew) {
-        ({ error } = await supabase.from('usuarios').insert(payload))
-      } else {
-        ({ error } = await supabase.from('usuarios').update(payload).eq('id', usuario.id))
-      }
-      if (error) throw error
+      if (f.senha) payload.senha = f.senha
+      await adminUsuarios({ acao: 'salvar', usuario: payload })
       onSaved()
     } catch(e) {
-      setErro(e.message?.includes('duplicate') ? 'Este e-mail já está cadastrado.' : e.message)
+      setErro(e.message)
     }
     setSaving(false)
   }
@@ -181,10 +171,11 @@ function ModalSenha({ usuario, onClose, onSaved }) {
   async function salvar() {
     if (senha.length < 6) { setErro('Mínimo 6 caracteres.'); return }
     if (senha !== confirmar) { setErro('Senhas não conferem.'); return }
-    setSaving(true)
-    const hash = await sha256(senha)
-    await supabase.from('usuarios').update({ senha_hash: hash }).eq('id', usuario.id)
-    onSaved()
+    setSaving(true); setErro('')
+    try {
+      await adminUsuarios({ acao: 'senha', id: usuario.id, senha })
+      onSaved()
+    } catch (e) { setErro(e.message); setSaving(false) }
   }
 
   return (
@@ -221,11 +212,14 @@ export default function Usuarios() {
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
   const [modalSenha, setModalSenha] = useState(null)
+  const [erro, setErro] = useState('')
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('usuarios').select('*').order('nome')
-    setUsuarios(data || [])
+    try {
+      const { usuarios } = await adminUsuarios({ acao: 'listar' })
+      setUsuarios(usuarios || []); setErro('')
+    } catch (e) { setErro(e.message) }
     setLoading(false)
   }
 
@@ -243,6 +237,7 @@ export default function Usuarios() {
         </button>
       </div>
 
+      {erro && <div className="alert-banner danger">{erro}</div>}
       {loading ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : (
         <div style={{ overflowX: 'auto' }}>
           <table className="tbl">

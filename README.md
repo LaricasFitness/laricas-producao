@@ -26,6 +26,23 @@ npm run dev      # desenvolvimento
 npm run build    # produção
 ```
 
+### Login e acesso às funções (`/api`)
+
+O login é conferido no servidor (`api/sessao.mjs`): a senha vai por HTTPS, o servidor compara o
+SHA-256 com `usuarios.senha_hash` usando a chave de serviço e grava um cookie `larc_sessao`
+(HttpOnly, assinado com HMAC derivado da `SUPABASE_SERVICE_ROLE_KEY`, vale 7 dias e some ao fechar o
+navegador). O `sessionStorage.usuario` guarda só nome, perfil e abas, sem senha.
+
+- Toda rota em `api/` chama `exigirSessao()` (`api/_sessao.mjs`; arquivo com `_` não vira rota).
+  A única exceção é a volta da autorização do Bling (`?acao=callback`), protegida pelo `state`.
+- Trocar a senha ou desativar o usuário derruba as sessões dele na hora.
+- Resposta 401 com o cabeçalho `X-Sessao: expirada` faz o App voltar para a tela de login
+  (`src/lib/sessao.js`).
+- A tabela `usuarios` não tem policy (`usuarios_fechar.sql`): o cadastro de usuários
+  (Admin › Usuários) passa por `/api/sessao`, só para perfil `admin`.
+- Com `npm run dev` puro (sem as funções), o login cai no jeito antigo e só funciona enquanto a
+  tabela não estiver fechada. Para testar o login de verdade localmente, use `vercel dev`.
+
 ---
 
 ## Estrutura de menus
@@ -262,8 +279,8 @@ Supabase. Não há ferramenta de migração.
 
 ## Pontos em aberto
 
-- Políticas RLS liberam tudo para a chave anônima — o login protege a
-  interface, não o banco
+- Políticas RLS liberam tudo para a chave anônima nas demais tabelas — o login protege a
+  interface e as funções `/api`, não o banco (a tabela `usuarios` já é fechada)
 - `MatPrimas.jsx` tem ~2.800 linhas e hospeda componentes de duas páginas
 - Conferência de embalagem lê o custo atual do cadastro, enquanto a de MP
   congela o custo na data — comparação entre meses fica distorcida

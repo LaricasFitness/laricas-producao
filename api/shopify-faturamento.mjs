@@ -8,6 +8,7 @@
 // O token de acesso (vale 24 h) é pedido a cada chamada pelo client credentials grant.
 
 import { resumirPedidos } from '../src/lib/shopifyFaturamento.js'
+import { exigirSessao } from './_sessao.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -67,6 +68,7 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ erro: 'Método não permitido' })
   const origem = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : '')
   if (origem && !ORIGENS.some(r => r.test(origem))) return res.status(403).json({ erro: 'Origem não autorizada' })
+  if (!(await exigirSessao(req, res))) return
   const mes = String(req.query.mes || '')
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return res.status(400).json({ erro: 'Informe o mês (AAAA-MM).' })
   const loja = process.env.SHOPIFY_LOJA
