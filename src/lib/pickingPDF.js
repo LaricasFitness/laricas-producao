@@ -148,7 +148,7 @@ function linhaDeCorte(doc) {
   doc.setLineDashPattern([], 0); doc.setDrawColor(0)
 }
 
-export async function gerarPicking(pedidos) {
+export async function gerarPicking(pedidos, nomeArquivo) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' })
   const qrs = await Promise.all(pedidos.map(p => QRCode.toDataURL(String(p.numero), { margin: 0, width: 240, errorCorrectionLevel: 'M' })))
   let metade = 0          // 0 = folha vazia, 1 = metade da esquerda usada, 2 = folha cheia
@@ -175,5 +175,5 @@ export async function gerarPicking(pedidos) {
   else { novaFolha(); desenharResumo(doc, pedidos, M, MEIO - 2 * M); linhaDeCorte(doc) }
 
   const d = new Date()
-  doc.save(`Picking_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.pdf`)
+  doc.save(nomeArquivo || `Picking_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.pdf`)
 }

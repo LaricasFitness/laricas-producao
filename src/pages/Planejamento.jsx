@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { Upload, FileText, RefreshCw, Trash2 } from 'lucide-react'
 import { registrarAcao } from '../lib/log'
+import { gerarPickingDoDia } from '../lib/picking'
 import { ocultoSazonal, skusOcultos } from '../lib/sazonal'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -964,6 +965,8 @@ export default function Planejamento({ onIrLogistica }) {
   const [diasBling, setDiasBling] = useState({})
   const [diasCorreio, setDiasCorreio] = useState({})
   const [pedidosPorDia, setPedidosPorDia] = useState({})
+  const [numerosPorDia, setNumerosPorDia] = useState({})   // { data: ['20842', ...] } nº dos pedidos na planilha (picking)
+  const [statusPicking, setStatusPicking] = useState(null) // { tipo, texto } geração do picking ao fechar o planejamento
   const [diasDelivery, setDiasDelivery] = useState({})
   const [diasOrdenados, setDiasOrdenados] = useState([])
   const [datasAtivas, setDatasAtivas] = useState([])
@@ -1040,6 +1043,7 @@ export default function Planejamento({ onIrLogistica }) {
 
       // Conta pedidos distintos por data usando o parser robusto
       const countsPorDia = {}
+      const numerosDia = {}
       const rows = parseCSVRobusto(texto)
       if (rows.length > 1) {
         const header = rows[0].map(h => h.replace(/^"|"$/g,'').trim())
@@ -1056,13 +1060,15 @@ export default function Planejamento({ onIrLogistica }) {
             if (!pedsPorDia[dataIso]) pedsPorDia[dataIso] = new Set()
             pedsPorDia[dataIso].add(numPed)
           }
-          for (const [d, set] of Object.entries(pedsPorDia)) countsPorDia[d] = set.size
+          for (const [d, set] of Object.entries(pedsPorDia)) { countsPorDia[d] = set.size; numerosDia[d] = [...set] }
         }
       }
 
       const datas = Object.keys(novosBling).sort()
       setDiasBling(novosBling)
       setPedidosPorDia(countsPorDia)
+      setNumerosPorDia(numerosDia)
+      setStatusPicking(null)
       setDiasOrdenados(datas)
       setDatasAtivas([])
       setDiasDelivery({})
@@ -1106,6 +1112,7 @@ export default function Planejamento({ onIrLogistica }) {
 
   function limpar() {
     setDiasBling({}); setDiasDelivery({}); setDiasOrdenados([]); setDatasAtivas([]); setPedidosPorDia({}); setDiasCorreio({})
+    setNumerosPorDia({}); setStatusPicking(null)
     setSugestoes([]); setItensExtras([]); setConvertidos([])
   }
 
@@ -1186,6 +1193,25 @@ export default function Planejamento({ onIrLogistica }) {
         dadosNovos: { data_producao: diaAtual, total: totalDiaAtual },
       })
     } catch(e) { console.error('Erro ao salvar planejamento:', e) }
+    gerarPicking(diaAtual)
+  }
+
+  // Ao fechar o planejamento: picking dos pedidos do dia (planilha) fica guardado na Expedição
+  async function gerarPicking(dia) {
+    const numeros = numerosPorDia[dia] || []
+    if (!numeros.length) { setStatusPicking({ tipo: 'warning', texto: 'Picking não gerado: a planilha não tem a coluna "Número pedido" para este dia.' }); return }
+    let quem = ''
+    try { quem = JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { /* sem usuário */ }
+    setStatusPicking({ tipo: 'info', texto: `Gerando o picking de ${numeros.length} pedidos (buscando no Bling)… 0/${numeros.length}` })
+    try {
+      const r = await gerarPickingDoDia(dia, numeros, quem, (feitos, total) =>
+        setStatusPicking({ tipo: 'info', texto: `Gerando o picking de ${total} pedidos (buscando no Bling)… ${feitos}/${total}` }))
+      setStatusPicking({ tipo: r.faltando.length ? 'warning' : 'ok', texto:
+        `Picking de ${headerDia(dia)} salvo na Expedição: ${r.total} pedido${r.total === 1 ? '' : 's'}.` +
+        (r.faltando.length ? ` Não achei no Bling: ${r.faltando.join(', ')}.` : '') })
+    } catch (e) {
+      setStatusPicking({ tipo: 'danger', texto: `Picking não gerado: ${e.message}${e.reconectar ? ' (conecte o Bling em Logística › Expedição)' : ''}`, tentar: dia })
+    }
   }
 
   // Delivery de um dia de produção = previsão (sexta = Sex+Sáb+Dom+Seg) − estoque da contagem do Delivery BV
@@ -1287,6 +1313,12 @@ export default function Planejamento({ onIrLogistica }) {
                 <button className="btn btn-outline" onClick={() => onIrLogistica(csvRaw)}>
                   🚚 Ir para Logística
                 </button>
+              )}
+              {statusPicking && (
+                <div className={`alert-banner ${statusPicking.tipo}`} style={{ flexBasis: '100%', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1 }}>📦 {statusPicking.texto}</span>
+                  {statusPicking.tentar && <button className="btn btn-ghost btn-sm" onClick={() => gerarPicking(statusPicking.tentar)}>Tentar de novo</button>}
+                </div>
               )}
               {diaAtual && (
                 <button className="btn btn-primary" onClick={() => gerarPDFCompleto(diasVisiveis, diasBling, diasDelivery, embalagens, diaAtual, itensExtras, previsaoDelivery)}>

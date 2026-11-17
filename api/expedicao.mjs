@@ -17,6 +17,7 @@
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
+// POST {acao:'picking', numeros}   pedidos completos (itens, envio, observações) pelo nº no Bling, até 20
 
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'node:crypto'
@@ -189,6 +190,42 @@ async function listarPedidos(tk, atendidos = false) {
     if (dados.length < 100) break
   }
   return lista.filter(p => !p.data || p.data.slice(0, 10) <= hoje)
+}
+
+// Picking: acha cada pedido pelo número no Bling (o da planilha do planejamento) e traz o pedido completo
+async function porNumero(tk, numeros) {
+  const pedidos = [], faltando = []
+  for (let i = 0; i < numeros.length; i += 3) {
+    const lote = await Promise.all(numeros.slice(i, i + 3).map(async n => {
+      try {
+        const lista = (await bling(tk, `/pedidos/vendas?${new URLSearchParams({ numero: n, limite: 5 })}`))?.data || []
+        const achado = lista.find(p => String(p.numero) === String(n))
+        if (!achado) return { n }
+        return { p: resumo((await bling(tk, `/pedidos/vendas/${achado.id}`))?.data) }
+      } catch (e) {
+        if (e instanceof ErroConexao) throw e
+        return { n }
+      }
+    }))
+    for (const r of lote) r.p ? pedidos.push(r.p) : faltando.push(String(r.n))
+  }
+  await notasShopify(pedidos)
+  return { pedidos, faltando }
+}
+
+// Obs. do cliente no picking = a nota que o cliente deixou no pedido da Shopify (o Bling não traz).
+// A observação do pedido no Bling não vai para o picking; a observação interna continua.
+async function notasShopify(pedidos) {
+  for (const p of pedidos) p.obs = ''
+  const daShopify = pedidos.filter(p => /^\d{10,}$/.test(p.numeroLoja || ''))
+  if (!daShopify.length) return
+  try {
+    const gql = await shopify()
+    const d = await gql(`query Notas($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id note } } }`,
+      { ids: daShopify.map(p => `gid://shopify/Order/${p.numeroLoja}`) })
+    const nota = Object.fromEntries((d?.nodes || []).filter(Boolean).map(o => [o.id.split('/').pop(), (o.note || '').trim()]))
+    for (const p of daShopify) p.obs = nota[p.numeroLoja] || ''
+  } catch { /* sem a nota da Shopify o picking sai do mesmo jeito */ }
 }
 
 async function detalhes(tk, ids) {
@@ -364,6 +401,11 @@ export default async function handler(req, res) {
     }
 
     const ids = [...new Set((req.body?.ids || []).map(Number).filter(n => Number.isSafeInteger(n) && n > 0))]
+    if (acao === 'picking') {
+      const numeros = [...new Set((req.body?.numeros || []).map(n => String(n).trim().replace(/^#/, '')).filter(n => /^\d+$/.test(n)))]
+      if (!numeros.length || numeros.length > 20) return res.status(400).json({ erro: 'Envie de 1 a 20 números de pedido.' })
+      return res.status(200).json({ ...await porNumero(tk, numeros), lojas: await lojas(tk) })
+    }
     if (acao === 'detalhes') {
       if (!ids.length || ids.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 pedidos.' })
       return res.status(200).json({ pedidos: await detalhes(tk, ids) })

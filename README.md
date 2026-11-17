@@ -58,9 +58,16 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
 
 - Leitura: rastreio (Correios, J&T), Data Matrix dos Correios, CEP (Lalamove), nº do pedido no Bling
   ou na loja. Pacote sem código (motoboy) é marcado à mão na lista.
-- Picking: botão **Picking** na lista de não lidos gera o PDF de separação (`src/lib/pickingPDF.js`),
-  A4 deitada com 2 pedidos lado a lado (linha de corte no meio), cada um com itens, observações e um QR Code com o nº do pedido no Bling, que a
-  leitura da Expedição reconhece. Mostra loja, cidade/UF e envio; no fim, o resumo da separação (soma de cada produto). O nome da loja vem de `/canais-venda` (escopo "Canais de venda" no app do Bling); sem o escopo, aparece "Shopify" (pelo nº da loja) ou o código da loja. Respeita a busca; ordena por transportadora.
+- Picking: gerado ao **fechar o planejamento** (Produção › Planejamento › "PDF Produção"), com os números
+  dos pedidos do dia na planilha do Bling (`src/lib/picking.js` → `acao:'picking'` busca cada pedido
+  completo no Bling) e guardado em `expedicao_pickings` (`expedicao_pickings.sql`), um por dia de produção.
+  O líder de expedição baixa o PDF em Expedição › Pickings (fica registrado quem baixou).
+  PDF (`src/lib/pickingPDF.js`): A4 deitada com 2 pedidos lado a lado (linha de corte no meio), cada um
+  com loja, cidade/UF, envio, itens, observação interna em destaque (preto e branco), "Obs. do cliente"
+  = nota do pedido na Shopify (a observação do Bling não entra) e um QR Code com o nº do pedido no
+  Bling, que a leitura da Expedição reconhece; no fim, o resumo da separação (soma de cada produto).
+  O nome da loja vem de `/canais-venda` (escopo "Canais de venda" no app do Bling); sem o escopo,
+  aparece "Shopify" (pelo nº da loja) ou o código da loja.
 - Retirada na loja (Shopify, entrega `PICK_UP`): a baixa marca "pronto para retirada" (a Shopify avisa o
   cliente) e não arquiva; quando o cliente retira, marca-se "Retirado" na Shopify. Pedidos que a NF já deixa
   Atendido (B2B, venda direta, club) só geram aviso na leitura.

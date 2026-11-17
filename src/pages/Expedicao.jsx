@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { RefreshCw, Camera, X, Check, AlertTriangle, Link2, Plus, Search, Printer } from 'lucide-react'
-import { chamarExpedicao, acharPedido, envioDoPedido, bipe, nomeLoja } from '../lib/expedicao'
-import { gerarPicking, ordemPicking } from '../lib/pickingPDF'
+import { RefreshCw, Camera, X, Check, AlertTriangle, Link2, Plus, Search } from 'lucide-react'
+import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedicao'
+import Pickings from './ExpedicaoPickings'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
 // (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez:
@@ -10,11 +10,9 @@ import { gerarPicking, ordemPicking } from '../lib/pickingPDF'
 
 const usuarioAtual = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { return '' } }
 const CHAVE_LIDOS = 'expedicao_lidos'
-const CHAVE_PICKING = 'expedicao_picking'   // { idPedido: 'AAAA-MM-DD' } picking já impresso neste aparelho
 const POR_VEZ = 8          // pedidos por chamada de baixa
 const DETALHES_POR_VEZ = 30
 
-const carregarPicking = () => { try { return JSON.parse(localStorage.getItem(CHAVE_PICKING)) || {} } catch { return {} } }
 const carregarLidos = () => { try { return JSON.parse(localStorage.getItem(CHAVE_LIDOS)) || [] } catch { return [] } }
 const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 const fmtData = s => s ? s.slice(8, 10) + '/' + s.slice(5, 7) : ''
@@ -93,7 +91,6 @@ function LeitorCodigos({ onCodigo, onFechar }) {
 export default function Expedicao() {
   const [status, setStatus] = useState(null)         // { bling, shopify }
   const [pedidos, setPedidos] = useState([])          // Bling "Em aberto"
-  const [lojas, setLojas] = useState({})              // { idLoja: nome } (canais de venda do Bling)
   const [atendidos, setAtendidos] = useState([])      // Bling "Atendido" dos últimos dias (só para avisar)
   const [carregandoAtendidos, setCarregandoAtendidos] = useState(false)
   const [carregando, setCarregando] = useState(false)
@@ -108,8 +105,6 @@ export default function Expedicao() {
   const [baixando, setBaixando] = useState(null)      // { feitos, total }
   const [falhas, setFalhas] = useState([])
   const [busca, setBusca] = useState('')
-  const [impressos, setImpressos] = useState(carregarPicking)
-  const [gerandoPicking, setGerandoPicking] = useState(false)
   const [hoje, setHoje] = useState([])                // baixas de hoje (expedicao_envios)
   const campo = useRef(null)
 
@@ -137,8 +132,8 @@ export default function Expedicao() {
   async function carregar() {
     setCarregando(true); setErro('')
     try {
-      const { pedidos: lista, lojas: ls } = await chamarExpedicao('pedidos')
-      setPedidos(lista); setLojas(ls || {})
+      const { pedidos: lista } = await chamarExpedicao('pedidos')
+      setPedidos(lista)
       setLidos(ls => ls.filter(id => lista.some(p => p.id === id)))   // o que já saiu de "Em aberto" sai da leitura
       // rastreio, CEP e transportadora vêm do pedido completo: carrega aos poucos
       const ids = lista.map(p => p.id)
@@ -244,21 +239,6 @@ export default function Expedicao() {
     : naoLidos
   const hojeOk = hoje.filter(h => h.ok_bling)
 
-  // Picking dos pedidos da lista (respeita a busca): um bloco por pedido com QR do número
-  const paraPicking = filtrados.filter(p => p.detalhado).sort(ordemPicking)
-  async function imprimirPicking() {
-    if (!paraPicking.length) return
-    setGerandoPicking(true)
-    try {
-      await gerarPicking(paraPicking.map(p => ({ ...p, loja: nomeLoja(p, lojas) })))
-      const novo = { ...impressos }
-      for (const p of paraPicking) novo[p.id] = hojeISO()
-      for (const id of Object.keys(novo)) if (!porId[id]) delete novo[id]     // já saiu de "Em aberto"
-      setImpressos(novo); localStorage.setItem(CHAVE_PICKING, JSON.stringify(novo))
-    } catch (e) {
-      setAviso({ tipo: 'danger', texto: 'Não consegui gerar o picking: ' + e.message })
-    } finally { setGerandoPicking(false) }
-  }
 
   // ── Bling não conectado ──
   if (status && !status.bling) return (
@@ -276,6 +256,9 @@ export default function Expedicao() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Pickings gerados ao fechar o planejamento de produção */}
+      <Pickings />
+
       {/* Leitura */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -348,17 +331,12 @@ export default function Expedicao() {
             <Search size={13} style={{ position: 'absolute', left: 8, top: 9, color: 'var(--gray-400)' }} />
             <input className="form-input" style={{ paddingLeft: 26, width: 200 }} placeholder="Buscar" value={busca} onChange={e => setBusca(e.target.value)} />
           </div>
-          <button className="btn btn-outline btn-sm" onClick={imprimirPicking} disabled={!paraPicking.length || gerandoPicking || detalhando > 0}
-            title={detalhando ? 'Esperando carregar os itens dos pedidos' : 'PDF de separação dos pedidos da lista (use a busca para filtrar)'}>
-            {gerandoPicking ? <RefreshCw size={13} className="spin" /> : <Printer size={13} />} Picking ({paraPicking.length})
-          </button>
         </div>
         <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>Pacote sem código para ler (ex.: motoboy)? Toque em + para marcar à mão.</div>
         {filtrados.map(p => (
           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderBottom: '1px solid var(--gray-100)', fontSize: 13 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div><b>{p.numero}</b> · {p.cliente} <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{fmtData(p.data)}</span>
-                {impressos[p.id] && <span style={{ fontSize: 10, color: 'var(--gray-500)', marginLeft: 6 }} title={`Picking impresso em ${fmtData(impressos[p.id])}`}>🖨️ {fmtData(impressos[p.id])}</span>}</div>
+              <div><b>{p.numero}</b> · {p.cliente} <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{fmtData(p.data)}</span></div>
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.cidade ? ` · ${p.cidade}` : ''}
