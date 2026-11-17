@@ -151,6 +151,10 @@ function resumo(d) {
     rastreios: [...new Set(vols.map(v => String(v.codigoRastreamento || '').replace(/\s/g, '').toUpperCase()).filter(Boolean))],
     cep: soDigitos(d.transporte?.etiqueta?.cep),
     cidade: d.transporte?.etiqueta?.municipio || '',
+    // para o picking (só vêm no pedido completo)
+    itens: (d.itens || []).map(i => ({ codigo: i.codigo || '', descricao: i.descricao || '', quantidade: Number(i.quantidade) || 0 })),
+    obs: d.observacoes || '',
+    obsInterna: d.observacoesInternas || '',
     detalhado: !!d.transporte,
   }
 }
