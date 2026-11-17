@@ -3,9 +3,12 @@ import { supabase } from '../supabase'
 import { RefreshCw, Printer, Save, Camera } from 'lucide-react'
 import { LeitorQR, FichaEtiqueta } from './EtiquetaQR'
 import { CONSERVACOES, calcularValidade, fmtDataHora, fmtValidade, fmtPrazo, numeroEtiqueta, imprimirEtiquetas, faixaConservacao } from '../lib/etiquetas'
+import { estimadoLiquido, recalcularMedia } from '../lib/rendimento'
 
 // Etiquetas de validade das preparações (massas, recheios, cremes, coberturas).
-//   Imprimir  → escolhe a preparação e a conservação; a validade sai do prazo cadastrado
+//   Imprimir  → escolhe a preparação e a conservação; a validade sai do prazo cadastrado.
+//               Opcional: nº de receitas e peso total lançam o rendimento real da mesma produção
+//               (preparacao_rendimento, igual à tela Rendimentos; a etiqueta guarda rendimento_id)
 //   Validades → etiquetas ativas, do vencimento mais próximo; baixa como usada ou descartada
 //   Ler QR    → câmera lê o QR da etiqueta e abre a baixa (o link ?etiqueta=123 também abre aqui)
 //   Prazos    → prazo de validade de cada preparação por conservação + dados da empresa na etiqueta
@@ -45,7 +48,7 @@ export default function Etiquetas() {
   async function carregar() {
     setErro('')
     const { data, error } = await supabase.from('preparacoes')
-      .select('id, nome, tipo, validade_ambiente_dias, validade_refrigerado_dias, validade_congelado_dias')
+      .select('id, nome, tipo, validade_ambiente_dias, validade_refrigerado_dias, validade_congelado_dias, unidade_rendimento, rendimento_estimado, perda_percentual, rendimento_real_medio')
       .eq('ativo', true).order('tipo').order('nome')
     if (error) { setErro(semTabela(error) ? AVISO_SQL : error.message); setPreps([]); return }
     setPreps(data || [])
@@ -87,6 +90,9 @@ function Imprimir({ preps, empresa, irPrazos }) {
   const [obs, setObs] = useState('')
   const [msg, setMsg] = useState(null)
   const [imprimindo, setImprimindo] = useState(false)
+  const [receitas, setReceitas] = useState('')        // rendimento desta produção (opcional)
+  const [pesoTotal, setPesoTotal] = useState('')
+  const [jaLancado, setJaLancado] = useState([])      // rendimentos já lançados da preparação no mesmo dia
 
   const comPrazo = preps.filter(p => Object.values(CONSERVACOES).some(c => p[c.campo]))
   const prep = preps.find(p => p.id === prepId)
@@ -94,21 +100,64 @@ function Imprimir({ preps, empresa, irPrazos }) {
   useEffect(() => { setCons(opcoes.length === 1 ? opcoes[0][0] : opcoes.some(([k]) => k === cons) ? cons : '') }, [prepId])
   const dias = prep && cons ? prep[CONSERVACOES[cons].campo] : null
   const validade = dias ? calcularValidade(manipulado, dias) : null
+  const diaProducao = manipulado.slice(0, 10)
+  useEffect(() => {
+    setJaLancado([])
+    if (!prepId || !diaProducao) return
+    supabase.from('preparacao_rendimento').select('num_receitas, rendimento_total').eq('preparacao_id', prepId).eq('data_producao', diaProducao)
+      .then(({ data }) => setJaLancado(data || []))
+  }, [prepId, diaProducao])
+  const numRec = parseFloat(String(receitas).replace(',', '.')) || 0
+  const peso = parseFloat(String(pesoTotal).replace(',', '.')) || 0
+  const lancaRendimento = numRec > 0 && peso > 0
+  const rendMeio = (receitas !== '' || pesoTotal !== '') && !lancaRendimento   // só um dos dois preenchido
+  const porReceita = lancaRendimento ? peso / numRec : null
+  const estLiq = prep ? estimadoLiquido(prep) : 0
+  const variacao = porReceita && estLiq ? (porReceita - estLiq) / estLiq * 100 : null
+
   const previa = prep && cons ? { nome: prep.nome, conservacao: cons, manipulado_em: new Date(manipulado), validade, responsavel, observacao: obs, numero: 0 } : null
 
   async function imprimir() {
     const n = Math.max(1, Math.min(50, parseInt(qtd) || 1))
+    if (rendMeio) { setMsg({ tipo: 'danger', txt: 'Para lançar o rendimento, preencha o nº de receitas e o peso total (ou deixe os dois em branco).' }); return }
+    if (lancaRendimento && jaLancado.length && !confirm(`Já há ${jaLancado.length} rendimento(s) de ${prep.nome} lançado(s) neste dia. É outra produção? (OK lança mais um)`)) return
     setImprimindo(true); setMsg(null)
+
+    // 1) rendimento da produção (mesmo registro da tela Rendimentos)
+    let rend = null
+    if (lancaRendimento) {
+      const { data: r, error: e1 } = await supabase.from('preparacao_rendimento').insert({
+        preparacao_id: prep.id, num_receitas: numRec, rendimento_total: peso, data_producao: diaProducao,
+        responsavel: responsavel.trim() || null, observacao: ['Lançado na etiqueta', obs.trim()].filter(Boolean).join(' · '),
+      }).select('id').single()
+      if (e1) { setImprimindo(false); setMsg({ tipo: 'danger', txt: 'Rendimento não lançado: ' + e1.message }); return }
+      rend = r.id
+    }
+
+    // 2) etiquetas
     const linhas = Array.from({ length: n }, () => ({
       preparacao_id: prep.id, nome: prep.nome, conservacao: cons,
       manipulado_em: new Date(manipulado).toISOString(), validade: validade.toISOString(),
       responsavel: responsavel.trim() || null, observacao: obs.trim() || null,
+      ...(rend ? { rendimento_id: rend } : {}),
     }))
-    const { data, error } = await supabase.from('etiquetas').insert(linhas).select('*').order('numero')
+    let { data, error } = await supabase.from('etiquetas').insert(linhas).select('*').order('numero')
+    if (error && rend && semTabela(error)) {
+      // etiquetas_rendimento.sql ainda não aplicado: imprime sem o vínculo
+      ({ data, error } = await supabase.from('etiquetas').insert(linhas.map(({ rendimento_id, ...l }) => l)).select('*').order('numero'))
+    }
+    if (error) {
+      if (rend) await supabase.from('preparacao_rendimento').delete().eq('id', rend)   // nada pela metade
+      setImprimindo(false)
+      setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return
+    }
+    if (rend) await recalcularMedia(prep.id)
     setImprimindo(false)
-    if (error) { setMsg({ tipo: 'danger', txt: semTabela(error) ? AVISO_SQL : error.message }); return }
     await imprimirEtiquetas(data, empresa)
-    setMsg({ tipo: 'ok', txt: `${n} etiqueta${n > 1 ? 's' : ''} de ${prep.nome} (${numeroEtiqueta(data[0].numero)}${n > 1 ? ' a ' + numeroEtiqueta(data[n - 1].numero) : ''}) enviada${n > 1 ? 's' : ''} para impressão.` })
+    const txtRend = rend ? ` Rendimento lançado: ${fmtNum(peso)} ${prep.unidade_rendimento || ''} em ${fmtNum(numRec)} receita${numRec === 1 ? '' : 's'}.` : ''
+    if (rend) setJaLancado(j => [...j, { num_receitas: numRec, rendimento_total: peso }])
+    setReceitas(''); setPesoTotal('')
+    setMsg({ tipo: 'ok', txt: `${n} etiqueta${n > 1 ? 's' : ''} de ${prep.nome} (${numeroEtiqueta(data[0].numero)}${n > 1 ? ' a ' + numeroEtiqueta(data[n - 1].numero) : ''}) enviada${n > 1 ? 's' : ''} para impressão.${txtRend}` })
     setQtd(1); setObs('')
   }
 
@@ -160,6 +209,34 @@ function Imprimir({ preps, empresa, irPrazos }) {
         <label style={{ fontSize: 12, fontWeight: 700 }}>Observação (opcional)
           <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} placeholder="Ex.: lote 2, 1,5 kg" style={{ marginTop: 4 }} />
         </label>
+        {prep && (
+          <div style={{ border: '1px solid var(--gray-200)', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 800 }}>Rendimento desta produção <span style={{ fontWeight: 400, color: 'var(--gray-400)' }}>(opcional)</span></div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 12, fontWeight: 700, width: 120 }}>Nº de receitas
+                <input type="number" min={0.5} step={0.5} inputMode="decimal" className="form-input" value={receitas} onChange={e => setReceitas(e.target.value)} style={{ marginTop: 4 }} />
+              </label>
+              <label style={{ fontSize: 12, fontWeight: 700, flex: '1 1 140px' }}>Peso total ({prep.unidade_rendimento || 'g'})
+                <input type="number" min={0} step={0.1} inputMode="decimal" className="form-input" value={pesoTotal} onChange={e => setPesoTotal(e.target.value)}
+                  placeholder={estLiq ? `ex.: ${fmtNum(estLiq * (numRec || 1), 0)}` : ''} style={{ marginTop: 4 }} />
+              </label>
+            </div>
+            {porReceita !== null && (
+              <div style={{ fontSize: 12 }}>
+                {fmtNum(porReceita)} {prep.unidade_rendimento} por receita
+                {variacao !== null && <b style={{ marginLeft: 6, color: Math.abs(variacao) <= 5 ? 'var(--ok)' : Math.abs(variacao) <= 15 ? 'var(--warning)' : 'var(--danger)' }}>
+                  {variacao > 0 ? '+' : ''}{fmtNum(variacao)}% vs. estimado líquido ({fmtNum(estLiq)})</b>}
+              </div>
+            )}
+            {jaLancado.length > 0 && (
+              <div style={{ fontSize: 11, color: 'var(--warning)' }}>
+                Já lançado neste dia: {jaLancado.map(r => `${fmtNum(r.rendimento_total)} ${prep.unidade_rendimento || ''} em ${fmtNum(r.num_receitas)} rec.`).join(' · ')}.
+                Só preencha se for outra produção.
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>Entra na média real da preparação (tela Rendimentos), que alimenta o custo.</div>
+          </div>
+        )}
         <button className="btn btn-primary" onClick={imprimir} disabled={!previa || imprimindo}>
           {imprimindo ? <><RefreshCw size={14} className="spin" /> Gerando…</> : <><Printer size={14} /> Imprimir {Math.max(1, parseInt(qtd) || 1)} etiqueta{(parseInt(qtd) || 1) > 1 ? 's' : ''}</>}
         </button>
@@ -180,6 +257,8 @@ function Imprimir({ preps, empresa, irPrazos }) {
     </div>
   )
 }
+
+const fmtNum = (n, d = 1) => Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: d })
 
 // Prévia em tela (escala 4 px por mm), no mesmo arranjo do PDF
 function PreviaEtiqueta({ e, empresa }) {

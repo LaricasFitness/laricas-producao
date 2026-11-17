@@ -105,6 +105,12 @@ rendLiquido = rendimento_real_medio
 
 Aplicar a perda sobre o rendimento real é dupla contagem — foi um bug real.
 
+`rendimento_real_medio` = média ponderada dos últimos 10 lançamentos de `preparacao_rendimento`
+(Σ peso ÷ Σ receitas, `src/lib/rendimento.js`). Lança-se na tela Rendimentos ou, junto com a
+impressão das etiquetas de validade (Produção › Etiquetas), nos campos opcionais "nº de receitas"
+e "peso total"; a etiqueta guarda o `rendimento_id` (`etiquetas_rendimento.sql`). A tela avisa
+quando já há lançamento da mesma preparação no dia, para não contar a mesma produção duas vezes.
+
 ### 2. Composição de produto
 
 `produto_composicao` guarda o **peso no produto acabado**, nunca o peso cru.
