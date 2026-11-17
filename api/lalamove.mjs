@@ -76,7 +76,8 @@ async function servicoMoto() {
   if (SERVICO) return SERVICO
   const cidades = await lalamove('GET', '/v3/cities')
   const lista = Array.isArray(cidades) ? cidades : []
-  const sp = lista.find(c => /SAO|SÃO|SP/i.test(`${c.locode} ${c.name}`)) || lista[0]
+  const nome = c => String(c.name || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase()
+  const sp = lista.find(c => nome(c).includes('SAO PAULO')) || lista.find(c => /SAO|SP/i.test(c.locode || '')) || lista[0]
   const servs = sp?.services || []
   const moto = servs.find(s => /MOTORCYCLE/i.test(s.key)) || servs.find(s => /MOTO|LALAGO|BIKE/i.test(`${s.key} ${s.description || ''}`))
   SERVICO = moto?.key || 'MOTORCYCLE'
@@ -223,7 +224,7 @@ async function pedir(db, { cotacao, stops, rota, paradas }, usuario) {
   // Não chamar duas vezes a mesma entrega
   const numeros = paradas.map(p => String(p.numero))
   const { data: ja } = await db.from('lalamove_corridas').select('order_id, pedidos, status')
-    .overlaps('pedidos', numeros).gte('criado_em', new Date(Date.now() - 3 * 864e5).toISOString())
+    .overlaps('pedidos', numeros).eq('ambiente', ambiente()).gte('criado_em', new Date(Date.now() - 3 * 864e5).toISOString())
   const ativa = (ja || []).find(c => c.order_id && !/CANCEL|REJECT|EXPIRE/i.test(c.status || ''))
   if (ativa) throw new Error(`Já existe corrida (${ativa.order_id}) para os pedidos ${ativa.pedidos.filter(n => numeros.includes(n)).join(', ')}.`)
 
@@ -261,7 +262,7 @@ export default async function handler(req, res) {
     if (b.acao === 'corridas') {
       const numeros = [...new Set((b.pedidos || []).map(String).filter(n => /^\d+$/.test(n)))].slice(0, 200)
       if (!numeros.length) return res.status(200).json({ corridas: [] })
-      const { data, error } = await db.from('lalamove_corridas').select('*').overlaps('pedidos', numeros)
+      const { data, error } = await db.from('lalamove_corridas').select('*').overlaps('pedidos', numeros).eq('ambiente', ambiente())
         .gte('criado_em', new Date(Date.now() - 3 * 864e5).toISOString()).order('criado_em', { ascending: false })
       if (error) throw new Error(/does not exist|schema cache/i.test(error.message) ? 'Aplique o lalamove_corridas.sql no Supabase.' : error.message)
       return res.status(200).json({ corridas: data || [] })

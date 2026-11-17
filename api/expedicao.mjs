@@ -743,8 +743,9 @@ async function baixarPedido(ctx, id, notificar, operador) {
     Object.assign(reg, { numero: p.numero, numero_loja: p.numeroLoja || null, cliente: p.cliente, transportadora: p.transportadora || null, rastreio: p.rastreios.join(', ') || null })
     // Lalamove chamada pela Expedição: o link de acompanhamento vai como rastreio para a Shopify
     if (/lalamove/i.test(p.transportadora)) {
+      // corridas do ambiente de teste (sandbox) nunca vão para a Shopify
       const { data: c } = await ctx.db.from('lalamove_corridas').select('order_id, share_link, status')
-        .contains('pedidos', [p.numero]).order('criado_em', { ascending: false }).limit(1)
+        .contains('pedidos', [p.numero]).eq('ambiente', 'producao').order('criado_em', { ascending: false }).limit(1)
       if (c?.[0]?.share_link && !/CANCEL|REJECT|EXPIRE/i.test(c[0].status || '')) {
         p.lalamove = c[0]
         reg.rastreio = c[0].share_link
