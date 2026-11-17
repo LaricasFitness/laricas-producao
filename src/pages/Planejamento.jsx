@@ -144,6 +144,8 @@ function diaSemana(iso) {
 }
 
 function headerDia(iso) { return `${diaSemana(iso)} ${fmtDataBr(iso)}` }
+const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const diaAnterior = (iso, n = 1) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - n); return isoLocal(d) }
 
 // ── PDF Produção (página única, compacto) ─────────────────────────────────────
 function gerarPDFProducao(dataProducao, itensDia, totalGeral, observacao='') {
@@ -1109,17 +1111,24 @@ export default function Planejamento({ onIrLogistica }) {
 
   const [previsaoDelivery, setPrevisaoDelivery] = useState({}) // { sku: { seg: n, ter: n, ... } }
 
-  // Carrega previsão de delivery do banco
+  const [estoqueDelivery, setEstoqueDelivery] = useState({})   // { data: { sku: geladeira + armazenagem } } (Logística › Delivery BV)
+
+  // Carrega a previsão de delivery e as contagens recentes do Delivery BV juntas (o pré-preenchimento usa as duas)
   useEffect(() => {
-    supabase.from('delivery_previsao').select('sku, dia_semana, quantidade')
-      .then(({ data }) => {
-        const map = {}
-        for (const r of (data || [])) {
-          if (!map[r.sku]) map[r.sku] = {}
-          map[r.sku][r.dia_semana] = r.quantidade
-        }
-        setPrevisaoDelivery(map)
-      })
+    Promise.all([
+      supabase.from('delivery_previsao').select('sku, dia_semana, quantidade'),
+      supabase.from('delivery_contagens').select('data, sku, geladeira, armazenagem').gte('data', diaAnterior(isoLocal(new Date()), 15)),
+    ]).then(([{ data }, { data: conts }]) => {
+      const map = {}
+      for (const r of (data || [])) {
+        if (!map[r.sku]) map[r.sku] = {}
+        map[r.sku][r.dia_semana] = r.quantidade
+      }
+      const est = {}
+      for (const c of (conts || [])) (est[c.data] ??= {})[c.sku] = (c.geladeira || 0) + (c.armazenagem || 0)
+      setEstoqueDelivery(est)
+      setPrevisaoDelivery(map)
+    })
   }, [])
 
   const DIAS_SEMANA_PT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab']
@@ -1179,30 +1188,41 @@ export default function Planejamento({ onIrLogistica }) {
     } catch(e) { console.error('Erro ao salvar planejamento:', e) }
   }
 
-  // Pré-preenche delivery com previsão ao selecionar datas (não sobrescreve valores já editados)
+  // Delivery de um dia de produção = previsão (sexta = Sex+Sáb+Dom+Seg) − estoque da contagem do Delivery BV
+  // da véspera (geladeira + armazenagem, lançada depois do restock). A contagem de quinta cobre os mesmos
+  // Sex+Sáb+Dom+Seg da produção de sexta. Sem contagem na véspera (ex.: produção de segunda) ou SKU não
+  // contado: previsão cheia. Devolve { porSku: { sku: { previsto, estoque, qtd } }, dataContagem }.
+  function deliveryDoDia(dia) {
+    const dow = DIAS_SEMANA_PT[new Date(dia + 'T12:00:00').getDay()]
+    const diasSomar = dow === 'sex' ? ['sex', 'sab', 'dom', 'seg'] : [dow]
+    const dataContagem = diaAnterior(dia)
+    const est = estoqueDelivery[dataContagem]
+    const porSku = {}
+    const ocultos = skusOcultos(embalagens)   // sazonal fora de temporada não entra pela previsão
+    for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
+      if (ocultos.has(sku)) continue
+      const previsto = diasSomar.reduce((s, d) => s + (pDias[d] || 0), 0)
+      const estoque = est?.[sku]
+      porSku[sku] = { previsto, estoque, qtd: estoque == null ? previsto : Math.max(0, previsto - estoque) }
+    }
+    return { porSku, dataContagem: est ? dataContagem : null }
+  }
+
+  // Pré-preenche delivery ao selecionar datas (não sobrescreve valores já editados)
   useEffect(() => {
     if (!diaAtual || Object.keys(previsaoDelivery).length === 0) return
     setDiasDelivery(prev => {
       const novo = { ...prev }
       for (const dia of diasVisiveis) {
         if (novo[dia] && Object.keys(novo[dia]).length > 0) continue
-        const dow = DIAS_SEMANA_PT[new Date(dia + 'T12:00:00').getDay()]
-        const diasSomar = dow === 'sex'
-          ? ['sex', 'sab', 'dom', 'seg']
-          : [dow]
         const previsaoDia = {}
-        const ocultos = skusOcultos(embalagens)   // sazonal fora de temporada não entra pela previsão
-        for (const [sku, pDias] of Object.entries(previsaoDelivery)) {
-          if (ocultos.has(sku)) continue
-          const qtd = diasSomar.reduce((s, d) => s + (pDias[d] || 0), 0)
-          if (qtd > 0) previsaoDia[sku] = qtd
-        }
+        for (const [sku, { qtd }] of Object.entries(deliveryDoDia(dia).porSku)) if (qtd > 0) previsaoDia[sku] = qtd
         if (Object.keys(previsaoDia).length > 0) novo[dia] = previsaoDia
       }
       return novo
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasAtivas, previsaoDelivery])
+  }, [datasAtivas, previsaoDelivery, estoqueDelivery])
 
   // Monta dados do dia atual (CSV + extras manuais)
   const itensDiaAtual = {}
@@ -1461,6 +1481,25 @@ export default function Planejamento({ onIrLogistica }) {
         </div>
       )}
 
+      {/* De onde vem o Delivery do dia: contagem do Delivery BV da véspera ou previsão cheia */}
+      {temDados && diaAtual && abaPlano === 'itens' && Object.keys(previsaoDelivery).length > 0 && (() => {
+        const { porSku, dataContagem } = deliveryDoDia(diaAtual)
+        const ls = Object.values(porSku)
+        const previsto = ls.reduce((s, l) => s + l.previsto, 0)
+        const aProduzir = ls.reduce((s, l) => s + l.qtd, 0)
+        if (!dataContagem) return (
+          <div className="alert-banner warning">
+            Delivery de {headerDia(diaAtual)}: sem contagem do Delivery BV em {headerDia(diaAnterior(diaAtual))}, usando a previsão cheia ({previsto} un).
+          </div>
+        )
+        return (
+          <div className="alert-banner info">
+            Delivery de {headerDia(diaAtual)}: previsão {previsto} un, descontado o estoque contado em {headerDia(dataContagem)} (geladeira + armazenagem) = {aProduzir} un a produzir.
+            Passe o mouse no Delivery de cada produto para ver a conta.
+          </div>
+        )
+      })()}
+
       {/* Tabela */}
       {temDados && datasAtivas.length > 0 && abaPlano === 'itens' && (
         <div className="card">
@@ -1556,7 +1595,8 @@ export default function Planejamento({ onIrLogistica }) {
                               <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', color: bAtual > 0 ? 'var(--purple)' : 'var(--gray-300)', fontWeight: bAtual > 0 ? 700 : 400, background: 'var(--purple-ghost)' }}>
                                 {bAtual > 0 ? bAtual : '—'}
                               </td>
-                              <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', background: 'var(--purple-ghost)' }}>
+                              <td style={{ textAlign: 'center', padding: '9px 10px', borderBottom: '1px solid var(--gray-100)', background: 'var(--purple-ghost)' }}
+                                title={(() => { const x = deliveryDoDia(diaAtual).porSku[e.codigo]; return x?.estoque != null ? `previsão ${x.previsto} − estoque ${x.estoque} = ${x.qtd}` : x?.previsto ? `previsão ${x.previsto} (sem contagem na véspera)` : undefined })()}>
                                 <input type="number" min={0} value={del || ''} placeholder="0"
                                   onChange={ev => setDel(e.codigo, ev.target.value)}
                                   style={{ width: 60, padding: '5px 6px', border: `1.5px solid ${del > 0 ? 'var(--ok)' : 'var(--gray-200)'}`, borderRadius: 6, fontSize: 13, fontWeight: 700, textAlign: 'center', background: del > 0 ? 'var(--ok-pale)' : 'var(--white)', outline: 'none' }} />
