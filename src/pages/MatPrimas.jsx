@@ -9,6 +9,7 @@ import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { BotaoCadeado, conferido, descreverConferencia, erroCadeado } from '../lib/cadeado'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { useBloqueioConferencia, podeLancarConferencia, AvisoProducaoPendente } from '../lib/diasProducao'
+import { somarEstoqueMP, useUmaVez } from '../lib/estoqueMP'
 
 const CATEGORIAS = ['Lácteos','Chocolates','Proteínas','Farinhas','Adoçantes','Gorduras','Conservantes','Temperos','Frutas e Nuts','Outros']
 const UNIDADES = ['g','ml','kg','l','un']
@@ -160,13 +161,7 @@ async function confirmarValoresNormais(itens, ignorarId = null) {
 
 // Soma (ou subtrai) quantidade no estoque da MP.
 async function ajustarEstoqueCompra(mpId, delta) {
-  if (!mpId || !delta) return
-  const { data: mp } = await supabase.from('materias_primas')
-    .select('estoque_atual').eq('id', mpId).single()
-  const novo = (parseFloat(mp?.estoque_atual) || 0) + delta
-  await supabase.from('materias_primas')
-    .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
-    .eq('id', mpId)
+  await somarEstoqueMP(mpId, delta)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -307,8 +302,10 @@ const entradaVazia = base => ({ qtd: '', unidade: base || 'g', conteudo: '', uni
 // Exclui uma compra revertendo estoque e recalculando o preço
 async function excluirCompraMP(compra) {
   const parcela = await parcelaNoSaldo(compra)
-  const { error } = await supabase.from('mp_compras').delete().eq('id', compra.id)
+  const { data: apagadas, error } = await supabase.from('mp_compras').delete().eq('id', compra.id).select('id')
   if (error) throw error
+  // Já excluída (clique duplo, outra aba): não desconta o saldo de novo
+  if (!apagadas?.length) return
   await ajustarEstoqueCompra(compra.materia_prima_id, -parcela)
   await recalcularCustoMP(compra.materia_prima_id)
 }
@@ -508,6 +505,7 @@ function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
   const [mps, setMps] = useState([])
   const [vinculos, setVinculos] = useState({}) // idx → { mp_id, entrada, uNF, qNF, memoria }
   const [saving, setSaving] = useState(false)
+  const umaVez = useUmaVez()
   const [lendo, setLendo] = useState(false)
   const [erro, setErro] = useState('')
   const fileRef = useRef()
@@ -824,7 +822,7 @@ function ModalNotaFiscal({ modo = 'xml', onClose, onSaved }) {
             </button>
           )}
           {nf && (
-            <button className="btn btn-primary" onClick={salvar} disabled={saving||itensVinculados===0||bloqueado}
+            <button className="btn btn-primary" onClick={umaVez(salvar)} disabled={saving||itensVinculados===0||bloqueado}
               title={bloqueado ? 'Corrija a nota antes de lançar' : ''}>
               {saving ? <><RefreshCw size={14} className="spin"/> Salvando...</> : <><Save size={14}/> Confirmar e lançar {itensVinculados} item(s)</>}
             </button>
@@ -927,6 +925,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
   const [form, setForm] = useState({ custo_total:'', data_compra: new Date().toISOString().slice(0,10), fornecedor: mp?.fornecedor||'', numero_nf:'', observacao:'' })
   const [entrada, setEntrada] = useState(entradaVazia(mp.unidade))
   const [saving, setSaving] = useState(false)
+  const umaVez = useUmaVez()
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
 
   // Usa a última forma de lançamento dessa MP como padrão
@@ -1013,7 +1012,7 @@ function ModalCompra({ mp, onClose, onSaved }) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={saving||!valido}>
+          <button className="btn btn-primary" onClick={umaVez(salvar)} disabled={saving||!valido}>
             {saving ? <RefreshCw size={14} className="spin"/> : <Save size={14}/>} Registrar
           </button>
         </div>
@@ -1306,6 +1305,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
     observacao: '',
   })
   const [saving, setSaving] = useState(false)
+  const umaVez = useUmaVez()
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
   const setItem = (idx,k,v) => setItens(p=>p.map((it,i)=>i===idx?{...it,[k]:v}:it))
   const addItem = () => setItens(p=>[...p,{mp_id:'',entrada:entradaVazia('g'),custo_total:''}])
@@ -1449,7 +1449,7 @@ function ModalCompraAvulsa({ mps, onClose, onSaved }) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar}
+          <button className="btn btn-primary" onClick={umaVez(salvar)}
             disabled={saving||!itens.some(itemValido)}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Registrar compra</>}
           </button>
@@ -1480,6 +1480,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
   })
   const [mpsLista, setMpsLista] = useState([])
   const [saving, setSaving] = useState(false)
+  const umaVez = useUmaVez()
   const [erro, setErro] = useState('')
   const set = (k,v) => setForm(p=>({...p,[k]:v}))
 
@@ -1691,10 +1692,10 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
           )}
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost btn-sm" onClick={excluir} disabled={saving||travado}
+          <button className="btn btn-ghost btn-sm" onClick={umaVez(excluir)} disabled={saving||travado}
             style={{color:'var(--danger)',marginRight:'auto'}}>Excluir compra</button>
           <button className="btn btn-ghost" onClick={onClose} disabled={saving}>{travado ? 'Fechar' : 'Cancelar'}</button>
-          <button className="btn btn-primary" onClick={salvar}
+          <button className="btn btn-primary" onClick={umaVez(salvar)}
             disabled={saving||travado||!entradaOk||!form.custo_total||!form.materia_prima_id}>
             {saving?<><RefreshCw size={14} className="spin"/> Salvando...</>:<><Save size={14}/> Salvar alterações</>}
           </button>
@@ -1713,6 +1714,7 @@ export function HistoricoCompras() {
   const [xmlModal, setXmlModal] = useState(false)
   const [fotoModal, setFotoModal] = useState(false)
   const [compraModal, setCompraModal] = useState(false)
+  const umaVez = useUmaVez()
   const [editModal, setEditModal] = useState(null) // compra a editar
   // Busca por NF: procura em todas as datas, não só no mês escolhido
   const [buscaTxt, setBuscaTxt] = useState('')
@@ -1836,7 +1838,7 @@ export function HistoricoCompras() {
                             title="Editar" style={{fontSize:11}}>
                             <Pencil size={11}/>
                           </button>
-                          <button className="btn btn-ghost btn-sm" onClick={()=>excluirCompra(c)}
+                          <button className="btn btn-ghost btn-sm" onClick={umaVez(()=>excluirCompra(c))}
                             style={{color:'var(--danger)',fontSize:11}} title="Excluir e reverter estoque">
                             ✕
                           </button>

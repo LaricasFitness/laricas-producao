@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
 import { carregarEmbalagens } from '../lib/data'
 import { registrarAcao } from '../lib/log'
+import { somarEstoqueMP, useUmaVez } from '../lib/estoqueMP'
 import { Save, RefreshCw, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-react'
 
 // Itens fixos das fases internas
@@ -251,6 +252,7 @@ export default function Producao() {
   const [embalagens, setEmbalagens] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const umaVez = useUmaVez()
   const [saved, setSaved] = useState(false)
 
   // Dados de cada fase
@@ -445,16 +447,7 @@ export default function Producao() {
                 // Debita o estoque de cada MP (agregado)
                 for (const [mpId, consumoG] of Object.entries(consumoFinal)) {
                   if (consumoG <= 0) continue
-                  const { data: mp } = await supabase
-                    .from('materias_primas')
-                    .select('estoque_atual')
-                    .eq('id', mpId)
-                    .single()
-                  const atual = parseFloat(mp?.estoque_atual) || 0
-                  await supabase
-                    .from('materias_primas')
-                    .update({ estoque_atual: atual - consumoG, atualizado_em: new Date().toISOString() })
-                    .eq('id', mpId)
+                  await somarEstoqueMP(mpId, -consumoG)
                 }
 
                 // Grava o histórico granular de uma vez
@@ -508,12 +501,7 @@ export default function Producao() {
       // entra no consumo do mês, igual ao consumo de produção.
       const perdas = internos.filter(i => i.fase === 'desperdicio' && i.materia_prima_id && i.quantidade > 0)
       for (const p of perdas) {
-        const { data: mpAtual } = await supabase.from('materias_primas')
-          .select('estoque_atual').eq('id', p.materia_prima_id).single()
-        await supabase.from('materias_primas').update({
-          estoque_atual: (parseFloat(mpAtual?.estoque_atual) || 0) - p.quantidade,
-          atualizado_em: new Date().toISOString(),
-        }).eq('id', p.materia_prima_id)
+        await somarEstoqueMP(p.materia_prima_id, -p.quantidade)
 
         await supabase.from('mp_consumos').insert({
           materia_prima_id: p.materia_prima_id,
@@ -618,7 +606,7 @@ export default function Producao() {
             Próxima fase <ChevronRight size={16} />
           </button>
         ) : (
-          <button className="btn btn-gold" onClick={salvarTudo} disabled={saving}>
+          <button className="btn btn-gold" onClick={umaVez(salvarTudo)} disabled={saving}>
             {saving
               ? <><RefreshCw size={15} className="spin" /> Salvando tudo...</>
               : <><Save size={15} /> Finalizar e salvar produção</>

@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { somarEstoqueMP } from './estoqueMP'
 
 // Rendimento líquido de uma preparação: real já é medido líquido; estimado leva a perda
 function rendLiquido(prep) {
@@ -61,15 +62,11 @@ export async function calcularConsumoMP(sku, quantidade) {
   return total
 }
 
+// Sem truncar em zero: estoque negativo é sinal de compra não lançada
+// ou consumo a maior. Truncar apagaria o rombo e a próxima compra
+// somaria a partir do zero, escondendo a diferença para sempre.
 async function ajustarEstoqueMP(mpId, delta) {
-  const { data: mp } = await supabase.from('materias_primas').select('estoque_atual').eq('id', mpId).single()
-  // Sem truncar em zero: estoque negativo é sinal de compra não lançada
-  // ou consumo a maior. Truncar apagaria o rombo e a próxima compra
-  // somaria a partir do zero, escondendo a diferença para sempre.
-  const novo = (parseFloat(mp?.estoque_atual) || 0) + delta
-  await supabase.from('materias_primas')
-    .update({ estoque_atual: novo, atualizado_em: new Date().toISOString() })
-    .eq('id', mpId)
+  await somarEstoqueMP(mpId, delta)
 }
 
 async function ajustarEstoqueEmb(embId, delta) {
