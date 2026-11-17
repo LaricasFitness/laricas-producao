@@ -14,6 +14,13 @@
 
 BEGIN;
 
+-- JÁ APLICADO em 17/11/2026. Trava contra rodar de novo (somaria tudo outra vez).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM log_acoes WHERE usuario_nome = 'Sistema (correção)' AND acao = 'corrigir_saldo_mp') THEN
+    RAISE EXCEPTION 'Esta correção já foi aplicada — não rode de novo.';
+  END IF;
+END $$;
+
 CREATE TEMP TABLE corr(id uuid, delta numeric) ON COMMIT DROP;
 INSERT INTO corr VALUES
   ('a47da9fc-15e8-4cab-a360-a1f551643351', 39150),  -- Mel (g)
