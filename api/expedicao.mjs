@@ -22,6 +22,7 @@
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 // POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
 //                        (natureza de escolha manual, ex. consignação: não gera, fica para o Bling)
+// POST {acao:'etiquetas', ids, formato}   só leitura, até 10: link da etiqueta que a logística já gerou
 // POST {acao:'notas', numeros}   só leitura, até 10: natureza que a regra pede + nota existente de cada pedido
 // POST {acao:'transmitirNF', numero}   transmite à Sefaz a nota pendente/rejeitada de UM pedido, só se a
 //                        natureza conferir (conferência refeita no servidor)
@@ -380,7 +381,8 @@ async function pedidoPorNumero(tk, numero) {
 async function lerNota(tk, id, nomesNat) {
   const n = (await bling(tk, `/nfe/${id}`))?.data || {}
   return { id: n.id, numero: n.numero, serie: n.serie, situacao: n.situacao, valor: n.valorNota,
-    naturezaId: n.naturezaOperacao?.id || null, natureza: nomesNat[n.naturezaOperacao?.id] || '' }
+    naturezaId: n.naturezaOperacao?.id || null, natureza: nomesNat[n.naturezaOperacao?.id] || '',
+    linkDanfe: n.linkDanfe || null, linkPDF: n.linkPDF || null }
 }
 
 const SITUACAO_NF = { 1: 'Pendente', 2: 'Cancelada', 3: 'Aguardando recibo', 4: 'Rejeitada', 5: 'Autorizada', 6: 'Emitida DANFE',
@@ -440,6 +442,24 @@ async function transmitirNF(tk, numero) {
   if (sitAntes === sit.aberto && sitDepois === sit.atendido)
     await bling(tk, `/pedidos/vendas/${d.id}/situacoes/${sit.aberto}`, { method: 'PATCH' })
   return { numero: String(d.numero), nota: { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) } }
+}
+
+// Etiquetas de transporte (só leitura): o link do PDF que a logística do pedido já gerou no Bling.
+// O Bling aceita um pedido por chamada. Não contrata frete nem gera etiqueta nova.
+async function etiquetas(tk, ids, formato = 'PDF') {
+  const saida = []
+  for (const id of ids) {
+    try {
+      const q = new URLSearchParams({ formato }); q.append('idsVendas[]', id)
+      const d = (await bling(tk, '/logisticas/etiquetas?' + q))?.data || []
+      const e = d.find(x => String(x.id) === String(id)) || d[0]
+      saida.push({ id, link: e?.link || null, observacao: e?.observacao || '' })
+    } catch (e) {
+      if (e instanceof ErroConexao) throw e
+      saida.push({ id, link: null, erro: e.message })
+    }
+  }
+  return saida
 }
 
 // Gera a NF de UM pedido como rascunho (pendente no Bling, NÃO transmite) e confere a natureza.
@@ -722,6 +742,11 @@ export default async function handler(req, res) {
       const numero = String(req.body?.numero || '').trim().replace(/^#/, '')
       if (!/^\d+$/.test(numero)) return res.status(400).json({ erro: 'Informe o número do pedido.' })
       return res.status(200).json(await rascunhoNF(tk, numero))
+    }
+    if (acao === 'etiquetas') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      if (!ids.length || ids.length > 10) return res.status(400).json({ erro: 'Envie de 1 a 10 pedidos.' })
+      return res.status(200).json({ etiquetas: await etiquetas(tk, ids, req.body?.formato === 'ZPL' ? 'ZPL' : 'PDF') })
     }
     if (acao === 'notas') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
