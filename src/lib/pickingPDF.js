@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 // com linha de corte no meio), só com o que a separação precisa: número grande, QR Code do pedido
 // (a Expedição lê e marca o pedido para baixa), cliente, envio, itens com caixinha para ticar e as
 // observações. Pedido com itens demais para meia folha ocupa a folha inteira (ou mais).
+// No fim, o resumo da separação: a soma de cada produto em todos os pedidos do PDF.
 // O QR guarda o número do pedido no Bling: a leitura na Expedição acha o pedido por ele.
 
 const LARG = 297, ALT = 210     // A4 deitada (mm)
@@ -46,12 +47,12 @@ function desenhar(doc, p, qr, x, w) {
     startY: y + 27,
     margin: { left: x, right: LARG - x - w, top: M, bottom: M },
     tableWidth: w,
-    head: [['', 'Qtd', 'Produto', 'Código']],
-    body: itens.length ? itens.map(it => ['', qtd(it.quantidade), it.descricao || '', it.codigo || '']) : [['', '', 'Pedido sem itens no Bling', '']],
+    head: [['', 'Qtd', 'Produto']],
+    body: itens.length ? itens.map(it => ['', qtd(it.quantidade), it.descricao || it.codigo || '']) : [['', '', 'Pedido sem itens no Bling']],
     theme: 'grid',
     styles: { fontSize: 10, cellPadding: 1.4, minCellHeight: LINHA - 0.5, lineColor: 180, lineWidth: 0.2, valign: 'middle' },
     headStyles: { fillColor: [235, 235, 235], textColor: 0, fontSize: 7.5, fontStyle: 'bold', minCellHeight: 5 },
-    columnStyles: { 0: { cellWidth: 7 }, 1: { cellWidth: 13, halign: 'center', fontStyle: 'bold', fontSize: 13 }, 3: { cellWidth: 30, fontSize: 6.5, textColor: 90 } },
+    columnStyles: { 0: { cellWidth: 7 }, 1: { cellWidth: 13, halign: 'center', fontStyle: 'bold', fontSize: 13 } },
     didDrawCell: d => {      // caixinha para ticar
       if (d.section === 'body' && d.column.index === 0 && itens.length)
         doc.rect(d.cell.x + 1.5, d.cell.y + d.cell.height / 2 - 2, 4, 4)
@@ -72,6 +73,46 @@ function desenhar(doc, p, qr, x, w) {
     doc.rect(x, f + 5, w, linhas.length * 4 + 3, 'F')
     doc.text(linhas, x + 2, f + 9)
   }
+}
+
+// Resumo da separação: soma de cada produto em todos os pedidos
+function somarItens(pedidos) {
+  const soma = new Map()
+  for (const p of pedidos) for (const it of p.itens || []) {
+    const chave = it.codigo || it.descricao
+    const atual = soma.get(chave) || { descricao: it.descricao || it.codigo, quantidade: 0, pedidos: new Set() }
+    atual.quantidade += Number(it.quantidade) || 0
+    atual.pedidos.add(p.id ?? p.numero)
+    soma.set(chave, atual)
+  }
+  return [...soma.values()].sort((a, b) => a.descricao.localeCompare(b.descricao, 'pt-BR'))
+}
+
+function desenharResumo(doc, pedidos, x, w) {
+  const linhas = somarItens(pedidos)
+  const total = linhas.reduce((s, l) => s + l.quantidade, 0)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18)
+  doc.text('Resumo da separação', x, M + 8)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(90)
+  doc.text(`${pedidos.length} pedido${pedidos.length === 1 ? '' : 's'} · ${linhas.length} produto${linhas.length === 1 ? '' : 's'} · ${qtd(total)} unidade${total === 1 ? '' : 's'}`, x, M + 15)
+  doc.setTextColor(0)
+  autoTable(doc, {
+    startY: M + 20,
+    margin: { left: x, right: LARG - x - w, top: M, bottom: M },
+    tableWidth: w,
+    head: [['', 'Qtd', 'Produto', 'Pedidos']],
+    body: linhas.map(l => ['', qtd(l.quantidade), l.descricao, String(l.pedidos.size)]),
+    foot: [['', qtd(total), 'Total', String(pedidos.length)]],
+    theme: 'grid',
+    styles: { fontSize: 10, cellPadding: 1.4, minCellHeight: LINHA - 0.5, lineColor: 180, lineWidth: 0.2, valign: 'middle' },
+    headStyles: { fillColor: [235, 235, 235], textColor: 0, fontSize: 7.5, fontStyle: 'bold', minCellHeight: 5 },
+    footStyles: { fillColor: [235, 235, 235], textColor: 0, fontStyle: 'bold' },
+    columnStyles: { 0: { cellWidth: 7 }, 1: { cellWidth: 15, halign: 'center', fontStyle: 'bold', fontSize: 13 }, 3: { cellWidth: 16, halign: 'center', textColor: 90 } },
+    didDrawCell: d => {
+      if (d.section === 'body' && d.column.index === 0)
+        doc.rect(d.cell.x + 1.5, d.cell.y + d.cell.height / 2 - 2, 4, 4)
+    },
+  })
 }
 
 function linhaDeCorte(doc) {
@@ -99,6 +140,12 @@ export async function gerarPicking(pedidos) {
     if (metade === 0) { desenhar(doc, p, qrs[i], M, MEIO - 2 * M); linhaDeCorte(doc); metade = 1 }
     else { desenhar(doc, p, qrs[i], MEIO + M, MEIO - 2 * M); metade = 2 }
   })
+
+  // resumo no fim: na metade livre da última folha, se couber; senão numa folha nova
+  const alturaResumo = 30 + (somarItens(pedidos).length + 1) * LINHA
+  if (alturaResumo > ALT - 2 * M) { novaFolha(); desenharResumo(doc, pedidos, M, LARG - 2 * M) }
+  else if (metade === 1) desenharResumo(doc, pedidos, MEIO + M, MEIO - 2 * M)
+  else { novaFolha(); desenharResumo(doc, pedidos, M, MEIO - 2 * M); linhaDeCorte(doc) }
 
   const d = new Date()
   doc.save(`Picking_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.pdf`)
