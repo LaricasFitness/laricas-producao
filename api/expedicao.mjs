@@ -21,6 +21,10 @@
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 // POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
+//                        (natureza de escolha manual, ex. consignação: não gera, fica para o Bling)
+// POST {acao:'notas', numeros}   só leitura, até 10: natureza que a regra pede + nota existente de cada pedido
+// POST {acao:'transmitirNF', numero}   transmite à Sefaz a nota pendente/rejeitada de UM pedido, só se a
+//                        natureza conferir (conferência refeita no servidor)
 // POST {acao:'historico', parte, ...}   só leitura: NFs, pedidos, descontos e cupons do período (regras de natureza)
 // POST {acao:'picking', numeros}   pedidos completos (itens, envio, observações) pelo nº no Bling, até 20
 
@@ -377,6 +381,65 @@ async function lerNota(tk, id, nomesNat) {
     naturezaId: n.naturezaOperacao?.id || null, natureza: nomesNat[n.naturezaOperacao?.id] || '' }
 }
 
+const SITUACAO_NF = { 1: 'Pendente', 2: 'Cancelada', 3: 'Aguardando recibo', 4: 'Rejeitada', 5: 'Autorizada', 6: 'Emitida DANFE',
+  7: 'Registrada', 8: 'Aguardando protocolo', 9: 'Denegada', 10: 'Consulta situação', 11: 'Bloqueada' }
+const nomeSitPedido = (id, sit) => id === sit.aberto ? 'Em aberto' : id === sit.atendido ? 'Atendido' : String(id ?? '')
+
+// Notas do dia (só leitura): para cada pedido, a natureza que a regra pede e a nota que já existe (se houver)
+async function conferirNotas(tk, numeros) {
+  const [nomesLoja, nomesNat, sit] = await Promise.all([lojas(tk), naturezas(tk), situacoes(tk)])
+  const pedidos = []
+  for (const n of numeros) {
+    try { pedidos.push(await pedidoPorNumero(tk, n) || { numero: n, naoAchado: true }) }
+    catch (e) { if (e instanceof ErroConexao) throw e; pedidos.push({ numero: n, erro: e.message }) }
+  }
+  let shp = {}
+  try { shp = await shopifyDosPedidos(pedidos.map(d => String(d.numeroLoja || ''))) } catch { /* sem Shopify: regra fica manual */ }
+  const saida = []
+  for (const d of pedidos) {
+    if (d.naoAchado || d.erro) { saida.push({ numero: String(d.numero), erro: d.erro || 'Pedido não encontrado no Bling.' }); continue }
+    const loja = nomesLoja[d.loja?.id] || ''
+    const numeroLoja = String(d.numeroLoja || '')
+    const regra = regraNatureza(loja, numeroLoja, shp[numeroLoja] || null)
+    let nota = null
+    if (d.notaFiscal?.id) {
+      try { nota = await lerNota(tk, d.notaFiscal.id, nomesNat) } catch (e) { if (e instanceof ErroConexao) throw e }
+    }
+    saida.push({
+      pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja,
+        situacao: nomeSitPedido(d.situacao?.id, sit) },
+      regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
+      nota: nota && { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) },
+      confere: !!nota && !regra.manual && regra.aceita(nota.natureza),
+    })
+  }
+  return saida
+}
+
+// Transmite à Sefaz a nota pendente (ou rejeitada) de UM pedido, só se a natureza conferir com a regra.
+// A conferência é refeita aqui no servidor, na hora; o pedido continua na situação em que estava.
+async function transmitirNF(tk, numero) {
+  const d = await pedidoPorNumero(tk, numero)
+  if (!d) throw new Error(`Pedido ${numero} não encontrado no Bling.`)
+  if (!d.notaFiscal?.id) throw new Error(`Pedido ${numero} não tem nota. Gere o rascunho antes.`)
+  const [nomesLoja, nomesNat, sit] = await Promise.all([lojas(tk), naturezas(tk), situacoes(tk)])
+  const numeroLoja = String(d.numeroLoja || '')
+  const shp = /^\d{10,}$/.test(numeroLoja) ? (await shopifyDosPedidos([numeroLoja]))[numeroLoja] || null : null
+  const regra = regraNatureza(nomesLoja[d.loja?.id] || '', numeroLoja, shp)
+  const antes = await lerNota(tk, d.notaFiscal.id, nomesNat)
+  if (![1, 4].includes(antes.situacao)) throw new Error(`A nota ${antes.numero} está ${SITUACAO_NF[antes.situacao] || antes.situacao}: não há o que transmitir.`)
+  if (regra.manual) throw new Error(`Pedido ${numero}: natureza é escolha manual (${regra.motivo}). Transmita pelo Bling.`)
+  if (!regra.aceita(antes.natureza)) throw new Error(`Pedido ${numero}: a nota está com "${antes.natureza}", mas a regra pede ${regra.esperada || 'uma natureza de venda'}. Corrija no Bling.`)
+  const sitAntes = d.situacao?.id
+  await bling(tk, `/nfe/${antes.id}/enviar`, { method: 'POST' })
+  const nota = await lerNota(tk, antes.id, nomesNat)
+  // o pedido fica onde estava (a baixa da Expedição é que deixa Atendido)
+  const sitDepois = (await bling(tk, `/pedidos/vendas/${d.id}`))?.data?.situacao?.id
+  if (sitAntes === sit.aberto && sitDepois === sit.atendido)
+    await bling(tk, `/pedidos/vendas/${d.id}/situacoes/${sit.aberto}`, { method: 'PATCH' })
+  return { numero: String(d.numero), nota: { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) } }
+}
+
 // Gera a NF de UM pedido como rascunho (pendente no Bling, NÃO transmite) e confere a natureza.
 // Se o pedido já tem NF, só confere a existente.
 async function rascunhoNF(tk, numero) {
@@ -387,6 +450,7 @@ async function rascunhoNF(tk, numero) {
   const numeroLoja = String(d.numeroLoja || '')
   const shp = /^\d{10,}$/.test(numeroLoja) ? (await shopifyDosPedidos([numeroLoja]))[numeroLoja] || null : null
   const regra = regraNatureza(loja, numeroLoja, shp)
+  if (regra.manual && !d.notaFiscal?.id) throw new Error(`Pedido ${numero}: natureza é escolha manual (${regra.motivo}). Emita pelo Bling.`)
   let nota, gerada = false
   if (d.notaFiscal?.id) nota = await lerNota(tk, d.notaFiscal.id, nomesNat)
   else {
@@ -404,10 +468,11 @@ async function rascunhoNF(tk, numero) {
     situacao = sit.aberto
   }
   return {
-    situacaoPedido: situacao === sit.aberto ? 'Em aberto' : situacao === sit.atendido ? 'Atendido' : String(situacao ?? ''),
-    pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja },
+    situacaoPedido: nomeSitPedido(situacao, sit),
+    pedido: { id: d.id, numero: String(d.numero), loja, cliente: d.contato?.nome || '', total: d.total, numeroLoja, situacao: nomeSitPedido(situacao, sit) },
     shopify: shp, regra: { esperada: regra.esperada, motivo: regra.motivo, manual: regra.manual },
-    nota, gerada, confere: !regra.manual && regra.aceita(nota.natureza),
+    nota: { ...nota, situacaoNome: SITUACAO_NF[nota.situacao] || String(nota.situacao) }, gerada,
+    confere: !regra.manual && regra.aceita(nota.natureza),
   }
 }
 
@@ -597,7 +662,9 @@ export default async function handler(req, res) {
   try {
     // Tudo exige estar logado no sistema, menos a volta do Bling (protegida pelo state que só o
     // "conectar", já logado, grava)
-    if (acao !== 'callback' && !(await exigirSessao(req, res))) return
+    // Gerar e transmitir nota fiscal: só administradores
+    const soAdmin = acao === 'rascunhoNF' || acao === 'transmitirNF'
+    if (acao !== 'callback' && !(await exigirSessao(req, res, { admin: soAdmin }))) return
 
     // Autorização do Bling (navegação normal, fora do fetch do sistema)
     if (acao === 'conectar') {
@@ -652,6 +719,18 @@ export default async function handler(req, res) {
       const numero = String(req.body?.numero || '').trim().replace(/^#/, '')
       if (!/^\d+$/.test(numero)) return res.status(400).json({ erro: 'Informe o número do pedido.' })
       return res.status(200).json(await rascunhoNF(tk, numero))
+    }
+    if (acao === 'notas') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      const numeros = [...new Set((req.body?.numeros || []).map(n => String(n).trim().replace(/^#/, '')).filter(n => /^\d+$/.test(n)))]
+      if (!numeros.length || numeros.length > 10) return res.status(400).json({ erro: 'Envie de 1 a 10 números de pedido.' })
+      return res.status(200).json({ pedidos: await conferirNotas(tk, numeros) })
+    }
+    if (acao === 'transmitirNF') {
+      if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })
+      const numero = String(req.body?.numero || '').trim().replace(/^#/, '')
+      if (!/^\d+$/.test(numero)) return res.status(400).json({ erro: 'Informe o número do pedido.' })
+      return res.status(200).json(await transmitirNF(tk, numero))
     }
     if (acao === 'historico') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })

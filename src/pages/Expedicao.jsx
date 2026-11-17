@@ -3,12 +3,14 @@ import { supabase } from '../supabase'
 import { RefreshCw, Camera, X, Check, AlertTriangle, Link2, Plus, Search } from 'lucide-react'
 import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedicao'
 import Pickings from './ExpedicaoPickings'
+import NotasDoDia from './ExpedicaoNotas'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
 // (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez:
 // Shopify → enviado (com rastreio) e arquivado; Bling → Atendido.
 
 const usuarioAtual = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { return '' } }
+const ehAdmin = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.perfil === 'admin' } catch { return false } }
 const CHAVE_LIDOS = 'expedicao_lidos'
 const POR_VEZ = 8          // pedidos por chamada de baixa
 const DETALHES_POR_VEZ = 30
@@ -259,6 +261,9 @@ export default function Expedicao() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Pickings gerados ao fechar o planejamento de produção */}
       <Pickings />
+
+      {/* Notas fiscais dos pedidos do picking (só administradores) */}
+      {ehAdmin() && <NotasDoDia />}
 
       {/* Leitura */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
