@@ -1,9 +1,12 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { chamarExpedicao } from './expedicao'
 
-// PDF de envio do dia (Expedição › 3. Etiquetas e DANFE): para cada pedido do picking, a etiqueta que a
-// logística gerou no Bling (Correios, Bling Envios, Lalamove...) seguida da DANFE simplificada (10 × 15 cm),
-// montada aqui com os dados do XML da nota autorizada. O Bling não entrega a DANFE simplificada pela API.
+// PDF de envio do dia (Expedição › 3. Etiquetas e DANFE), para a térmica 10 × 15 cm: UMA etiqueta por pedido,
+// com a etiqueta de transporte que a logística gerou no Bling (Correios, Bling Envios, Lalamove...) em cima e a
+// DANFE simplificada embaixo, montada aqui com o XML da nota autorizada (o Bling não entrega a DANFE
+// simplificada pela API). A etiqueta não é reduzida: só as sobras em branco (e o rodapé do Melhor Envio)
+// são cortadas para abrir espaço. Modelo de etiqueta desconhecido: é reduzida para caber (fica avisado).
+// Pedido sem nota autorizada sai só com a etiqueta. Valor total fora: deixou de ser obrigatório (NT 2020.004).
 // Só leitura: não gera etiqueta nem contrata frete.
 
 const POR_CHAMADA = 8
@@ -43,7 +46,6 @@ const fmtDataHora = iso => {
   const d = new Date(iso)
   return isNaN(d) ? iso : d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
-const fmtValor = v => `R$ ${Number(v || 0).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
 
 export function paginaDanfe(pdf, f, fb, d, pedido) {
   const page = pdf.addPage([L, A])
@@ -76,10 +78,63 @@ export function paginaDanfe(pdf, f, fb, d, pedido) {
   secao('PROTOCOLO DE AUTORIZAÇÃO DE USO', [`${d.protocolo} - ${fmtDataHora(d.autorizadaEm)}`])
   secao('EMITENTE', [d.emitente.nome, `CNPJ/CPF ${fmtDoc(d.emitente.doc)}   IE ${d.emitente.ie || '-'}   UF ${d.emitente.uf}`])
   secao('DESTINATÁRIO', [d.destinatario.nome, `CNPJ/CPF ${fmtDoc(d.destinatario.doc)}   IE ${d.destinatario.ie || '-'}   UF ${d.destinatario.uf}`])
-  secao('VALOR TOTAL DA NOTA', [fmtValor(d.valor)])
 
   texto(cortar(`Pedido ${pedido.numero} · ${pedido.cliente || ''}`, 7, f, W), M, M, 7)
   texto('Consulte a autenticidade em www.nfe.fazenda.gov.br/portal', M, M + 10, 6.5)
+}
+
+// DANFE simplificada compacta, para a faixa de baixo da etiqueta (x, y = canto inferior esquerdo)
+const ALTURA_DANFE = 92
+function danfeCompacta(page, f, fb, d, x, y, w) {
+  const h = ALTURA_DANFE
+  page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0, 0, 0), borderWidth: 0.6 })
+  const texto = (t, xx, yy, tam, fonte = f) => {
+    let s = latin(t); const max = x + w - 4 - xx
+    while (s && fonte.widthOfTextAtSize(s, tam) > max) s = s.slice(0, -1)
+    page.drawText(s, { x: xx, y: yy, size: tam, font: fonte, color: rgb(0, 0, 0) })
+  }
+  let cy = y + h - 10
+  texto('DANFE SIMPLIFICADO - ETIQUETA', x + 4, cy, 7.5, fb)
+  const dir = latin(`${d.tipo === '0' ? '0-ENTRADA' : '1-SAÍDA'}  NF ${d.numero}  Série ${d.serie}  ${fmtDataHora(d.emissao).slice(0, 10)}`)
+  page.drawText(dir, { x: x + w - 4 - f.widthOfTextAtSize(dir, 6.5), y: cy, size: 6.5, font: f })
+  cy -= 32
+  desenharBarras(page, d.chave, x + 10, cy, w - 20, 28)
+  cy -= 8
+  const chave = d.chave.replace(/(\d{4})(?=\d)/g, '$1 ')
+  page.drawText(chave, { x: x + (w - f.widthOfTextAtSize(chave, 6.5)) / 2, y: cy, size: 6.5, font: f })
+  cy -= 10.5
+  texto(`Protocolo de autorização: ${d.protocolo}  ${fmtDataHora(d.autorizadaEm)}`, x + 4, cy, 6.5)
+  cy -= 9.5
+  texto(`Emitente: ${d.emitente.nome}  CNPJ ${fmtDoc(d.emitente.doc)}  IE ${d.emitente.ie || '-'}  ${d.emitente.uf}`, x + 4, cy, 6.5)
+  cy -= 9.5
+  const docDest = String(d.destinatario.doc || '')
+  texto(`Destinatário: ${d.destinatario.nome}  ${docDest.length === 14 ? 'CNPJ' : 'CPF'} ${fmtDoc(docDest)}${d.destinatario.ie ? '  IE ' + d.destinatario.ie : ''}  ${d.destinatario.uf}`, x + 4, cy, 6.5)
+}
+
+// Quanto de cada modelo de etiqueta aproveitar (o resto é branco):
+//   Bling (Correios, Lalamove, Retirada): 284 × 425, conteúdo entre 6% e 80% a partir do topo
+//   Melhor Envio (J&T, Jadlog): ~577 × 813, rodapé com o logo do Melhor Envio abaixo de 76,5%
+function recorte(pg) {
+  const { width: w, height: h } = pg.getSize()
+  if (Math.abs(w - 284) < 3 && Math.abs(h - 425) < 3) return { modelo: 'bling', box: { left: 0, right: w, bottom: h * 0.20, top: h * 0.925 } }
+  if (Math.abs(w / h - 577.5 / 813) < 0.02) return { modelo: 'melhorenvio', box: { left: 0, right: w, bottom: h * 0.235, top: h } }
+  return { modelo: 'outro', box: { left: 0, right: w, bottom: 0, top: h } }
+}
+
+// Etiqueta de transporte + DANFE simplificada numa página 10 × 15. Devolve true se precisou reduzir a etiqueta.
+export async function etiquetaComDanfe(pdf, f, fb, origem, d) {
+  const pg = origem.getPage(0)
+  const { modelo, box } = recorte(pg)
+  const emb = await pdf.embedPage(pg, box)
+  const page = pdf.addPage([L, A])
+  const M = 4
+  const altLivre = A - ALTURA_DANFE - 2 * M - 4
+  const escalaLargura = L / emb.width
+  const escala = Math.min(escalaLargura, altLivre / emb.height)
+  const lw = emb.width * escala, lh = emb.height * escala
+  page.drawPage(emb, { x: (L - lw) / 2, y: A - M - lh, width: lw, height: lh })
+  danfeCompacta(page, f, fb, d, M + 4, M, L - 2 * M - 8)
+  return modelo === 'outro' || escala < escalaLargura - 0.001
 }
 
 // Busca os documentos no servidor e monta o PDF. pedidos: [{ id, numero, cliente }] (do picking).
@@ -96,18 +151,25 @@ export async function montarPdfEnvio(pedidos, onProgresso) {
       const doc = docs.find(x => String(x.id) === String(p.id)) || { avisos: [], erro: 'Sem resposta do servidor.' }
       const r = { numero: doc.numero || p.numero, cliente: doc.cliente || p.cliente, transportadora: doc.transportadora || p.transportadora || '',
         etiqueta: false, danfe: false, nota: doc.nota, avisos: [...(doc.avisos || [])], erro: doc.erro || '' }
+      let origem = null
       if (doc.etiqueta) {
-        try {
-          const origem = await PDFDocument.load(Uint8Array.from(atob(doc.etiqueta), c => c.charCodeAt(0)))
-          const paginas = await pdf.copyPages(origem, origem.getPageIndices())
-          paginas.forEach(pg => pdf.addPage(pg))
+        try { origem = await PDFDocument.load(Uint8Array.from(atob(doc.etiqueta), c => c.charCodeAt(0))) }
+        catch (e) { r.avisos.push('Não consegui ler o PDF da etiqueta: ' + e.message) }
+      }
+      try {
+        if (origem && doc.danfe) {
+          // uma etiqueta só: transporte em cima, DANFE simplificada embaixo
+          if (await etiquetaComDanfe(pdf, f, fb, origem, doc.danfe)) r.avisos.push('Modelo de etiqueta diferente: foi reduzida para caber a DANFE. Confira a leitura.')
+          if (origem.getPageCount() > 1) for (const pg of await pdf.copyPages(origem, origem.getPageIndices().slice(1))) pdf.addPage(pg)
+          r.etiqueta = r.danfe = true
+        } else if (origem) {
+          for (const pg of await pdf.copyPages(origem, origem.getPageIndices())) pdf.addPage(pg)
           r.etiqueta = true
-        } catch (e) { r.avisos.push('Não consegui ler o PDF da etiqueta: ' + e.message) }
-      }
-      if (doc.danfe) {
-        try { paginaDanfe(pdf, f, fb, doc.danfe, { numero: r.numero, cliente: r.cliente }); r.danfe = true }
-        catch (e) { r.avisos.push('Não consegui montar a DANFE: ' + e.message) }
-      }
+        } else if (doc.danfe) {
+          paginaDanfe(pdf, f, fb, doc.danfe, { numero: r.numero, cliente: r.cliente })
+          r.danfe = true
+        }
+      } catch (e) { r.avisos.push('Não consegui montar a etiqueta: ' + e.message) }
       resumo.push(r)
     }
     onProgresso?.(Math.min(pedidos.length, i + POR_CHAMADA), pedidos.length)

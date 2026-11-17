@@ -3,9 +3,9 @@ import { supabase } from '../supabase'
 import { Download, RefreshCw, Tag } from 'lucide-react'
 import { montarPdfEnvio, baixarPdf } from '../lib/documentosEnvio'
 
-// Logística › Expedição › 3. Etiquetas e DANFE. Um PDF por dia de produção, na ordem do picking:
-// a etiqueta de cada pedido (gerada pela logística no Bling) e, se o pedido tem nota autorizada, a DANFE
-// simplificada logo depois. Só leitura: qualquer pessoa da expedição pode baixar.
+// Logística › Expedição › 3. Etiquetas e DANFE. Um PDF por dia de produção, na ordem do picking, para a
+// térmica 10 × 15: uma etiqueta por pedido, com a etiqueta de transporte (gerada pela logística no Bling) em
+// cima e, se o pedido tem nota autorizada, a DANFE simplificada embaixo. Só leitura: a expedição toda baixa.
 // Etiqueta dos Correios e do Bling Envios só existe depois da NF autorizada (etapa 2).
 
 const DIA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
@@ -48,9 +48,9 @@ export default function EtiquetasDoDia() {
         <div style={{ fontWeight: 800, fontSize: 15, flex: 1 }}>Etiquetas e DANFE simplificada</div>
       </div>
       <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-        Um PDF do dia, na ordem do picking: a etiqueta de cada pedido e, quando há nota autorizada, a DANFE simplificada
-        logo depois (10 × 15 cm, para a impressora térmica). As etiquetas dos Correios e do Bling Envios só existem depois
-        que a nota é autorizada.
+        Um PDF do dia para a impressora térmica (10 × 15 cm), na ordem do picking: uma etiqueta por pedido, com a etiqueta
+        de transporte em cima e a DANFE simplificada embaixo (quando há nota autorizada). As etiquetas dos Correios e do
+        Bling Envios só existem depois que a nota é autorizada.
       </div>
       {pickings.length === 0 && <div style={{ fontSize: 13, color: 'var(--gray-400)' }}>Nenhum picking ainda.</div>}
       {pickings.length > 0 && (

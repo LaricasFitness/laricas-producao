@@ -99,9 +99,13 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   Notas fiscais: só admin; o resto, a expedição toda (o Gabriel baixa o picking e o PDF de etiquetas na Expedição,
   sem acesso ao Planejamento). A aba escolhida fica guardada no aparelho.
 - Etiquetas e DANFE (Expedição › 3, `src/pages/ExpedicaoEtiquetas.jsx` + `src/lib/documentosEnvio.js`): um PDF por dia,
-  na ordem do picking: a etiqueta de cada pedido (`GET /logisticas/etiquetas`, a que a logística já gerou no Bling)
-  e, se há nota autorizada, a DANFE simplificada (10 × 15 cm) montada pelo sistema com o XML da nota (chave com
-  Code 128, protocolo, emitente, destinatário, valor): o Bling não entrega a DANFE simplificada pela API. Só leitura
+  na ordem do picking, para a térmica 10 × 15: UMA etiqueta por pedido, com a etiqueta de transporte em cima
+  (`GET /logisticas/etiquetas`, a que a logística já gerou no Bling) e, se há nota autorizada, a DANFE simplificada
+  embaixo, montada pelo sistema com o XML da nota (chave com Code 128, protocolo, emitente, destinatário; sem valor
+  total, que deixou de ser obrigatório pela NT 2020.004): o Bling não entrega a DANFE simplificada pela API. A
+  etiqueta não é reduzida: o sistema corta só as sobras em branco do modelo do Bling (Correios, Lalamove) e o
+  rodapé com o logo do Melhor Envio (J&T, Jadlog); modelo desconhecido é reduzido para caber, com aviso na tela.
+  O picking sai em A4 (aba 1). Só leitura
   (`acao:'documentos'`): não gera etiqueta nem contrata frete. Etiqueta dos Correios (contrato) e do Bling Envios
   (J&T, Jadlog) sai sozinha no Bling quando a NF é autorizada; a da Lalamove existe sem NF. Os PDFs do Bling ficam
   no S3 com link de 1 h e bloqueiam o navegador (CORS), por isso a função baixa e devolve em base64.
