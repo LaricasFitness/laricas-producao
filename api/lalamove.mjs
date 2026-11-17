@@ -218,7 +218,7 @@ async function resolver(db, pedidos, quem) {
 }
 
 async function pedir(db, { cotacao, stops, rota, paradas }, usuario) {
-  if (!Array.isArray(paradas) || !paradas.length || paradas.some(p => !/^d+$/.test(String(p.numero || '')) || !telefone(p.tel)))
+  if (!Array.isArray(paradas) || !paradas.length || paradas.some(p => !/^\d+$/.test(String(p.numero || '')) || !telefone(p.tel)))
     throw new Error('Paradas inválidas. Cote de novo.')
   if (!cotacao || !Array.isArray(stops) || stops.length !== paradas.length + 1) throw new Error('Cotação inválida. Cote de novo.')
   // Não chamar duas vezes a mesma entrega
@@ -248,6 +248,29 @@ async function pedir(db, { cotacao, stops, rota, paradas }, usuario) {
   return { ...linha, aviso: error ? `A corrida foi criada, mas não consegui guardar no sistema: ${error.message}` : '' }
 }
 
+// Situação da corrida e dados do motoboy (nome, telefone, placa) quando já foi aceita
+async function acompanhar(db, orderId) {
+  if (!/^\d+$/.test(orderId)) throw new Error('Informe o número da corrida.')
+  const o = await lalamove('GET', `/v3/orders/${orderId}`)
+  let motoboy = null
+  if (o.driverId) {
+    try {
+      const d = await lalamove('GET', `/v3/orders/${orderId}/drivers/${o.driverId}`)
+      motoboy = { nome: d.name || '', telefone: d.phone || '', placa: d.plateNumber || '' }
+    } catch { /* ainda sem motoboy */ }
+  }
+  await db.from('lalamove_corridas').update({ status: o.status || null, share_link: o.shareLink || undefined }).eq('order_id', orderId)
+  return { orderId, status: o.status, shareLink: o.shareLink, motoboy }
+}
+
+// Cancela a corrida (a Lalamove só deixa antes do motoboy coletar)
+async function cancelar(db, orderId) {
+  if (!/^\d+$/.test(orderId)) throw new Error('Informe o número da corrida.')
+  await lalamove('DELETE', `/v3/orders/${orderId}`)
+  await db.from('lalamove_corridas').update({ status: 'CANCELED' }).eq('order_id', orderId)
+  return { orderId, status: 'CANCELED' }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store')
   try {
@@ -273,9 +296,11 @@ export default async function handler(req, res) {
     if (b.acao === 'adiar') return res.status(200).json(await adiar(db, b, usuario))
     if (b.acao === 'lembretes') return res.status(200).json({ lembretes: await lembretes(db) })
     if (b.acao === 'resolver') {
-      await resolver(db, [String(b.numero || '')].filter(n => /^d+$/.test(n)), usuario?.nome)
+      await resolver(db, [String(b.numero || '')].filter(n => /^\d+$/.test(n)), usuario?.nome)
       return res.status(200).json({ ok: true })
     }
+    if (b.acao === 'acompanhar') return res.status(200).json(await acompanhar(db, String(b.orderId || '')))
+    if (b.acao === 'cancelar') return res.status(200).json(await cancelar(db, String(b.orderId || '')))
     if (b.acao === 'pedir') return res.status(200).json(await pedir(db, b, usuario))
     return res.status(400).json({ erro: 'Ação inválida' })
   } catch (e) {

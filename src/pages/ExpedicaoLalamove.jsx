@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { Bike, RefreshCw, ExternalLink, Check, CalendarClock, AlertTriangle } from 'lucide-react'
+import { Bike, RefreshCw, ExternalLink, Check, CalendarClock, AlertTriangle, Pencil } from 'lucide-react'
 
 // Expedição › 4. Baixa › Lalamove. Cada pacote lido que está numa rota Lalamove do planejamento
 // (Logística › rotas, salvas em logistica_historico) mostra a rota dele e quantos pacotes dela já foram lidos.
@@ -18,6 +18,7 @@ export async function chamarLalamove(corpo) {
 }
 const fmtValor = (v, m = 'BRL') => m === 'BRL' ? `R$ ${Number(v || 0).toFixed(2).replace('.', ',')}` : `${m} ${v}`
 const fmtKm = (v, u) => u === 'm' ? `${(Number(v) / 1000).toFixed(1).replace('.', ',')} km` : `${v} ${u}`
+const CAMPOS = [['rua', 'Rua'], ['numero_end', 'Número'], ['complemento', 'Complemento (apto, bloco)'], ['bairro', 'Bairro'], ['cidade', 'Cidade'], ['cep', 'CEP'], ['tel', 'Telefone (com DDD)']]
 const fmtDia = iso => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : ''
 
 // parada da rota (Logística) → parada para a Lalamove (stop.id = nº do pedido no Bling; stop.numero = nº da rua)
@@ -57,6 +58,7 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
   const [bloqueios, setBloqueios] = useState({})    // chave da rota → [{ numero, problema }]
   const [ocupado, setOcupado] = useState('')
   const [erro, setErro] = useState('')
+  const [editando, setEditando] = useState(null)    // correção de endereço aberta: { numero, rua, numero_end, ... }
 
   useEffect(() => {
     supabase.from('logistica_historico').select('id, datas, rotas, criado_em').order('criado_em', { ascending: false }).limit(8)
@@ -92,6 +94,32 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
   const corridaDa = r => corridas.find(c => c.pedidos.some(n => r.stops.some(s => String(s.id) === n)) && !/CANCEL|REJECT|EXPIRE/i.test(c.status || ''))
 
   // Deixar para amanhã: guarda o lembrete e tira o pacote da leitura de hoje
+  // Corrigir o endereço ali mesmo: grava na rota salva (logistica_historico) e confere de novo
+  function abrirCorrecao(s) {
+    setEditando({ numero: String(s.id), rua: s.rua || '', numero_end: s.numero || '', complemento: s.complemento || '',
+      bairro: s.bairro || '', cidade: s.cidade || '', cep: s.cep || '', tel: s.tel || '' })
+  }
+  async function salvarCorrecao(r) {
+    const ed = editando
+    if (!ed) return
+    if (!/^\d+/.test(ed.numero_end.trim())) { setErro('Informe o número do prédio/casa (o apartamento vai no complemento).'); return }
+    setErro(''); setOcupado(r.chave)
+    try {
+      const novo = { rua: ed.rua.trim(), numero: ed.numero_end.trim(), complemento: ed.complemento.trim(), bairro: ed.bairro.trim(),
+        cidade: ed.cidade.trim(), cep: ed.cep.trim(), tel: ed.tel.replace(/\D/g, '') }
+      const { data, error } = await supabase.from('logistica_historico').select('rotas').eq('id', r.historicoId).single()
+      if (error) throw new Error(error.message)
+      const rotasNovas = (data.rotas || []).map(rt => ({ ...rt, stops: (rt.stops || []).map(s => String(s.id) === ed.numero ? { ...s, ...novo, corrigidoPor: 'Expedição' } : s) }))
+      const { error: e2 } = await supabase.from('logistica_historico').update({ rotas: rotasNovas }).eq('id', r.historicoId)
+      if (e2) throw new Error(e2.message)
+      setHistoricos(hs => hs.map(h => h.id === r.historicoId ? { ...h, rotas: rotasNovas } : h))
+      setEditando(null)
+      // tira o bloqueio: o "Chamar Lalamove" confere de novo com o endereço corrigido
+      setBloqueios(b => ({ ...b, [r.chave]: (b[r.chave] || []).filter(x => x.numero !== ed.numero) }))
+    } catch (e) { setErro('Não consegui salvar a correção: ' + e.message) }
+    finally { setOcupado('') }
+  }
+
   async function deixarParaAmanha(r, s, motivo) {
     await chamarLalamove({ acao: 'adiar', numero: String(s.id), cliente: s.nome, motivo, rota: `${r.code} · ${r.label}` })
     tirarDaLeitura?.(String(s.id))
@@ -191,12 +219,30 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
                 <div style={{ fontWeight: 700 }}><AlertTriangle size={12} /> Não dá para chamar a Lalamove com estes pedidos:</div>
                 {bloq.map(x => {
                   const s = r.stops.find(s => String(s.id) === x.numero)
+                  const ed = editando?.numero === x.numero ? editando : null
                   return (
-                    <div key={x.numero} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ flex: 1 }}><b>{x.numero}</b> {s?.nome || ''}: {x.problema}. Corrija no Bling e gere a rota de novo, ou deixe para amanhã.</span>
-                      <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => deixarParaAmanha(r, s, x.problema[0].toUpperCase() + x.problema.slice(1)).catch(e => setErro(e.message))}>
-                        <CalendarClock size={11} /> Amanhã
-                      </button>
+                    <div key={x.numero} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span style={{ flex: 1 }}><b>{x.numero}</b> {s?.nome || ''}: {x.problema}. Corrigir o endereço aqui ou deixar para amanhã?</span>
+                        {!ed && <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => abrirCorrecao(s)}>
+                          <Pencil size={11} /> Corrigir aqui
+                        </button>}
+                        <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => deixarParaAmanha(r, s, x.problema[0].toUpperCase() + x.problema.slice(1)).catch(e => setErro(e.message))}>
+                          <CalendarClock size={11} /> Amanhã
+                        </button>
+                      </div>
+                      {ed && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 4, padding: 6, background: 'white', borderRadius: 6, color: 'var(--gray-800)' }}>
+                          {CAMPOS.map(([k, rot]) => (
+                            <input key={k} className="form-input" style={{ fontSize: 12, padding: '4px 6px' }} placeholder={rot} title={rot}
+                              value={ed[k] || ''} onChange={e => setEditando(v => ({ ...v, [k]: e.target.value }))} />
+                          ))}
+                          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6 }}>
+                            <button className="btn btn-primary btn-sm" disabled={!!ocupado} onClick={() => salvarCorrecao(r)}><Check size={12} /> Salvar (depois: Chamar Lalamove)</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditando(null)}>Cancelar</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
