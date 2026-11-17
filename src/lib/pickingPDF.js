@@ -22,11 +22,26 @@ export const ordemPicking = (a, b) =>
   (envio(a) || 'zz').localeCompare(envio(b) || 'zz') || Number(a.numero) - Number(b.numero)
 
 const envio = p => [p.transportadora, p.servico].filter(Boolean).join(' · ')
-const observacoes = p => [p.obs, p.obsInterna && `Interna: ${p.obsInterna}`].filter(Boolean).join('\n')
+const limpo = t => String(t || '').trim()
 
 // Altura que o pedido ocupa numa meia folha (estimativa folgada)
 const alturaPedido = p => 39 + Math.max(1, (p.itens || []).length) * LINHA + 8 +
-  (observacoes(p) ? 4 + Math.ceil(observacoes(p).length / 70) * 4.2 : 0)
+  (limpo(p.obsInterna) ? 12 + Math.ceil(limpo(p.obsInterna).length / 50) * 4.8 : 0) +
+  (limpo(p.obs) ? 8 + Math.ceil(limpo(p.obs).length / 70) * 4.2 : 0)
+
+// Observação interna: em preto e branco precisa saltar aos olhos → faixa preta + borda grossa + negrito
+function obsInterna(doc, texto, x, y, w) {
+  doc.setFillColor(0); doc.rect(x, y, w, 5.5, 'F')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(255)
+  doc.text('OBSERVAÇÃO INTERNA', x + 2, y + 3.9)
+  doc.setTextColor(0); doc.setFontSize(11)
+  const linhas = doc.splitTextToSize(texto, w - 5)
+  const h = linhas.length * 4.8 + 3
+  doc.setLineWidth(0.8); doc.rect(x, y, w, 5.5 + h); doc.setLineWidth(0.2)
+  doc.text(linhas, x + 2.5, y + 5.5 + 4.6)
+  doc.setFont('helvetica', 'normal')
+  return 5.5 + h
+}
 
 // Desenha o pedido na faixa [x, x + w]
 function desenhar(doc, p, qr, x, w) {
@@ -49,8 +64,11 @@ function desenhar(doc, p, qr, x, w) {
     doc.setTextColor(0)
   }
 
+  let topo = y + 30
+  if (limpo(p.obsInterna)) topo += obsInterna(doc, limpo(p.obsInterna), x, topo, w) + 3
+
   autoTable(doc, {
-    startY: y + 30,
+    startY: topo,
     margin: { left: x, right: LARG - x - w, top: M, bottom: M },
     tableWidth: w,
     head: [['', 'Qtd', 'Produto']],
@@ -71,13 +89,16 @@ function desenhar(doc, p, qr, x, w) {
   doc.text(`${itens.length} produto${itens.length === 1 ? '' : 's'} · ${qtd(total)} unidade${total === 1 ? '' : 's'}`, x + w, f + 3, { align: 'right' })
   doc.setTextColor(0)
 
-  const obs = observacoes(p)
+  // Observação do cliente (ex.: mensagem de presente): caixa com borda fina
+  const obs = limpo(p.obs)
   if (obs) {
-    doc.setFontSize(9)
+    doc.setFontSize(9.5)
     const linhas = doc.splitTextToSize(obs, w - 4)
-    doc.setFillColor(255, 247, 214)
-    doc.rect(x, f + 5, w, linhas.length * 4 + 3, 'F')
-    doc.text(linhas, x + 2, f + 9)
+    doc.setLineWidth(0.3); doc.rect(x, f + 5, w, linhas.length * 4.2 + 8); doc.setLineWidth(0.2)
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8)
+    doc.text('Obs. do cliente', x + 2, f + 8.8)
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5)
+    doc.text(linhas, x + 2, f + 13)
   }
 }
 
