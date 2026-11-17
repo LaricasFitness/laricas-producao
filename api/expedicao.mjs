@@ -761,6 +761,9 @@ async function baixarPedido(ctx, id, notificar, operador) {
     }
     if (p.situacaoId !== ctx.sit.atendido) await bling(ctx.tk, `/pedidos/vendas/${id}/situacoes/${ctx.sit.atendido}`, { method: 'PATCH' })
     reg.ok_bling = true
+    // saiu: tira o lembrete de pedido adiado, se houver
+    await ctx.db.from('expedicao_adiamentos').update({ resolvido_em: new Date().toISOString(), resolvido_por: 'baixa' })
+      .eq('pedido', reg.numero || '').is('resolvido_em', null)
   } catch (e) {
     reg.erro = e.message || String(e)
   }

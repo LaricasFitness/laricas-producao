@@ -5,7 +5,7 @@ import { chamarExpedicao, acharPedido, envioDoPedido, bipe } from '../lib/expedi
 import Pickings from './ExpedicaoPickings'
 import NotasDoDia from './ExpedicaoNotas'
 import EtiquetasDoDia from './ExpedicaoEtiquetas'
-import LalamoveRotas from './ExpedicaoLalamove'
+import LalamoveRotas, { LembretesAdiados } from './ExpedicaoLalamove'
 
 // Logística › Expedição: o operador lê o código de barras da etiqueta de cada pacote que saiu
 // (câmera do celular ou leitor de código de barras) e dá baixa de todos de uma vez:
@@ -281,6 +281,9 @@ export default function Expedicao() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Lembrete da manhã: pedidos deixados para hoje (ex.: endereço comercial na hora da Lalamove) */}
+      <LembretesAdiados />
+
       {/* Etapas do dia: produção fecha o picking → notas → etiquetas e DANFE → no dia seguinte, a baixa */}
       <div className="tabs" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         {ETAPAS.filter(e => admin || !e.admin).map(e => (
@@ -365,7 +368,7 @@ export default function Expedicao() {
       </div>
 
       {/* Lalamove: rotas do planejamento dos pacotes lidos → chamar a corrida */}
-      <LalamoveRotas lidos={listaLidos} />
+      <LalamoveRotas lidos={listaLidos} tirarDaLeitura={numero => { const p = listaLidos.find(x => String(x.numero) === numero); if (p) tirar(p) }} />
 
       {/* Em aberto, não lidos */}
       <div className="card card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

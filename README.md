@@ -137,8 +137,12 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   do planejamento (Logística › rotas, `logistica_historico.rotas[].stops`, `stop.id` = nº do pedido no Bling) mostra
   a rota e quantos pacotes dela foram lidos. "Chamar Lalamove" faz a cotação em moto (paradas na ordem da rota,
   coleta na R. Pedroso 258) e mostra o preço; o Gabriel confirma e a corrida é criada (API v3, assinatura HMAC,
-  `Market: BR`). Coordenadas pelo OpenStreetMap (Nominatim, 1 consulta/s; aviso quando a localização é só pelo
-  CEP). A corrida fica em `lalamove_corridas` (`lalamove_corridas.sql`, RLS sem policy) e o link de acompanhamento
+  `Market: BR`). Entrega na casa do cliente: só vale a localização EXATA do número (Google, se houver
+  `GOOGLE_MAPS_API_KEY` no Vercel; senão OpenStreetMap/Nominatim, 1 consulta/s). Parada sem número, sem telefone
+  ou não localizada bloqueia a cotação (corrige no Bling e gera a rota de novo, ou deixa para amanhã). Endereço
+  comercial (sala, cj, conjunto, andar, loja, escritório; destinatário com CNPJ/LTDA) pergunta se deixa para amanhã:
+  o pedido sai da leitura e entra em `expedicao_adiamentos` (`expedicao_adiamentos.sql`, RLS sem policy), que aparece
+  no topo da Expedição na manhã seguinte até a baixa (ou "Resolvido"). A corrida fica em `lalamove_corridas` (`lalamove_corridas.sql`, RLS sem policy) e o link de acompanhamento
   vai como rastreio da Shopify na baixa. Não chama duas vezes os mesmos pedidos (3 dias). Variáveis no Vercel:
   `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET` (Partner Portal, mercado Brazil) e `LALAMOVE_AMBIENTE` (`sandbox` ou
   `producao`; em produção a corrida é cobrada).
