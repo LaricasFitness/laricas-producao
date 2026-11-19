@@ -73,19 +73,25 @@ async function vez() {
   }
 }
 
+// O Bling recusou por excesso de requisições mesmo depois de esperar
+export class ErroLimite extends Error {}
+
+// 429: espera cada vez mais (1,2 s, 2,5 s, 5 s) antes de desistir
+const ESPERAS_429 = [1200, 2500, 5000]
+
 export async function bling(tk, caminho, opc = {}) {
-  for (let t = 0; t < 4; t++) {
+  for (let t = 0; t <= ESPERAS_429.length; t++) {
     await vez()
     const r = await fetch(BLING + caminho, {
       ...opc,
       headers: { Authorization: `Bearer ${tk}`, 'enable-jwt': '1', Accept: 'application/json', ...(opc.body ? { 'Content-Type': 'application/json' } : {}) },
     })
-    if (r.status === 429) { await dormir(1200); continue }
+    if (r.status === 429) { if (t < ESPERAS_429.length) await dormir(ESPERAS_429[t]); continue }
     if (r.status === 401) throw new ErroConexao('O acesso ao Bling expirou. Conecte o Bling de novo.')
     if (r.status === 204) return null
     const j = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error('Bling: ' + (j.error?.fields?.[0]?.msg || j.error?.description || j.error?.message || `erro ${r.status}`))
     return j
   }
-  throw new Error('Bling: limite de requisições. Tente de novo em instantes.')
+  throw new ErroLimite('Bling: limite de requisições. Tente de novo em instantes.')
 }

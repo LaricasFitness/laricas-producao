@@ -21,7 +21,7 @@
 // Categorias - Receitas e Despesas e Contatos (mudar escopo derruba o acesso: reconectar na Expedição).
 
 import { exigirSessao } from './_sessao.mjs'
-import { ErroConexao, banco, tokenBling, bling } from './_bling.mjs'
+import { ErroConexao, ErroLimite, banco, tokenBling, bling } from './_bling.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -74,9 +74,11 @@ async function passoCaixa(tk, c, de, ate, fim) {
   while (Date.now() < fim) {
     if (c.fase === 'lista') {
       const d = (await bling(tk, `/caixas?${qs({ ...base, pagina: c.pg })}`))?.data || []
-      for (const l of d) if (l.data >= de && l.data <= ate) c.itens[l.id] = baseCaixa(l)
+      const novos = d.filter(l => !c.itens[l.id])
+      for (const l of novos) if (l.data >= de && l.data <= ate) c.itens[l.id] = baseCaixa(l)
       c.tam = Math.max(c.tam, d.length)
-      if (d.length) { c.pg++; continue }
+      // página vazia ou repetida (nenhum lançamento novo) = fim da lista
+      if (novos.length) { c.pg++; continue }
       if (!c.tam) { c.fase = 'fim'; break }
       c.cats = (await categorias(tk)).map(x => [x.id, x.descricao]); c.ci = 0; c.pg = 1; c.fase = 'cats'
     } else if (c.fase === 'cats') {
@@ -88,7 +90,7 @@ async function passoCaixa(tk, c, de, ate, fim) {
         if (!c.itens[l.id]) c.itens[l.id] = baseCaixa(l)
         c.itens[l.id].categoria = nomeCat
       }
-      if (d.length < c.tam) { c.ci++; c.pg = 1 } else c.pg++
+      if (d.length < c.tam || c.pg >= 50) { c.ci++; c.pg = 1 } else c.pg++
     } else if (c.fase === 'resto') {
       if (c.ri >= c.resto.length) { c.fase = 'fim'; break }
       const id = c.resto[c.ri++]
@@ -137,8 +139,11 @@ async function passoContas(tk, db, fonte, c, de, ate, completo, fim) {
           ? { pagina: c.pg, limite: 100, dataVencimentoInicial: vIni, dataVencimentoFinal: vFim }
           : { pagina: c.pg, limite: 100, tipoFiltroData: 'V', dataInicial: vIni, dataFinal: vFim }
         const d = (await bling(tk, `/contas/${fonte}?${qs(q)}`))?.data || []
-        for (const x of d) c.lista.push([String(x.id), Number(x.situacao) || null, dataOk(x.vencimento), Number(x.valor) || 0])
-        if (d.length < 100) c.fase = 'cache'; else c.pg++
+        const vistos = new Set(c.lista.map(x => x[0]))
+        const novos = d.filter(x => !vistos.has(String(x.id)))
+        for (const x of novos) c.lista.push([String(x.id), Number(x.situacao) || null, dataOk(x.vencimento), Number(x.valor) || 0])
+        // página curta ou repetida = fim da lista
+        if (d.length < 100 || !novos.length) c.fase = 'cache'; else c.pg++
       } else if (c.fase === 'cache') {
         const ids = c.lista.map(x => x[0]), cache = {}
         for (let i = 0; i < ids.length; i += 300) {
@@ -231,16 +236,17 @@ export default async function handler(req, res) {
     const fim = Date.now() + FOLGA_MS
     const db = banco()
     const tk = await tokenBling(db)
-    let c = req.body.cursor
-    if (fonte === 'caixa') {
-      c = c || { fase: 'lista', pg: 1, tam: 0, itens: {} }
-      const progresso = await passoCaixa(tk, c, de, ate, fim)
-      if (c.fase !== 'fim') return res.status(200).json({ cursor: c, progresso })
-      return res.status(200).json({ pronto: true, itens: Object.values(c.itens) })
+    const c = req.body.cursor || (fonte === 'caixa' ? { fase: 'lista', pg: 1, tam: 0, itens: {} } : { fase: 'lista', pg: 1, lista: [] })
+    let progresso
+    try {
+      progresso = fonte === 'caixa' ? await passoCaixa(tk, c, de, ate, fim) : await passoContas(tk, db, fonte, c, de, ate, !!completo, fim)
+    } catch (e) {
+      // o Bling segurou as requisições: devolve o que já foi lido e o navegador continua depois de uma pausa
+      if (e instanceof ErroLimite) return res.status(200).json({ cursor: c, pausa: true, progresso: { texto: 'o Bling pediu uma pausa, continuando…' } })
+      throw e
     }
-    c = c || { fase: 'lista', pg: 1, lista: [] }
-    const progresso = await passoContas(tk, db, fonte, c, de, ate, !!completo, fim)
     if (c.fase !== 'fim') return res.status(200).json({ cursor: c, progresso })
+    if (fonte === 'caixa') return res.status(200).json({ pronto: true, itens: Object.values(c.itens) })
     return res.status(200).json({ pronto: true, itens: await itensContas(tk, db, fonte, c, de, ate) })
   } catch (e) {
     if (e instanceof ErroConexao) return res.status(401).json({ erro: e.message, reconectar: true })

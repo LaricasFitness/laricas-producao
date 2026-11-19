@@ -625,7 +625,10 @@ function AtualizarBling({ onImportou }) {
         while (!itens) {
           const j = await chamarFinanceiro({ acao: 'bling', fonte: f.id, de, ate: ateDe(f.id), cursor, completo })
           if (j.pronto) itens = j.itens
-          else { cursor = j.cursor; setProg(`${f.nome}: ${j.progresso?.texto || '…'}`) }
+          else {
+            cursor = j.cursor; setProg(`${f.nome}: ${j.progresso?.texto || '…'}`)
+            if (j.pausa) await new Promise(ok => setTimeout(ok, 4000))
+          }
         }
         const linhas = linhasBling(f.id, itens, hoje)
         fontes[f.id] = { linhas, novo: resumoMeses(f.id, linhas), atual: resumoMeses(f.id, await atuais(f.id)) }

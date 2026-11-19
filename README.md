@@ -61,8 +61,9 @@ As abas de Estoque e Custos reutilizam componentes exportados de
 `Embalagens.jsx` e `MatPrimas.jsx` — esses dois arquivos **não são mais
 páginas**, só hospedam componentes.
 
-O menu **Financeiro** foi removido. Os arquivos `Fin*.jsx` continuam no
-repositório mas não são importados por nada.
+O menu **Financeiro** é `FinanceiroHub.jsx` (DRE por competência e por caixa, Margem por canal, Importar e
+classificar; regras em `src/lib/dre.js`). Os arquivos `Fin*.jsx` são do módulo financeiro antigo e não são
+importados por nada.
 
 ---
 
@@ -132,7 +133,9 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   - Gerar a nota pela API deixa o pedido Atendido: com a nota pendente, o sistema devolve para Em aberto
     (quem deixa Atendido é a baixa). O Bling numera a nota já no rascunho.
   - Escopos do app do Bling: Notas Fiscais, Emissão de NF-e, Pedidos de Venda, Gerenciar Pedidos de Venda e
-    Gerenciar situações dos Pedidos de Venda (mudar escopo derruba o acesso: reconectar).
+    Gerenciar situações dos Pedidos de Venda; para o Financeiro, só leitura de Caixas e Bancos, Contas a Pagar,
+    Contas a Receber, Categorias Receitas e Despesas e Clientes e Fornecedores (mudar escopo derruba o acesso:
+    reconectar em Expedição › Conectar o Bling).
 - Lalamove (Baixa, `src/pages/ExpedicaoLalamove.jsx` + `api/lalamove.mjs`): cada pacote lido que está numa rota Lalamove
   do planejamento (Logística › rotas, `logistica_historico.rotas[].stops`, `stop.id` = nº do pedido no Bling) mostra
   a rota e quantos pacotes dela foram lidos. "Chamar Lalamove" faz a cotação em moto (paradas na ordem da rota,
@@ -150,9 +153,24 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   vai como rastreio da Shopify na baixa. Não chama duas vezes os mesmos pedidos (3 dias). Variáveis no Vercel:
   `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET` (Partner Portal, mercado Brazil) e `LALAMOVE_AMBIENTE` (`sandbox` ou
   `producao`; em produção a corrida é cobrada).
-- Acesso ao Bling: app privado (Central de Extensões › Área do integrador), OAuth com
+- Acesso ao Bling: app privado "Laricas Expedição" (Central de Extensões › Área do integrador), OAuth com
   `enable-jwt: 1`. Os tokens ficam em `integracao_tokens` (RLS sem política: só a função lê,
-  com a service_role). O refresh token vale 30 dias e se renova a cada uso.
+  com a service_role). O refresh token vale 30 dias e se renova a cada uso. A conexão (token, limite de
+  3 requisições/s, espera quando o Bling devolve 429) fica em `api/_bling.mjs`, usada pela Expedição e pelo
+  Financeiro.
+- Financeiro › Importar e classificar › **Atualizar do Bling** (`api/financeiro.mjs`, só admin, só leitura no
+  Bling): lê o caixa (Caixas e Bancos), as contas a pagar e as a receber do mês atual e dos 2 anteriores, mostra
+  "no sistema × no Bling" por mês e só grava depois do clique, com as regras da importação por arquivo (substitui
+  o mês, respeita o cadeado). A importação por arquivo continua como reserva. A busca vai em partes de ~40 s
+  (o navegador continua com um cursor; quando o Bling pede pausa, espera e continua).
+  - Caixa: a lista do Bling não traz categoria, mas filtra por ela: lê a lista do período e a de cada categoria;
+    lançamento sem categoria tem o detalhe lido. Histórico = descrição do lançamento (ou as observações).
+  - Contas: a lista não filtra por competência nem traz competência, categoria e histórico. Pega as contas com
+    vencimento de 1 mês antes a 3 meses depois do período (cobre 99,7% das contas importadas até nov/2026) e
+    guarda o detalhe em `bling_contas` (`bling_contas.sql`, RLS sem política: só a função). O detalhe é lido de
+    novo quando o valor ou o vencimento mudam, ou com "Ler de novo o detalhe de todas as contas" (categoria ou
+    competência alteradas no Bling). A situação vem sempre da lista. Devolvidas e canceladas ficam fora;
+    "Devolvido parcial" = Parcial, "Confirmado" = Em aberto. Data de baixa fica em branco (como no arquivo).
 - Variáveis no Vercel: `BLING_CLIENT_ID`, `BLING_CLIENT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
   e as da Shopify (o app precisa de `write_orders` e `write_merchant_managed_fulfillment_orders`).
 
@@ -310,7 +328,10 @@ Só o **registro de produção** (`Producao.jsx`), nunca o planejamento:
 
 **Sistema** — `configuracoes`, `usuarios`
 
-Tabelas `fin_*` pertencem ao módulo financeiro desativado.
+**Financeiro (DRE)** — `dre_contas_competencia`, `dre_receber_competencia`, `dre_caixa_lancamentos`,
+`dre_caixa` (balancete), `dre_mes` (cadeado), `dre_mapa` (classificação), `bling_contas` (cache da API)
+
+Tabelas `fin_*` pertencem ao módulo financeiro antigo, desativado.
 
 ---
 
