@@ -1,4 +1,4 @@
--- Financeiro › "Atualizar do Bling": detalhe das contas a pagar e a receber lidas pela API do Bling.
+-- Financeiro › "Atualizar do Bling": detalhe das contas a pagar e a receber lidas pela API do Bling.a
 -- A lista do Bling não traz competência, categoria nem histórico; o detalhe de cada conta fica guardado
 -- aqui para não ser buscado de novo a cada atualização (só quando o valor ou o vencimento mudam).
 -- Só a função api/financeiro.mjs usa esta tabela (service_role): RLS ligado e SEM política, como
