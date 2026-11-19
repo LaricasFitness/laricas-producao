@@ -13,7 +13,7 @@
 // cada categoria. Lançamento que não aparece em nenhuma categoria tem o detalhe lido um a um.
 // Contas a pagar/receber: a lista não filtra por competência nem traz competência, categoria e histórico
 // (só o detalhe de cada conta). A lista pega as contas com vencimento de 1 mês antes a 3 meses depois do
-// período (cobre 99,7% das contas importadas até nov/2026) e o detalhe fica guardado em bling_contas
+// período e as emitidas de 1 mês antes até o fim do período (parcelas distantes) e o detalhe fica em bling_contas
 // (bling_contas.sql, só a função lê). O detalhe é lido de novo quando o valor ou o vencimento mudam, ou
 // com `completo` (para pegar categoria/competência alteradas no Bling). A situação vem sempre da lista.
 //
@@ -64,7 +64,8 @@ function baseCaixa(l) {
   return {
     id_bling: String(l.id), data: l.data, credito: String(l.debCred || '').toUpperCase() === 'C',
     valor: Math.abs(Number(l.valor) || 0), nome: (l.contato?.nome || '').trim(), cnpj: digitos(l.contato?.cnpj),
-    historico: (l.descricao || l.observacoes || '').trim(), banco: (l.contaFinanceira?.descricao || '').trim(),
+    // "Histórico" do extrato = observações; a "descricao" da API repete o nome da categoria
+    historico: (l.observacoes || '').trim(), banco: (l.contaFinanceira?.descricao || '').trim(),
     categoria: null,
   }
 }
@@ -124,7 +125,10 @@ function linhaCache(fonte, d) {
 }
 
 async function passoContas(tk, db, fonte, c, de, ate, completo, fim) {
-  const vIni = `${addMes(de.slice(0, 7), -1)}-01`, vFim = ultimoDia(addMes(ate.slice(0, 7), 3))
+  // Duas listas: por vencimento (1 mês antes a 3 depois) e por emissão (1 mês antes até o fim do período).
+  // A de emissão pega as parcelas de vencimento distante (venda parcelada: todas emitidas no mesmo dia).
+  const ini = `${addMes(de.slice(0, 7), -1)}-01`
+  const filtros = [[ini, ultimoDia(addMes(ate.slice(0, 7), 3)), 'V'], [ini, ate, 'E']]
   let novos = []
   const gravar = async () => {
     if (!novos.length) return
@@ -135,15 +139,21 @@ async function passoContas(tk, db, fonte, c, de, ate, completo, fim) {
   try {
     while (Date.now() < fim) {
       if (c.fase === 'lista') {
-        const q = fonte === 'pagar'
-          ? { pagina: c.pg, limite: 100, dataVencimentoInicial: vIni, dataVencimentoFinal: vFim }
-          : { pagina: c.pg, limite: 100, tipoFiltroData: 'V', dataInicial: vIni, dataFinal: vFim }
+        const [fIni, fFim, tipo] = filtros[c.f || 0]
+        const q = fonte === 'receber'
+          ? { pagina: c.pg, limite: 100, tipoFiltroData: tipo, dataInicial: fIni, dataFinal: fFim }
+          : tipo === 'V' ? { pagina: c.pg, limite: 100, dataVencimentoInicial: fIni, dataVencimentoFinal: fFim }
+          : { pagina: c.pg, limite: 100, dataEmissaoInicial: fIni, dataEmissaoFinal: fFim }
         const d = (await bling(tk, `/contas/${fonte}?${qs(q)}`))?.data || []
         const vistos = new Set(c.lista.map(x => x[0]))
-        const novos = d.filter(x => !vistos.has(String(x.id)))
-        for (const x of novos) c.lista.push([String(x.id), Number(x.situacao) || null, dataOk(x.vencimento), Number(x.valor) || 0])
-        // página curta ou repetida = fim da lista
-        if (d.length < 100 || !novos.length) c.fase = 'cache'; else c.pg++
+        for (const x of d) if (!vistos.has(String(x.id))) c.lista.push([String(x.id), Number(x.situacao) || null, dataOk(x.vencimento), Number(x.valor) || 0])
+        // página curta ou igual à anterior = fim desta lista; depois da última, vai para o cache
+        const repetida = d.length && String(d[0].id) === c.prim
+        c.prim = d.length ? String(d[0].id) : null
+        if (d.length < 100 || repetida) {
+          c.f = (c.f || 0) + 1; c.pg = 1; c.prim = null
+          if (c.f >= filtros.length) c.fase = 'cache'
+        } else c.pg++
       } else if (c.fase === 'cache') {
         const ids = c.lista.map(x => x[0]), cache = {}
         for (let i = 0; i < ids.length; i += 300) {

@@ -164,10 +164,11 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
   o mês, respeita o cadeado). A importação por arquivo continua como reserva. A busca vai em partes de ~40 s
   (o navegador continua com um cursor; quando o Bling pede pausa, espera e continua).
   - Caixa: a lista do Bling não traz categoria, mas filtra por ela: lê a lista do período e a de cada categoria;
-    lançamento sem categoria tem o detalhe lido. Histórico = descrição do lançamento (ou as observações).
+    lançamento sem categoria tem o detalhe lido. Histórico = observações do lançamento (a "descrição" da API repete a categoria).
+    O id do lançamento na API é o mesmo da coluna Id do extrato exportado.
   - Contas: a lista não filtra por competência nem traz competência, categoria e histórico. Pega as contas com
-    vencimento de 1 mês antes a 3 meses depois do período (cobre 99,7% das contas importadas até nov/2026) e
-    guarda o detalhe em `bling_contas` (`bling_contas.sql`, RLS sem política: só a função). O detalhe é lido de
+    vencimento de 1 mês antes a 3 meses depois do período e as emitidas de 1 mês antes até o fim do período
+    (pega as parcelas de vencimento distante de uma venda parcelada, todas emitidas no mesmo dia) e guarda o detalhe em `bling_contas` (`bling_contas.sql`, RLS sem política: só a função). O detalhe é lido de
     novo quando o valor ou o vencimento mudam, ou com "Ler de novo o detalhe de todas as contas" (categoria ou
     competência alteradas no Bling). A situação vem sempre da lista. Devolvidas e canceladas ficam fora;
     "Devolvido parcial" = Parcial, "Confirmado" = Em aberto. Data de baixa fica em branco (como no arquivo).
