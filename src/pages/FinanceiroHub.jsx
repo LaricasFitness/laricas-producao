@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Upload, Save, ChevronDown, ChevronRight, X, Lock, LockOpen, Camera, Plus, Pencil, Trash2 } from 'lucide-react'
 import {
   LINHAS, LINHAS_ESCOLHA, RECEITAS, ESTRUTURA, AMBIGUAS,
-  resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, itensCaixa, itensReceber, montarDRE, calcularEstrutura, conferir, mesVencimento,
+  resolverLinha, lerContasCompetencia, lerBalancete, lerExtratoCaixa, linhasBling, itensCaixa, itensReceber, montarDRE, calcularEstrutura, conferir, mesVencimento,
   PLATAFORMAS, siglaUnidade, rotuloCanal, custoCanal, marketingCanal, liquidoCanal, LINHAS_CANAL, linhaReceitaCanal,
 } from '../lib/dre'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
@@ -537,10 +537,14 @@ function TelaImportar() {
   const [versaoCanais, setVersaoCanais] = useState(0) // a receita mostra o total das plataformas
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <ImportarCompetencia onImportou={() => setVersao(v => v + 1)} />
-        <ImportarExtratoCaixa onImportou={() => setVersao(v => v + 1)} />
-      </div>
+      <AtualizarBling onImportou={() => setVersao(v => v + 1)} />
+      <details>
+        <summary style={{ fontSize: 12, color: 'var(--gray-500)', cursor: 'pointer' }}>Importar por arquivo exportado do Bling (reserva)</summary>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+          <ImportarCompetencia onImportou={() => setVersao(v => v + 1)} />
+          <ImportarExtratoCaixa onImportou={() => setVersao(v => v + 1)} />
+        </div>
+      </details>
       <details>
         <summary style={{ fontSize: 12, color: 'var(--gray-500)', cursor: 'pointer' }}>Caixa pelo Balancete (antigo, só totais por categoria)</summary>
         <div style={{ marginTop: 8 }}><ImportarBalancete onImportou={() => setVersao(v => v + 1)} /></div>
@@ -548,6 +552,182 @@ function TelaImportar() {
       <FaturamentoPlataformas onMudou={() => setVersaoCanais(v => v + 1)} />
       <ReceitaCompetencia versaoCanais={versaoCanais} />
       <Classificar key={versao} />
+    </div>
+  )
+}
+
+// ── Atualizar do Bling (API, só leitura no Bling) ────────────────────────────
+// Busca pela função /api/financeiro o caixa, as contas a pagar e as a receber do mês atual e dos 2 anteriores,
+// mostra a comparação com o que está no sistema e só grava depois do clique. Gravar segue as regras da
+// importação por arquivo: substitui cada mês do período, menos os fechados no cadeado.
+const FONTES_BLING = [
+  { id: 'caixa', nome: 'Caixa (Caixas e Bancos)', visao: 'caixa' },
+  { id: 'pagar', nome: 'Contas a pagar (competência)', visao: 'competencia' },
+  { id: 'receber', nome: 'Contas a receber (competência)', visao: 'competencia' },
+]
+const hojeSP = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+const somaMes = (ym, n) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+const fimMes = ym => `${ym}-${String(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate()).padStart(2, '0')}`
+
+async function chamarFinanceiro(corpo) {
+  const r = await fetch('/api/financeiro', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const e = new Error(j.erro || (r.status === 404 ? 'Função do financeiro não encontrada (só funciona no site publicado).' : `Erro ${r.status}`))
+    e.reconectar = !!j.reconectar
+    throw e
+  }
+  return j
+}
+
+// Resumo por mês: { 'AAAA-MM': { n, entradas, saidas } } (contas: tudo em "saidas" ou "entradas")
+function resumoMeses(fonte, linhas) {
+  const out = {}
+  for (const l of linhas) {
+    const m = fonte === 'caixa' ? l.mes : fonte === 'pagar' ? l.competencia.slice(0, 7) : l.mes
+    const r = out[m] || (out[m] = { n: 0, entradas: 0, saidas: 0 })
+    r.n++
+    const v = Number(l.valor) || 0
+    if (fonte === 'caixa') { if (l.tipo === 'receita') r.entradas += v; else if (l.tipo === 'despesa') r.saidas += v }
+    else if (fonte === 'pagar') r.saidas += v
+    else r.entradas += v
+  }
+  return out
+}
+
+function AtualizarBling({ onImportou }) {
+  const [res, setRes] = useState(null)       // { periodo, fontes: { caixa: { linhas, novo, atual } ... }, fechados }
+  const [prog, setProg] = useState('')
+  const [ocupado, setOcupado] = useState(false)
+  const [completo, setCompleto] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const hoje = hojeSP(), mesAtual = hoje.slice(0, 7)
+  const meses = [somaMes(mesAtual, -2), somaMes(mesAtual, -1), mesAtual]
+  const de = `${meses[0]}-01`
+  // caixa até hoje; contas até o fim do mês (competência futura do mês atual)
+  const ateDe = fonte => fonte === 'caixa' ? hoje : fimMes(mesAtual)
+
+  async function atuais(fonte) {
+    const ate = ateDe(fonte)
+    if (fonte === 'caixa') return buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, tipo, valor').gte('data', de).lte('data', ate))
+    if (fonte === 'pagar') return buscarTudo(() => supabase.from('dre_contas_competencia').select('competencia, valor').gte('competencia', de).lte('competencia', ate))
+    return buscarTudo(() => supabase.from('dre_receber_competencia').select('mes, valor').gte('competencia', de).lte('competencia', ate))
+  }
+
+  async function buscar() {
+    setOcupado(true); setMsg(null); setRes(null)
+    try {
+      const fontes = {}
+      for (const f of FONTES_BLING) {
+        let cursor = null, itens = null
+        setProg(`${f.nome}: começando…`)
+        while (!itens) {
+          const j = await chamarFinanceiro({ acao: 'bling', fonte: f.id, de, ate: ateDe(f.id), cursor, completo })
+          if (j.pronto) itens = j.itens
+          else { cursor = j.cursor; setProg(`${f.nome}: ${j.progresso?.texto || '…'}`) }
+        }
+        const linhas = linhasBling(f.id, itens, hoje)
+        fontes[f.id] = { linhas, novo: resumoMeses(f.id, linhas), atual: resumoMeses(f.id, await atuais(f.id)) }
+      }
+      const { data: fech } = await supabase.from('dre_mes').select('mes, visao').not('fechado_em', 'is', null).in('mes', meses)
+      setRes({ fontes, fechados: new Set((fech || []).map(r => `${r.mes}|${r.visao}`)) })
+    } catch (e) {
+      setMsg({ tipo: 'danger', txt: e.reconectar ? `${e.message} Reconecte em Expedição › Conectar o Bling.` : 'Erro ao buscar no Bling: ' + e.message })
+    }
+    setProg(''); setOcupado(false)
+  }
+
+  async function gravar() {
+    setOcupado(true); setMsg(null)
+    try {
+      const pulados = []
+      let n = 0
+      for (const f of FONTES_BLING) {
+        const { linhas } = res.fontes[f.id]
+        const ate = ateDe(f.id)
+        const abertos = meses.filter(m => { const fechado = res.fechados.has(`${m}|${f.visao}`); if (fechado) pulados.push(`${f.nome} ${rotuloMes(m)}`); return !fechado })
+        const mesDe = l => f.id === 'pagar' ? l.competencia.slice(0, 7) : l.mes
+        const novas = linhas.filter(l => abertos.includes(mesDe(l)))
+        const tabela = f.id === 'caixa' ? 'dre_caixa_lancamentos' : f.id === 'pagar' ? 'dre_contas_competencia' : 'dre_receber_competencia'
+        const campo = f.id === 'caixa' ? 'data' : 'competencia'
+        for (const m of abertos) {
+          const fim = fimMes(m) < ate ? fimMes(m) : ate
+          const { error } = await supabase.from(tabela).delete().gte(campo, `${m}-01`).lte(campo, fim)
+          if (error) throw error
+        }
+        for (let i = 0; i < novas.length; i += 500) {
+          const lote = novas.slice(i, i + 500)
+          const { error } = f.id === 'pagar'
+            ? await supabase.from(tabela).insert(lote)
+            : await supabase.from(tabela).upsert(lote, { onConflict: 'id_bling' })
+          if (error) throw error
+        }
+        n += novas.length
+      }
+      setMsg({ tipo: 'ok', txt: `${n} lançamentos gravados (${rotuloMes(meses[0])} a ${rotuloMes(meses[2])}).`
+        + (pulados.length ? ` Meses fechados não foram alterados: ${pulados.join(', ')}.` : '') })
+      setRes(null); onImportou()
+    } catch (e) { setMsg({ tipo: 'danger', txt: 'Erro ao gravar: ' + (e.message || e) + ' Os meses podem ter ficado incompletos: atualize de novo.' }) }
+    setOcupado(false)
+  }
+
+  const td = { padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap' }
+  const dif = (a, b) => Math.abs((a || 0) - (b || 0)) >= 0.01
+  return (
+    <div className="card card-pad">
+      <div style={{ fontWeight: 800, fontSize: 14 }}>Atualizar do Bling</div>
+      <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
+        Lê no Bling o caixa (Caixas e Bancos), as contas a pagar e as a receber de <b>{rotuloMes(meses[0])} a {rotuloMes(meses[2])}</b>.
+        Nada é alterado no Bling. Antes de gravar, mostra a comparação com o que já está no sistema; gravar substitui esses meses
+        (menos os fechados no cadeado).
+      </div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button className="btn btn-primary btn-sm" onClick={buscar} disabled={ocupado}>
+          {ocupado && !res ? <RefreshCw size={13} className="spin" /> : <RefreshCw size={13} />} Buscar no Bling
+        </button>
+        <label style={{ fontSize: 12, color: 'var(--gray-600)', display: 'flex', gap: 6, alignItems: 'center' }}
+          title="Lê de novo o detalhe de todas as contas. Use quando mudou a categoria ou a competência de contas já lidas. Demora mais.">
+          <input type="checkbox" checked={completo} onChange={e => setCompleto(e.target.checked)} disabled={ocupado} />
+          Ler de novo o detalhe de todas as contas
+        </label>
+        {prog && <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>{prog}</span>}
+      </div>
+      {res && (
+        <div style={{ marginTop: 12, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: 'var(--gray-50)', color: 'var(--gray-500)' }}>
+                <th style={{ ...td, textAlign: 'left' }}>Fonte</th><th style={{ ...td, textAlign: 'left' }}>Mês</th>
+                <th style={td}>No sistema</th><th style={td}>No Bling</th><th style={td}>Total no sistema</th><th style={td}>Total no Bling</th><th style={td} />
+              </tr>
+            </thead>
+            <tbody>
+              {FONTES_BLING.flatMap(f => meses.map(m => {
+                const a = res.fontes[f.id].atual[m] || {}, b = res.fontes[f.id].novo[m] || {}
+                const tot = r => f.id === 'caixa' ? `+${fmt(r.entradas)} / −${fmt(r.saidas)}` : fmt(f.id === 'pagar' ? r.saidas : r.entradas)
+                const mudou = (a.n || 0) !== (b.n || 0) || dif(a.entradas, b.entradas) || dif(a.saidas, b.saidas)
+                const fechado = res.fechados.has(`${m}|${f.visao}`)
+                return (
+                  <tr key={f.id + m} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                    <td style={{ ...td, textAlign: 'left' }}>{f.nome}</td><td style={{ ...td, textAlign: 'left' }}>{rotuloMes(m)}</td>
+                    <td style={td}>{a.n || 0}</td><td style={td}>{b.n || 0}</td>
+                    <td style={td}>{tot(a)}</td><td style={{ ...td, fontWeight: mudou ? 800 : 400 }}>{tot(b)}</td>
+                    <td style={{ ...td, textAlign: 'left', color: fechado ? 'var(--gray-400)' : mudou ? 'var(--warning)' : 'var(--ok)' }}>
+                      {fechado ? '🔒 fechado, não muda' : mudou ? 'muda' : 'igual'}
+                    </td>
+                  </tr>
+                )
+              }))}
+            </tbody>
+          </table>
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 10 }} onClick={gravar} disabled={ocupado}>
+            {ocupado ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Gravar no sistema
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--gray-500)', marginLeft: 10 }}>Transferências entre contas entram no caixa, mas ficam fora da DRE (como no arquivo).</span>
+        </div>
+      )}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
     </div>
   )
 }

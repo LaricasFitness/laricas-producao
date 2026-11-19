@@ -293,6 +293,39 @@ export function lerContasCompetencia(texto) {
   return contas
 }
 
+// Tipo do lançamento de caixa. Transferência entre contas próprias e ajuste de saldo ficam fora da DRE;
+// "Transferências recebidas" (aportes, multas, reembolsos) é entrada.
+export function tipoCaixa(categoria, credito) {
+  const transf = /^transfer[eê]ncias?( de (entrada|sa[ií]da))?$/i.test(categoria) || /^ajuste de saldo$/i.test(categoria)
+  return transf ? 'transferencia' : credito ? 'receita' : 'despesa'
+}
+
+// Itens lidos pela API do Bling (api/financeiro.mjs) → linhas das tabelas do DRE, iguais às da importação
+// por arquivo. Contas devolvidas (4) e canceladas (5) ficam fora. `hoje` = AAAA-MM-DD (São Paulo).
+export function linhasBling(fonte, itens, hoje) {
+  if (fonte === 'caixa') {
+    return itens.map(l => ({
+      id_bling: l.id_bling, data: l.data, mes: l.data.slice(0, 7), tipo: tipoCaixa(l.categoria || '', l.credito),
+      categoria: l.categoria || '', nome: l.nome || '', cnpj: l.cnpj || null, historico: l.historico || '', valor: l.valor, banco: l.banco || '',
+    }))
+  }
+  const contas = itens.filter(c => ![4, 5].includes(c.situacao))
+  if (fonte === 'pagar') {
+    const sit = c => c.situacao === 2 ? 'Pago' : [3, 6].includes(c.situacao) ? 'Parcial'
+      : !c.vencimento ? 'Em aberto' : c.vencimento < hoje ? 'Atrasada' : c.vencimento === hoje ? 'Vencendo hoje' : 'Em aberto'
+    return contas.map(c => ({
+      competencia: c.competencia, vencimento_mes: c.vencimento ? `${c.vencimento.slice(5, 7)}/${c.vencimento.slice(0, 4)}` : null,
+      nome: c.nome, categoria: c.categoria, observacoes: c.historico, valor: c.valor, situacao: sit(c),
+      vencimento: c.vencimento, data_baixa: null,
+    }))
+  }
+  return contas.map(c => ({
+    id_bling: c.id_bling, mes: c.competencia.slice(0, 7), competencia: c.competencia, categoria: c.categoria || 'Sem categoria',
+    nome: c.nome, cnpj: c.cnpj, historico: c.historico, valor: c.valor,
+    situacao: c.situacao === 2 ? 'pago' : [3, 6].includes(c.situacao) ? 'parcial' : 'aberto', id_origem: c.origem_id || '0',
+  }))
+}
+
 // "Caixas e Bancos" › Exportar extrato (todas as contas, qualquer período) →
 // { periodo: {ini, fim}, bancos: [...], lancamentos: [{id_bling, data, mes, tipo, categoria, nome, cnpj, historico, valor, banco}] }
 // Tipo C = receita, D = despesa; categorias "Transferências…" e "Ajuste de saldo" = transferência (fora da DRE).
@@ -312,8 +345,6 @@ export function lerExtratoCaixa(texto) {
     const t = (r[ix.tipo] || '').trim().toUpperCase()
     if (!data || !['C', 'D'].includes(t)) continue // saldo, totais
     const categoria = (r[ix.cat] || '').trim()
-    // transferência entre contas próprias; "Transferências recebidas" (aportes, multas, reembolsos) é entrada
-    const transf = /^transfer[eê]ncias?( de (entrada|sa[ií]da))?$/i.test(categoria) || /^ajuste de saldo$/i.test(categoria)
     const banco = ix.banco >= 0 ? (r[ix.banco] || '').trim() : ''
     if (banco) bancos.add(banco)
     if (!periodo && ix.periodo >= 0) {
@@ -323,7 +354,7 @@ export function lerExtratoCaixa(texto) {
     lancamentos.push({
       id_bling: ix.id >= 0 ? String(r[ix.id] || '').trim() || null : null,
       data, mes: data.slice(0, 7),
-      tipo: transf ? 'transferencia' : t === 'C' ? 'receita' : 'despesa',
+      tipo: tipoCaixa(categoria, t === 'C'),
       categoria, nome: ix.nome >= 0 ? (r[ix.nome] || '').trim() : '',
       cnpj: ix.doc >= 0 ? (r[ix.doc] || '').replace(/\D/g, '') || null : null,
       historico: ix.hist >= 0 ? (r[ix.hist] || '').trim() : '', valor: numBR(r[ix.valor]), banco,
