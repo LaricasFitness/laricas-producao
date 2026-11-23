@@ -116,6 +116,7 @@ export default function DeliveryBV() {
       <div className="tabs" style={{ marginBottom: 0 }}>
         <button className={`tab${aba === 'contar' ? ' active' : ''}`} onClick={() => setAba('contar')}>✍️ Contagem</button>
         <button className={`tab${aba === 'situacao' ? ' active' : ''}`} onClick={() => setAba('situacao')}>📊 Situação</button>
+        <button className={`tab${aba === 'consumo' ? ' active' : ''}`} onClick={() => setAba('consumo')}>📉 Consumo</button>
         <button className={`tab${aba === 'historico' ? ' active' : ''}`} onClick={() => setAba('historico')}>📋 Histórico</button>
       </div>
       {erro && <div className="alert-banner danger"><AlertTriangle size={16} /> {erro}</div>}
@@ -124,6 +125,7 @@ export default function DeliveryBV() {
         onSalvo={data => { setDataSel(data); setAba('situacao'); load() }} />}
       {aba === 'situacao' && <Situacao data={dataSel} setData={setDataSel} contagens={contagens} produtos={produtos}
         custos={custos} demandaDe={demandaDe} onExcluido={() => { setDataSel(null); load() }} />}
+      {aba === 'consumo' && <Consumo data={dataSel} setData={setDataSel} contagens={contagens} produtos={produtos} previsao={previsao} />}
       {aba === 'historico' && <Historico contagens={contagens} custos={custos}
         onAbrir={d => { setDataSel(d); setAba('situacao') }} />}
     </>
@@ -402,6 +404,126 @@ function Situacao({ data: dataSel, setData, contagens, produtos, custos, demanda
       <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
         Falta produzir = demanda até a próxima contagem − (geladeira + armazenagem), quando positivo. Demanda e custo ficam congelados no dia da contagem.
         Validade: vermelho = vencida/vence no dia; laranja = vence antes da próxima contagem ({fmtData(ultimoCoberto)}).
+      </div>
+    </>
+  )
+}
+
+// ───────────── Consumo de uma contagem para a outra ─────────────
+// Quanto saiu da geladeira entre a contagem anterior e a do dia: geladeira anterior + o que foi reposto da
+// armazenagem (quanto a armazenagem diminuiu) − geladeira do dia. Comparado com a previsão de delivery dos
+// dias entre as duas contagens (do dia seguinte à anterior até o dia). Produção nova que entrou direto na
+// geladeira ou na armazenagem não é registrada: consumo negativo sinaliza isso (ou erro de contagem).
+function Consumo({ data: dataSel, setData, contagens, produtos, previsao }) {
+  const datas = useMemo(() => [...new Set(contagens.map(c => c.data))], [contagens])   // mais recente primeiro
+  const comAnterior = datas.slice(0, -1)
+  const data = dataSel && comAnterior.includes(dataSel) ? dataSel : comAnterior[0]
+  const anterior = data ? datas[datas.indexOf(data) + 1] : null
+
+  const { linhas, dias } = useMemo(() => {
+    if (!data || !anterior) return { linhas: [], dias: [] }
+    const dias = []
+    for (let d = somaDias(anterior, 1); d <= data; d = somaDias(d, 1)) dias.push(DIAS[new Date(d + 'T12:00:00').getDay()])
+    const ant = Object.fromEntries(contagens.filter(c => c.data === anterior).map(c => [c.sku, c]))
+    const linhas = contagens.filter(c => c.data === data && ant[c.sku]).map(c => {
+      const a = ant[c.sku]
+      const reposto = Math.max(0, (a.armazenagem || 0) - (c.armazenagem || 0))
+      const consumo = (a.geladeira || 0) + reposto - (c.geladeira || 0)
+      const previsto = dias.reduce((s, d) => s + (previsao[c.sku]?.[d] || 0), 0)
+      const p = produtos.find(x => x.sku === c.sku)
+      return { sku: c.sku, nome: c.nome || p?.nome || c.sku, categoria: c.categoria || p?.categoria || 'Outros',
+        gelAnt: a.geladeira || 0, armAnt: a.armazenagem || 0, gel: c.geladeira || 0, arm: c.armazenagem || 0,
+        reposto, consumo, previsto, dif: consumo - previsto }
+    }).sort(porCategoria)
+    return { linhas, dias }
+  }, [contagens, data, anterior, previsao, produtos])
+
+  if (!comAnterior.length) return <div className="card empty"><div className="empty-icon">📉</div><div className="empty-title">São precisas duas contagens para ver o consumo</div></div>
+
+  const thN = { textAlign: 'right' }
+  const consumoTotal = somar(linhas, 'consumo'), previstoTotal = somar(linhas, 'previsto')
+  const negativos = linhas.filter(l => l.consumo < 0)
+  const grupos = []
+  for (const l of linhas) {
+    if (grupos.at(-1)?.cat !== l.categoria) grupos.push({ cat: l.categoria, itens: [] })
+    grupos.at(-1).itens.push(l)
+  }
+  const corDif = l => !l.previsto ? 'var(--gray-400)' : Math.abs(l.dif) <= Math.max(1, l.previsto * 0.2) ? 'var(--ok)' : l.dif > 0 ? 'var(--warning)' : 'var(--danger)'
+
+  return (
+    <>
+      <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select className="form-input" value={data || ''} onChange={e => setData(e.target.value)} style={{ width: 170 }}>
+          {comAnterior.map(d => <option key={d} value={d}>{fmtDataDia(d)}</option>)}
+        </select>
+        <div style={{ fontSize: 12, color: 'var(--gray-500)', flex: 1, minWidth: 200 }}>
+          De <b>{fmtDataDia(anterior)}</b> para <b>{fmtDataDia(data)}</b> · previsão de {dias.map(d => ROT_DIA[d]).join('+')}
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <div className="kpi neutral">
+          <div className="kpi-label">Saiu da geladeira</div>
+          <div className="kpi-value">{fmtN(consumoTotal)}</div>
+          <div className="kpi-detail">{fmtN(somar(linhas, 'reposto'))} reposto(s) da armazenagem</div>
+        </div>
+        <div className="kpi neutral">
+          <div className="kpi-label">Previsão</div>
+          <div className="kpi-value">{fmtN(previstoTotal)}</div>
+          <div className="kpi-detail">{dias.length === 1 ? '1 dia' : `${dias.length} dias`} de delivery</div>
+        </div>
+        <div className={`kpi ${Math.abs(consumoTotal - previstoTotal) <= previstoTotal * 0.2 ? 'ok' : 'warning'}`}>
+          <div className="kpi-label">Diferença</div>
+          <div className="kpi-value">{consumoTotal - previstoTotal > 0 ? '+' : ''}{fmtN(consumoTotal - previstoTotal)}</div>
+          <div className="kpi-detail">{previstoTotal ? `${Math.round((consumoTotal / previstoTotal - 1) * 100)}% em relação à previsão` : 'sem previsão'}</div>
+        </div>
+      </div>
+
+      {negativos.length > 0 && (
+        <div className="alert-banner warning"><AlertTriangle size={15} /> Consumo negativo em {negativos.map(l => l.nome).join(', ')}: a geladeira
+          aumentou mais do que a armazenagem diminuiu — entrou produção nova direto ou houve erro de contagem.</div>
+      )}
+
+      <div className="card tbl-wrap">
+        <table style={{ minWidth: 720 }}>
+          <thead>
+            <tr>
+              <th>Produto</th><th style={thN}>Geladeira antes</th><th style={thN}>+ Reposto</th><th style={thN}>− Geladeira hoje</th>
+              <th style={thN}>= Saiu</th><th style={thN}>Previsão</th><th style={thN}>Diferença</th>
+            </tr>
+          </thead>
+          <tbody>
+            {grupos.map(g => [
+              <tr key={'c' + g.cat}><td colSpan={7} style={{ fontWeight: 700, fontSize: 12, color: 'var(--purple)', background: 'var(--gray-50)', padding: '7px 12px' }}>{g.cat}</td></tr>,
+              ...g.itens.map(l => (
+                <tr key={l.sku}>
+                  <td><div style={{ fontWeight: 600 }}>{l.nome}</div><div style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'monospace' }}>{l.sku}</div></td>
+                  <td style={thN}>{l.gelAnt}</td>
+                  <td style={{ ...thN, color: 'var(--gray-500)' }} title={`Armazenagem: ${l.armAnt} → ${l.arm}`}>{l.reposto || '—'}</td>
+                  <td style={thN}>{l.gel}</td>
+                  <td style={{ ...thN, fontWeight: 800, color: l.consumo < 0 ? 'var(--danger)' : undefined }}>{l.consumo}</td>
+                  <td style={thN}>{l.previsto}</td>
+                  <td style={{ ...thN, fontWeight: 700, color: corDif(l) }}>{l.dif > 0 ? '+' : ''}{l.dif}</td>
+                </tr>
+              )),
+            ])}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: '2px solid var(--gray-200)', fontWeight: 800 }}>
+              <td>Total</td>
+              <td style={thN}>{fmtN(somar(linhas, 'gelAnt'))}</td>
+              <td style={thN}>{fmtN(somar(linhas, 'reposto'))}</td>
+              <td style={thN}>{fmtN(somar(linhas, 'gel'))}</td>
+              <td style={thN}>{fmtN(consumoTotal)}</td>
+              <td style={thN}>{fmtN(previstoTotal)}</td>
+              <td style={thN}>{consumoTotal - previstoTotal > 0 ? '+' : ''}{fmtN(consumoTotal - previstoTotal)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+        Saiu = geladeira da contagem anterior + o que foi reposto da armazenagem (quanto ela diminuiu) − geladeira de hoje.
+        Diferença em verde: até 20% da previsão. Só os produtos contados nos dois dias.
       </div>
     </>
   )

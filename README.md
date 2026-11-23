@@ -208,6 +208,9 @@ depois do restock, o operador lança por SKU a **geladeira** do delivery da Bela
 - **Valor em estoque** = quantidade × CMV direto do produto (`cmv_historico`, mês mais recente, com
   rendimento real quando houver; sem overhead), o mesmo da Ficha do Produto.
 - Demanda e custo ficam congelados na linha da contagem: o histórico não muda quando a previsão ou o custo mudam.
+- **Consumo** (aba própria): de uma contagem para a seguinte, por produto, *saiu da geladeira* = geladeira
+  anterior + reposto da armazenagem (quanto ela diminuiu) − geladeira do dia, comparado com a previsão de
+  delivery dos dias entre as duas contagens. Negativo = produção nova entrou direto ou erro de contagem.
 - Não debita estoque de MP/embalagem.
 - **Planejamento**: a coluna Delivery de um dia de produção vem pré-preenchida com a previsão desse dia
   (sexta = Sex+Sáb+Dom+Seg) **menos o estoque da contagem da véspera** (geladeira + armazenagem), nunca
