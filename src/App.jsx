@@ -13,6 +13,7 @@ import Admin from './pages/Admin'
 import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 import FinanceiroHub from './pages/FinanceiroHub'
+import Hoje from './pages/Hoje'
 
 const PERM_MAP = {
   dashboard:'estoque', pedidos:'estoque', compras:'estoque',
@@ -30,7 +31,7 @@ function temPermissao(abas, pageId) {
 const etiquetaNaUrl = () => new URLSearchParams(window.location.search).has('etiqueta')
 // Volta da autorização do Bling (?expedicao=conectado): abre Logística › Expedição
 const expedicaoNaUrl = () => new URLSearchParams(window.location.search).has('expedicao')
-const paginaInicial = () => etiquetaNaUrl() ? 'producao' : expedicaoNaUrl() ? 'logistica' : 'estoque'
+const paginaInicial = () => etiquetaNaUrl() ? 'producao' : expedicaoNaUrl() ? 'logistica' : 'hoje'
 
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
@@ -78,7 +79,9 @@ export default function App() {
   if (!usuario) return <Login onLogin={u => { setUsuario(u); setPage(paginaInicial()) }} />
 
   const abas = usuario.abas_permitidas || []
-  const pages = MENU.filter(p => usuario.perfil === 'admin' || temPermissao(abas, p.id))
+  const pages = MENU.filter(p => p.id === 'hoje' || usuario.perfil === 'admin' || temPermissao(abas, p.id))
+  // Hoje mostra as tarefas das áreas que o usuário acessa (admin: todas)
+  const areasTarefas = usuario.perfil === 'admin' ? null : pages.map(p => p.id)
   const pageAtual = pages.find(p => p.id === page) ? page : (pages[0]?.id || 'producao')
   const subAtual = subs[pageAtual] || subPadrao(pageAtual)
   const setSub = (pageId, subId) => setSubs(p => ({ ...p, [pageId]: subId }))
@@ -159,6 +162,7 @@ export default function App() {
         </header>
         <div className="page">
           {!sazonalPronto ? <div className="loading">Carregando...</div> : <>
+          {pageAtual==='hoje'      && <Hoje areas={areasTarefas} usuario={usuario} onIr={(id, subId) => abrirSub(id, subId)} />}
           {pageAtual==='producao'  && <ProducaoHub onIrLogistica={irLogistica} sub={subAtual} onSub={id => setSub('producao', id)} />}
           {pageAtual==='logistica'  && <Logistica csvInicial={csvLogistica} sub={subAtual} onSub={id => setSub('logistica', id)} />}
           {pageAtual==='estoque'       && <EstoqueHub sub={subAtual} onSub={id => setSub('estoque', id)} />}

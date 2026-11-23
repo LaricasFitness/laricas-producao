@@ -1,4 +1,4 @@
-import { ClipboardList, Truck, Package, CircleDollarSign, Wallet, Settings } from 'lucide-react'
+import { ListChecks, ClipboardList, Truck, Package, CircleDollarSign, Wallet, Settings } from 'lucide-react'
 
 // Menu do sistema: áreas e as subtelas de cada uma.
 // No desktop as subtelas aparecem embaixo da área, no menu lateral.
@@ -6,6 +6,11 @@ import { ClipboardList, Truck, Package, CircleDollarSign, Wallet, Settings } fro
 // aparecem como abas no topo da própria tela (classe .hub-tabs).
 // Os ids das subtelas são os mesmos que cada hub já usava.
 export const MENU = [
+  {
+    // Página inicial, para todos: tarefas do dia das áreas que o usuário acessa (Hoje.jsx)
+    id: 'hoje', label: 'Hoje', Icon: ListChecks,
+    subs: [{ id: 'tarefas', label: 'Tarefas do dia' }],
+  },
   {
     id: 'producao', label: 'Produção', Icon: ClipboardList,
     subs: [

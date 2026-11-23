@@ -175,6 +175,25 @@ arquivado; no Bling passa de "Em aberto" para "Atendido". Cada baixa fica em `ex
 - Variáveis no Vercel: `BLING_CLIENT_ID`, `BLING_CLIENT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
   e as da Shopify (o app precisa de `write_orders` e `write_merchant_managed_fulfillment_orders`).
 
+## Hoje (tarefas do dia)
+
+Primeira área do menu e tela inicial depois do login (`src/pages/Hoje.jsx`, regras em `src/lib/tarefas.js`).
+Mostra as tarefas das áreas que o usuário acessa (admin: todas). A ✓ vem sozinha quando o sistema acha o
+registro da tarefa; senão, qualquer um marca à mão (`tarefas_marcadas`, `tarefas.sql`; desmarcar apaga). Só
+contam os dias trabalhados (mesma regra da conferência: seg a sex, menos feriados e dias sem produção).
+
+| Área | Tarefa | Marca sozinha quando |
+|---|---|---|
+| Produção | Registrar a produção do dia | há produção lançada com a data de hoje |
+| Produção | Fechar o planejamento do próximo dia | existe o picking do próximo dia trabalhado |
+| Logística | Baixar o picking do dia | o picking de hoje foi baixado |
+| Logística | Montar as rotas | roteiro gerado hoje |
+| Logística | Contagem do Delivery BV (seg a sex) | contagem com a data de hoje |
+| Logística | Baixa dos pedidos enviados | houve baixa hoje ("X de Y" do picking anterior é informação: Revenda e Venda Direta não passam pela baixa) |
+| Estoque | Contagem semanal de MP e de embalagens (⭐) | todos os ⭐ contados desde a segunda; aparece no último dia trabalhado da semana e, se ficar pendente, como atrasada na semana seguinte |
+| Estoque | Contagem completa do mês | todos os itens ativos contados nos últimos 3 dias do mês; atrasada até o dia 5 |
+| Financeiro | Fechar a DRE do mês anterior | competência e caixa com cadeado (a partir do dia 5) |
+
 ## Delivery BV (contagem diária do delivery)
 
 Logística › Delivery BV. Substitui a planilha "Controle Delivery" e o print no grupo. Todo fim de dia,
