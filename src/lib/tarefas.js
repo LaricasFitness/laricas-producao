@@ -25,6 +25,15 @@ function contexto(hoje, semProducao) {
   return { hoje, trabalhado, proximoTrabalhado, anteriorTrabalhado, fimSemana, fimMes, hojeTrabalhado: trabalhado(hoje) }
 }
 
+// Quem fez e quando, a partir dos registros: nomes distintos e o horário do primeiro (ou do último)
+function quemQuando(linhas, campoPor, campoEm, ultimo = false) {
+  const ls = (linhas || []).filter(l => l[campoEm])
+  if (!ls.length) return {}
+  const em = ls.map(l => l[campoEm]).sort()[ultimo ? ls.length - 1 : 0]
+  const nomes = [...new Set(ls.map(l => String(l[campoPor] || '').replace(/ (auto-embalagem)$/, '').trim()).filter(Boolean))]
+  return { por: nomes.join(', ') || null, em }
+}
+
 // Contagens desde uma data → Set de itens contados
 async function contadosDesde(tipo, desde) {
   if (tipo === 'mp') {
@@ -49,9 +58,11 @@ async function itensAtivos(tipo, semanal) {
 }
 
 async function contagem(tipo, semanal, desde) {
-  const [itens, contados] = await Promise.all([itensAtivos(tipo, semanal), contadosDesde(tipo, desde)])
+  const [itens, contados, { data: confs }] = await Promise.all([itensAtivos(tipo, semanal), contadosDesde(tipo, desde),
+    supabase.from(tipo === 'mp' ? 'conferencia_mp' : 'conferencia_estoque').select('responsavel, criado_em').gte('data_conferencia', desde)])
   const feitos = itens.filter(i => contados.has(i.id)).length
-  return { feito: itens.length > 0 && feitos === itens.length, detalhe: `${feitos} de ${itens.length} itens contados${semanal ? ' (⭐)' : ''}`, vazio: !itens.length }
+  return { feito: itens.length > 0 && feitos === itens.length, detalhe: `${feitos} de ${itens.length} itens contados${semanal ? ' (⭐)' : ''}`,
+    vazio: !itens.length, ...quemQuando(confs, 'responsavel', 'criado_em', true) }
 }
 
 // ── Catálogo ─────────────────────────────────────────────────────────────────
@@ -72,9 +83,10 @@ export const TAREFAS = [
     id: 'producao_registro', area: 'producao', titulo: 'Registrar a produção do dia', quando: 'Todo dia trabalhado',
     ir: ['producao', 'registro'], instancias: diaria(),
     async verificar(ref) {
-      const { count } = await supabase.from('producao_diaria').select('id', { count: 'exact', head: true })
+      const { data } = await supabase.from('producao_diaria').select('registrado_por, criado_em')
         .eq('data_producao', ref).not('registrado_por', 'ilike', '%(auto-embalagem)%')
-      return { feito: count > 0, detalhe: count ? `${count} lançamento(s)` : 'Nenhuma produção lançada hoje' }
+      const n = (data || []).length
+      return { feito: n > 0, detalhe: n ? `${n} lançamento(s)` : 'Nenhuma produção lançada no dia', ...quemQuando(data, 'registrado_por', 'criado_em') }
     },
   },
   {
@@ -82,8 +94,8 @@ export const TAREFAS = [
     ir: ['producao', 'planejamento'], instancias: diaria(),
     async verificar(ref, c) {
       const prox = c.proximoTrabalhado(ref)
-      const { data } = await supabase.from('expedicao_pickings').select('gerado_em').eq('data_producao', prox).maybeSingle()
-      return { feito: !!data, detalhe: data ? `Picking de ${br(prox)} gerado` : `Falta o picking de ${br(prox)}` }
+      const { data } = await supabase.from('expedicao_pickings').select('gerado_em, gerado_por').eq('data_producao', prox).maybeSingle()
+      return { feito: !!data, detalhe: data ? `Picking de ${br(prox)} gerado` : `Falta o picking de ${br(prox)}`, por: data?.gerado_por, em: data?.gerado_em }
     },
   },
   {
@@ -92,25 +104,26 @@ export const TAREFAS = [
     async verificar(ref) {
       const { data } = await supabase.from('expedicao_pickings').select('baixado_em, baixado_por, pedidos').eq('data_producao', ref).maybeSingle()
       if (!data) return { feito: false, detalhe: 'O picking de hoje ainda não foi gerado (Produção › Planejamento)' }
-      return { feito: !!data.baixado_em, detalhe: `${(data.pedidos || []).length} pedido(s)${data.baixado_em ? ` · baixado por ${data.baixado_por || '—'}` : ''}` }
+      return { feito: !!data.baixado_em, detalhe: `${(data.pedidos || []).length} pedido(s)`, por: data.baixado_por, em: data.baixado_em }
     },
   },
   {
     id: 'logistica_rotas', area: 'logistica', titulo: 'Montar as rotas de entrega', quando: 'Todo dia trabalhado',
     ir: ['logistica', 'roteiro'], instancias: diaria(),
     async verificar(ref) {
-      const { data } = await supabase.from('logistica_historico').select('criado_em, total_rotas')
+      const { data } = await supabase.from('logistica_historico').select('criado_em, criado_por, total_rotas')
         .gte('criado_em', dataDe(ref).toISOString()).lt('criado_em', dataDe(somar(ref, 1)).toISOString())
       const n = (data || []).length
-      return { feito: n > 0, detalhe: n ? `${n} roteiro(s) gerado(s)` : 'Nenhum roteiro gerado hoje' }
+      return { feito: n > 0, detalhe: n ? `${n} roteiro(s) gerado(s)` : 'Nenhum roteiro gerado no dia', ...quemQuando(data, 'criado_por', 'criado_em') }
     },
   },
   {
     id: 'logistica_delivery', area: 'logistica', titulo: 'Contagem do Delivery BV', quando: 'Segunda a sexta (dias trabalhados)',
     ir: ['logistica', 'delivery'], instancias: diaria(),
     async verificar(ref) {
-      const { count } = await supabase.from('delivery_contagens').select('id', { count: 'exact', head: true }).eq('data', ref)
-      return { feito: count > 0, detalhe: count ? `${count} produto(s) contado(s)` : 'Contagem de hoje não lançada' }
+      const { data } = await supabase.from('delivery_contagens').select('registrado_por, criado_em').eq('data', ref)
+      const n = (data || []).length
+      return { feito: n > 0, detalhe: n ? `${n} produto(s) contado(s)` : 'Contagem do dia não lançada', ...quemQuando(data, 'registrado_por', 'criado_em') }
     },
   },
   {
@@ -119,18 +132,19 @@ export const TAREFAS = [
     async verificar(ref) {
       // Marca sozinha quando houve baixa hoje. Revenda/Venda Direta ficam Atendido ao emitir a nota e não
       // passam pela baixa: por isso "X de Y" é só informação.
-      const [{ data: ant }, { count: hoje }] = await Promise.all([
+      const [{ data: ant }, { data: envs }] = await Promise.all([
         supabase.from('expedicao_pickings').select('data_producao, pedidos').lt('data_producao', ref).order('data_producao', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('expedicao_envios').select('id', { count: 'exact', head: true })
+        supabase.from('expedicao_envios').select('operador, criado_em')
           .gte('criado_em', dataDe(ref).toISOString()).lt('criado_em', dataDe(somar(ref, 1)).toISOString()),
       ])
+      const hoje = (envs || []).length
       let info = ''
       if (ant) {
         const ids = (ant.pedidos || []).map(p => p.id).filter(Boolean)
         const { data: env } = ids.length ? await supabase.from('expedicao_envios').select('bling_id').in('bling_id', ids) : { data: [] }
         info = `Picking de ${br(ant.data_producao)}: ${new Set((env || []).map(e => String(e.bling_id))).size} de ${ids.length} pedido(s) com baixa`
       }
-      return { feito: hoje > 0, detalhe: [hoje ? `${hoje} baixa(s) hoje` : 'Nenhuma baixa hoje', info].filter(Boolean).join(' · ') }
+      return { feito: hoje > 0, detalhe: [hoje ? `${hoje} baixa(s) no dia` : 'Nenhuma baixa no dia', info].filter(Boolean).join(' · '), ...quemQuando(envs, 'operador', 'criado_em') }
     },
   },
   {
@@ -168,17 +182,18 @@ export const TAREFAS = [
       return [{ ref: ant, prazo: `${c.hoje.slice(0, 7)}-05`, soSePendente: c.hoje.slice(8, 10) > '10' }]
     },
     async verificar(ref) {
-      const { data } = await supabase.from('dre_mes').select('visao, fechado_em').eq('mes', ref)
+      const { data } = await supabase.from('dre_mes').select('visao, fechado_em, fechado_por').eq('mes', ref)
       const fechadas = (data || []).filter(r => r.fechado_em).map(r => r.visao)
       const falta = ['competencia', 'caixa'].filter(v => !fechadas.includes(v))
-      return { feito: !falta.length, detalhe: falta.length ? `Falta fechar: ${falta.map(v => v === 'caixa' ? 'caixa' : 'competência').join(' e ')}` : 'Competência e caixa fechados' }
+      return { feito: !falta.length, detalhe: falta.length ? `Falta fechar: ${falta.map(v => v === 'caixa' ? 'caixa' : 'competência').join(' e ')}` : 'Competência e caixa fechados',
+        ...(falta.length ? {} : quemQuando((data || []).filter(r => r.fechado_em), 'fechado_por', 'fechado_em', true)) }
     },
   },
 ]
 
 // Tarefas do dia para as áreas `areas` (null = todas). Devolve as linhas prontas para a tela.
-export async function carregarTarefas(areas, hoje = hojeISO()) {
-  const semProducao = await carregarDiasSemProducao()
+export async function carregarTarefas(areas, hoje = hojeISO(), diasSemProducao = null) {
+  const semProducao = diasSemProducao || await carregarDiasSemProducao()
   const c = contexto(hoje, semProducao)
   const lista = TAREFAS.filter(t => !areas || areas.includes(t.area))
     .flatMap(t => t.instancias(c).map(inst => ({ t, ...inst })))
@@ -193,9 +208,20 @@ export async function carregarTarefas(areas, hoje = hojeISO()) {
       id: l.t.id, area: l.t.area, titulo: l.t.titulo, quando: l.t.quando, ir: l.t.ir, ref: l.ref,
       prazo: l.prazo, atrasada: !!l.atrasada || l.prazo < hoje, soSePendente: l.soSePendente,
       auto: !!r.feito, manual: m || null, feito: !!r.feito || !!m, detalhe: r.detalhe,
+      // quem fez e quando: do próprio registro (automática) ou de quem marcou
+      por: r.feito ? (r.por || null) : (m?.marcado_por || null), em: r.feito ? (r.em || null) : (m?.marcado_em || null),
     }
   }))
   return { hoje, hojeTrabalhado: c.hojeTrabalhado, motivoFolga: motivoFolga(hoje, semProducao), linhas: linhas.filter(l => !(l.soSePendente && l.feito)), semTabela: !!error }
+}
+
+// Acompanhamento (Admin): as tarefas de todas as áreas em cada um dos últimos `n` dias trabalhados (e hoje)
+export async function carregarAcompanhamento(n = 7, hoje = hojeISO()) {
+  const semProducao = await carregarDiasSemProducao()
+  const dias = [hoje]
+  for (let d = somar(hoje, -1), i = 0; dias.length <= n && i < 40; d = somar(d, -1), i++) if (!motivoFolga(d, semProducao)) dias.push(d)
+  const porDia = await Promise.all(dias.map(d => carregarTarefas(null, d, semProducao)))
+  return { dias, porDia: Object.fromEntries(dias.map((d, i) => [d, porDia[i]])) }
 }
 
 export async function marcarTarefa(tarefa, ref, usuario) {

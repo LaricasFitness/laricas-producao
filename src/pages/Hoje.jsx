@@ -88,7 +88,7 @@ export default function Hoje({ areas, usuario, onIr }) {
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}>
                       {l.detalhe}
-                      {l.auto && <span style={{ color: 'var(--ok)', fontWeight: 700 }}> · ✓ automático</span>}
+                      {l.auto && <span style={{ color: 'var(--ok)', fontWeight: 700 }}> · ✓ feita{l.por ? ` por ${l.por}` : ''}{l.em ? ` às ${hora(l.em)}` : ''}</span>}
                       {!l.auto && l.manual && <span style={{ color: 'var(--ok)', fontWeight: 700 }}> · ✓ marcada por {l.manual.marcado_por || '—'} às {hora(l.manual.marcado_em)}</span>}
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--gray-400)', marginTop: 1 }}>{l.quando}</div>

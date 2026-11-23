@@ -69,6 +69,7 @@ export const MENU = [
   {
     id: 'admin', label: 'Admin', Icon: Settings,
     subs: [
+      { id: 'tarefas',            label: 'Acompanhamento de tarefas' },
       { id: 'embalagens',         label: 'Cadastro de embalagens' },
       { id: 'delivery_previsao',  label: 'Previsão delivery' },
       { id: 'fichas_preparacoes', label: 'Preparações' },

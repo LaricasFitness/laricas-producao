@@ -4,6 +4,7 @@ import { diasPorCategoria } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { Plus, Pencil, Trash2, RefreshCw, Save } from 'lucide-react'
 import Usuarios from './Usuarios'
+import AcompanhamentoTarefas from './AcompanhamentoTarefas'
 import { SelectCategoria } from '../lib/categorias'
 import { ehSazonal, ocultoSazonal, semOcultos, categoriaOculta, definirTemporada } from '../lib/sazonal'
 import { feriados, carregarDiasSemProducao, salvarDiasSemProducao, rotuloDia, hojeISO } from '../lib/diasProducao'
@@ -1821,6 +1822,7 @@ export default function Admin({ sub, onSub }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Tabs */}
       <div className="tabs hub-tabs">
+        <button className={`tab${tab === 'tarefas' ? ' active' : ''}`} onClick={() => setTab('tarefas')}>✅ Acompanhamento de tarefas</button>
         <button className={`tab${tab === 'embalagens' ? ' active' : ''}`} onClick={() => setTab('embalagens')}>⚙️ Cadastro de Embalagens</button>
         <button className={`tab${tab === 'delivery_previsao' ? ' active' : ''}`} onClick={() => setTab('delivery_previsao')}>📊 Previsão Delivery</button>
         <button className={`tab${tab === 'fichas_preparacoes' ? ' active' : ''}`} onClick={() => setTab('fichas_preparacoes')}>🧪 Preparações</button>
@@ -1831,6 +1833,7 @@ export default function Admin({ sub, onSub }) {
         <button className={`tab${tab === 'usuarios' ? ' active' : ''}`} onClick={() => setTab('usuarios')}>👥 Usuários e Acessos</button>
       </div>
 
+      {tab === 'tarefas' && <AcompanhamentoTarefas />}
       {tab === 'usuarios' && <Usuarios />}
 
 

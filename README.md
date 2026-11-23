@@ -194,6 +194,13 @@ contam os dias trabalhados (mesma regra da conferência: seg a sex, menos feriad
 | Estoque | Contagem completa do mês | todos os itens ativos contados nos últimos 3 dias do mês; atrasada até o dia 5 |
 | Financeiro | Fechar a DRE do mês anterior | competência e caixa com cadeado (a partir do dia 5) |
 
+**Admin › Acompanhamento de tarefas** (`src/pages/AcompanhamentoTarefas.jsx`, primeira aba do Admin): as mesmas
+tarefas de todas as áreas nos últimos 5–15 dias trabalhados, numa grade tarefa × dia — feita (sozinha ou à mão),
+por quem e a que horas, pendente hoje ou não feita — e um resumo por área (hoje e % do período). Quem fez vem
+do próprio registro: `registrado_por` da produção e do Delivery, `gerado_por`/`baixado_por` do picking,
+`criado_por` da rota, `operador` da baixa, `responsavel` da conferência, `fechado_por` da DRE. Muitas contas
+são compartilhadas ("Expedição / Logística", "Administrador"): o nome é o do usuário logado, não da pessoa.
+
 ## Delivery BV (contagem diária do delivery)
 
 Logística › Delivery BV. Substitui a planilha "Controle Delivery" e o print no grupo. Todo fim de dia,
