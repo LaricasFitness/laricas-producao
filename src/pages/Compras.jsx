@@ -5,6 +5,8 @@ import { semOcultos } from '../lib/sazonal'
 import { registrarAcao } from '../lib/log'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { BotaoCadeado, conferido, erroCadeado } from '../lib/cadeado'
+import { mesFechado, avisoMesFechado } from '../lib/cmv'
+import { perguntarSeJaContada } from '../lib/contagem'
 import { Plus, RefreshCw, Save, ChevronDown, ChevronUp, X, Pencil } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -93,6 +95,11 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
   async function salvar() {
     const fil = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
     if (!fil.length) { alert('Adicione pelo menos um item.'); return }
+    if (await mesFechado(dataRec)) { alert(avisoMesFechado(dataRec)); return }
+    // Nota com data até a última contagem: já estava na contagem? (mesma regra da matéria-prima)
+    const foraDoSaldo = await perguntarSeJaContada('emb',
+      fil.filter(i => i.embalagem_id).map(i => ({ id: i.embalagem_id, nome: embalagens.find(e => e.id === i.embalagem_id)?.nome || 'Item' })), dataRec)
+    if (foraDoSaldo === null) return
     setSaving(true)
     try {
       const { data: rec, error } = await supabase.from('recebimentos').insert({
@@ -105,13 +112,15 @@ function ModalNovaCompra({ pedidos, embalagens, fornecedores: fornInicial, onClo
       }).select().single()
       if (error) throw error
 
-      await supabase.from('recebimento_itens').insert(fil.map(it => ({
+      const { error: eItens } = await supabase.from('recebimento_itens').insert(fil.map(it => ({
         recebimento_id: rec.id,
         embalagem_id: it.embalagem_id || null,
         nome_livre: it.embalagem_id ? null : it.nome_livre?.trim(),
         quantidade_recebida: parseInt(it.quantidade),
         valor_unitario: parseFloat(it.valor_unitario) || null,
+        ...(foraDoSaldo.has(it.embalagem_id) ? { entrou_no_saldo: false } : {}),
       })))
+      if (eItens) throw eItens
 
       // Recalcula o custo médio (30 dias) de cada embalagem recebida
       for (const id of new Set(fil.filter(i => i.embalagem_id).map(i => i.embalagem_id))) {
@@ -249,6 +258,7 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
       nome_livre: i.nome_livre || '',
       quantidade: String(i.quantidade_recebida),
       valor_unitario: i.valor_unitario ? String(i.valor_unitario) : '',
+      entrou_no_saldo: i.entrou_no_saldo,
     }))
   )
   const [saving, setSaving] = useState(false)
@@ -262,6 +272,9 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
   async function salvar() {
     const fil = itens.filter(it => (it.embalagem_id || it.nome_livre?.trim()) && it.quantidade > 0)
     if (!fil.length) { alert('Adicione pelo menos um item.'); return }
+    for (const d of [recebimento.data_recebimento, dataRec]) {
+      if (await mesFechado(d)) { alert(avisoMesFechado(d)); return }
+    }
     setSaving(true)
     try {
       // Atualiza cabeçalho (se o banco recusar — cadeado fechado — não mexe nos itens)
@@ -276,13 +289,15 @@ function ModalEditarCompra({ recebimento, embalagens, fornecedores: fornInicial,
 
       // Recria itens (delete + insert)
       await supabase.from('recebimento_itens').delete().eq('recebimento_id', recebimento.id)
-      await supabase.from('recebimento_itens').insert(fil.map(it => ({
+      const { error: eItens } = await supabase.from('recebimento_itens').insert(fil.map(it => ({
         recebimento_id: recebimento.id,
         embalagem_id: it.embalagem_id || null,
         nome_livre: it.embalagem_id ? null : it.nome_livre?.trim(),
         quantidade_recebida: parseInt(it.quantidade),
         valor_unitario: parseFloat(it.valor_unitario) || null,
+        ...(it.entrou_no_saldo === false ? { entrou_no_saldo: false } : {}),  // "já estava na contagem" continua
       })))
+      if (eItens) throw eItens
 
       // Recalcula o custo médio (30 dias) de cada embalagem recebida
       for (const id of new Set(fil.filter(i => i.embalagem_id).map(i => i.embalagem_id))) {

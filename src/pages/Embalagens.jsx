@@ -7,6 +7,7 @@ import { supabase } from '../supabase'
 import { calcularEstoqueCronologico } from '../lib/data'
 import { semOcultos } from '../lib/sazonal'
 import { useBloqueioConferencia, podeLancarConferencia, AvisoProducaoPendente } from '../lib/diasProducao'
+import { BarraContagem, Estrela, marcarContagemSemanal, modoContagemInicial } from '../lib/contagem'
 import { RefreshCw, Save, CheckCircle, Pencil } from 'lucide-react'
 
 function fmt(n, d=0) { return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}) }
@@ -25,20 +26,32 @@ export function ConferenciaEstoque({ onSalvo }) {
   const [aba, setAba] = useState('conferir')
   const bloqueio = useBloqueioConferencia() // fechamento da semana/mês exige a produção lançada
 
+  const [modo, setModo] = useState(null) // 'semana' (só os principais) | 'mes' (todos)
+
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('embalagens')
-      .select('id, codigo, nome, categoria, tipo')
-      .eq('ativo', true)
-      .order('tipo').order('categoria').order('nome')
+    const sel = 'id, codigo, nome, categoria, tipo, custo_unitario'
+    let { data, error } = await supabase.from('embalagens').select(sel + ', contagem_semanal')
+      .eq('ativo', true).order('tipo').order('categoria').order('nome')
+    if (error) ({ data } = await supabase.from('embalagens').select(sel)   // antes do estoque_embalagem.sql
+      .eq('ativo', true).order('tipo').order('categoria').order('nome'))
 
     if (!data) { setLoading(false); return }
     const lista = semOcultos(data)   // sazonal fora de temporada não entra na contagem
 
     const estoques = await Promise.all(lista.map(e => calcularEstoqueCronologico(e.id)))
     setEmbs(lista.map((e, i) => ({ ...e, estoque_sistema: estoques[i] })))
+    setModo(m => m || modoContagemInicial(lista.some(x => x.contagem_semanal)))
     setLoading(false)
   }
+
+  async function alternarSemanal(e) {
+    try {
+      await marcarContagemSemanal('embalagens', e.id, !e.contagem_semanal)
+      setEmbs(p => p.map(x => x.id === e.id ? { ...x, contagem_semanal: !e.contagem_semanal } : x))
+    } catch (err) { alert(err.message) }
+  }
+  const visiveis = embs.filter(e => modo !== 'semana' || e.contagem_semanal)
 
   const CAMPOS_ORD = {
     data:        h => h.data_conferencia,
@@ -86,15 +99,17 @@ export function ConferenciaEstoque({ onSalvo }) {
       const contado = parseInt(contagens[emb.id])
       const sistema = emb.estoque_sistema
 
-      // Registra conferência
-      await supabase.from('conferencia_estoque').insert({
+      // Registra conferência, com o custo congelado na data (como a matéria-prima)
+      const conf = {
         embalagem_id: emb.id,
         data_conferencia: new Date().toISOString().slice(0, 10),
         estoque_sistema: sistema,
         estoque_contado: contado,
         responsavel: responsavel || null,
         ajuste_aplicado: true,
-      })
+      }
+      const { error: eConf } = await supabase.from('conferencia_estoque').insert({ ...conf, custo_unitario: parseFloat(emb.custo_unitario) || 0 })
+      if (eConf) await supabase.from('conferencia_estoque').insert(conf)   // antes do estoque_embalagem.sql
 
       // Aplica ajuste via inventário para TODOS os itens conferidos (não só divergentes)
       const { error: invErr } = await supabase.from('inventarios').insert({
@@ -186,6 +201,7 @@ export function ConferenciaEstoque({ onSalvo }) {
               style={{width:220,fontSize:13}}/>
             <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
           </div>
+          <BarraContagem modo={modo} onModo={setModo} principais={embs.filter(e => e.contagem_semanal).length} total={embs.length} />
 
           {/* KPIs */}
           {itensLancados.length > 0 && (
@@ -206,8 +222,8 @@ export function ConferenciaEstoque({ onSalvo }) {
           {/* Lista de embalagens */}
           {loading ? <div className="loading"><RefreshCw size={14} className="spin"/></div> : (
             <div className="card">
-              {[...new Set(embs.map(e=>e.categoria))].map(cat => {
-                const grupo = embs.filter(e=>e.categoria===cat)
+              {[...new Set(visiveis.map(e=>e.categoria))].map(cat => {
+                const grupo = visiveis.filter(e=>e.categoria===cat)
                 return (
                   <div key={cat}>
                     <div style={{padding:'8px 20px',background:'var(--gray-50)',borderTop:'1px solid var(--gray-200)',
@@ -228,7 +244,7 @@ export function ConferenciaEstoque({ onSalvo }) {
                           background: diverge?'#fff5f5':temContagem&&!diverge?'#f0faf0':i%2===0?'#fff':'#fafafa',
                         }}>
                           <div>
-                            <div style={{fontWeight:600,fontSize:13}}>{e.nome}</div>
+                            <div style={{fontWeight:600,fontSize:13}}><Estrela ativo={e.contagem_semanal} onClick={() => alternarSemanal(e)} />{e.nome}</div>
                             <div style={{fontSize:11,color:'var(--gray-400)'}}>
                               {e.codigo}
                               <span style={{marginLeft:6,padding:'1px 6px',borderRadius:8,fontSize:10,fontWeight:700,
@@ -336,7 +352,7 @@ export function ConferenciaEstoque({ onSalvo }) {
               if (!porDia[d]) porDia[d] = { data: d, itens: 0, divergentes: 0, sistema: 0, contado: 0, impacto: 0 }
               const sis = parseFloat(c.estoque_sistema) || 0
               const con = parseFloat(c.estoque_contado) || 0
-              const pu  = parseFloat(c.embalagens?.custo_unitario) || 0
+              const pu  = parseFloat(c.custo_unitario ?? c.embalagens?.custo_unitario) || 0  // custo da data da contagem; antigas sem ele: o atual
               porDia[d].itens++
               if (Math.abs(con - sis) > 0.001) porDia[d].divergentes++
               porDia[d].sistema += sis * pu

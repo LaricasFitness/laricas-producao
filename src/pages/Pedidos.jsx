@@ -3,6 +3,8 @@ import { supabase } from '../supabase'
 import { carregarStatusCompleto, gerarNumeroPedido, statusCfg, recalcularCustoEmbalagem, recebidoPorPedido, atualizarStatusPedido } from '../lib/data'
 import { FileText, RefreshCw, CheckCircle, ChevronDown, ChevronUp, Plus } from 'lucide-react'
 import { semOcultos } from '../lib/sazonal'
+import { mesFechado, avisoMesFechado } from '../lib/cmv'
+import { perguntarSeJaContada } from '../lib/contagem'
 import { SelectCategoria, CATEGORIAS_BASE } from '../lib/categorias'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -363,6 +365,11 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
       alert('Nenhuma quantidade informada nesta entrega.')
       return
     }
+    if (await mesFechado(dataRec)) { alert(avisoMesFechado(dataRec)); return }
+    // Nota com data até a última contagem: já estava na contagem? (mesma regra da matéria-prima)
+    const foraDoSaldo = await perguntarSeJaContada('emb',
+      recebidosValidos.map(i => ({ id: i.embalagem_id, nome: i.embalagens?.nome || 'Item' })), dataRec)
+    if (foraDoSaldo === null) return
     setSaving(true)
     try {
       const totalGeral = recebidosValidos.reduce((s, i) =>
@@ -381,14 +388,16 @@ function ModalConferencia({ pedido, onClose, onSaved }) {
 
       // 2) Itens do recebimento com valor unitário
       if (recebidosValidos.length) {
-        await supabase.from('recebimento_itens').insert(
+        const { error: eItens } = await supabase.from('recebimento_itens').insert(
           recebidosValidos.map(i => ({
             recebimento_id: rec.id,
             embalagem_id: i.embalagem_id,
             quantidade_recebida: parseInt(recebidos[i.id]) || 0,
             valor_unitario: parseFloat(valores[i.id]) || null,
+            ...(foraDoSaldo.has(i.embalagem_id) ? { entrou_no_saldo: false } : {}),
           }))
         )
+        if (eItens) throw eItens
       }
 
       // 3) Estoque e custo unitário — só do que chegou nesta entrega

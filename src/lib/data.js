@@ -124,21 +124,22 @@ export async function calcularEstoqueCronologico(embalagemId, dataRef) {
 
   const limite = dataRef || new Date().toISOString().slice(0, 10)
 
-  // 2. Soma recebimentos APÓS a data base (inclusive mesmo dia)
-  const { data: recebimentos } = await supabase
-    .from('recebimento_itens')
-    .select('quantidade_recebida, recebimentos(data_recebimento, criado_em)')
-    .eq('embalagem_id', embalagemId)
+  // 2. Soma recebimentos lançados DEPOIS da contagem base — mesma regra da matéria-prima (e do CMV):
+  //    a data da nota não diz quando a mercadoria chegou; o que foi lançado antes da contagem já estava
+  //    nela. Nota com data até a contagem, lançada depois, pergunta na hora "já estava na contagem?"
+  //    (entrou_no_saldo = false: não soma). Sem contagem, vale a data a partir da referência.
+  const selRec = 'quantidade_recebida, recebimentos(data_recebimento, criado_em)'
+  let { data: recebimentos, error: eRec } = await supabase
+    .from('recebimento_itens').select(selRec + ', entrou_no_saldo').eq('embalagem_id', embalagemId)
+  if (eRec) ({ data: recebimentos } = await supabase   // antes do estoque_embalagem.sql
+    .from('recebimento_itens').select(selRec).eq('embalagem_id', embalagemId))
 
   const entradas = (recebimentos || [])
     .filter(r => {
       const d = r.recebimentos?.data_recebimento
-      // Se temos timestamp do inventário, usa para distinguir eventos do mesmo dia
-      if (tsBase && d === dataBase) {
-        const tsRec = r.recebimentos?.criado_em
-        return tsRec && tsRec > tsBase
-      }
-      return d && d >= dataBase && d <= limite
+      if (!d || d > limite || r.entrou_no_saldo === false) return false
+      if (tsBase) return (r.recebimentos?.criado_em || '') > tsBase
+      return d >= dataBase
     })
     .reduce((s, r) => s + (r.quantidade_recebida || 0), 0)
 

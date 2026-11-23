@@ -1,6 +1,7 @@
 import { supabase } from '../supabase'
 import { atualizarStatusPedido } from './data'
 import { excluirProducao } from './producao'
+import { mesFechado, avisoMesFechado } from './cmv'
 
 function getUsuario() {
   try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
@@ -64,6 +65,8 @@ export async function reverterAcao(logEntry) {
       // Cadeado fechado: não desfaz (o estoque seria baixado e o registro ficaria)
       const { data: atual } = await supabase.from('recebimentos').select('*').eq('id', registro_id).maybeSingle()
       if (atual?.conferido_em) return { ok: false, erro: 'Recebimento conferido (cadeado fechado). Peça a um administrador para abrir o cadeado antes de desfazer.' }
+      // Mês fechado no CMV: a compra já está no estoque congelado
+      if (atual?.data_recebimento && await mesFechado(atual.data_recebimento)) return { ok: false, erro: avisoMesFechado(atual.data_recebimento) }
       const itens = dados_anteriores?.itens || []
       for (const item of itens) {
         const { data: emb } = await supabase.from('embalagens').select('estoque_atual').eq('id', item.embalagem_id).single()

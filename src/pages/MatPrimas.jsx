@@ -5,6 +5,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { mesFechado, avisoMesFechado } from '../lib/cmv'
 import { perguntar } from '../lib/perguntar'
+import { ultimaContagem, perguntarSeJaContada as perguntarContada, BarraContagem, Estrela, marcarContagemSemanal, modoContagemInicial } from '../lib/contagem'
 import { lerBuscaNF, nfCombina, descreverBuscaNF } from '../lib/nf'
 import { BotaoCadeado, conferido, descreverConferencia, erroCadeado } from '../lib/cadeado'
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
@@ -52,21 +53,8 @@ async function recalcularCustoMP(mpId) {
   return preco
 }
 
-// Última contagem física da MP (conferência ou inventário): { data, ts }, ou null
-async function ultimaContagemMP(mpId) {
-  if (!mpId) return null
-  const [{ data: c }, { data: i }] = await Promise.all([
-    supabase.from('conferencia_mp').select('data_conferencia, criado_em').eq('materia_prima_id', mpId)
-      .order('criado_em', { ascending: false }).limit(1),
-    supabase.from('mp_inventarios').select('data_inventario, criado_em').eq('materia_prima_id', mpId)
-      .order('criado_em', { ascending: false }).limit(1),
-  ])
-  const opcoes = [
-    c?.[0] && { data: c[0].data_conferencia, ts: c[0].criado_em },
-    i?.[0] && { data: i[0].data_inventario, ts: i[0].criado_em },
-  ].filter(Boolean).sort((a, b) => new Date(b.ts) - new Date(a.ts))
-  return opcoes[0] || null
-}
+// Última contagem física da MP (conferência ou inventário): { data, ts }, ou null — regra em lib/contagem.js
+const ultimaContagemMP = mpId => ultimaContagem('mp', mpId)
 
 // Quanto de uma compra lançada ainda está no saldo. A data da NF não diz quando a
 // mercadoria chegou, então o critério é o MOMENTO do lançamento: compra lançada antes
@@ -80,27 +68,8 @@ async function parcelaNoSaldo(compra) {
 
 // NF com data igual ou anterior à última contagem: só quem recebeu sabe se a mercadoria
 // já estava lá. Devolve o conjunto de MPs que NÃO somam ao saldo, ou null para voltar.
-async function perguntarSeJaContada(itens, dataCompra) {
-  const pendentes = []
-  for (const it of itens) {
-    const cont = await ultimaContagemMP(it.mp_id)
-    if (cont && dataCompra <= cont.data) pendentes.push({ ...it, contagem: cont.data })
-  }
-  if (!pendentes.length) return new Set()
-  const br = d => new Date(d + 'T12:00:00').toLocaleDateString('pt-BR')
-  const resp = await perguntar({
-    titulo: 'Essa mercadoria já tinha sido contada?',
-    texto: `A nota é de ${br(dataCompra)}, mas houve contagem física nesse dia ou depois. Quando contaram, esta mercadoria já estava no estoque?`,
-    itens: pendentes.map(p => `${p.nome} (contagem de ${br(p.contagem)})`),
-    opcoes: [
-      { valor: 'depois', rotulo: 'Não, chegou depois da contagem — somar ao estoque', classe: 'btn-primary' },
-      { valor: 'contada', rotulo: 'Sim, já estava na contagem — não somar' },
-      { valor: null, rotulo: 'Voltar' },
-    ],
-  })
-  if (resp === null) return null
-  return new Set(resp === 'contada' ? pendentes.map(p => p.mp_id) : [])
-}
+const perguntarSeJaContada = (itens, dataCompra) =>
+  perguntarContada('mp', itens.map(it => ({ ...it, id: it.mp_id })), dataCompra)
 
 // Número da NF sem pontuação nem zeros à esquerda (000.074.478 = 74478)
 const nfNormal = n => String(n || '').replace(/\D/g, '').replace(/^0+/, '')
@@ -2911,14 +2880,25 @@ export function ConferenciaMP() {
   const ordenarPor = campo => setOrd(o =>
     o.campo === campo ? { campo, dir: o.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'desc' })
 
+  const [modo, setModo] = useState(null) // 'semana' (só os principais) | 'mes' (todos)
+
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('materias_primas')
-      .select('id,nome,unidade,categoria,estoque_atual,custo_unitario')
-      .eq('ativo', true)
-      .order('categoria').order('nome')
+    const sel = 'id,nome,unidade,categoria,estoque_atual,custo_unitario'
+    let { data, error } = await supabase.from('materias_primas').select(sel + ',contagem_semanal')
+      .eq('ativo', true).order('categoria').order('nome')
+    if (error) ({ data } = await supabase.from('materias_primas').select(sel)   // antes do estoque_embalagem.sql
+      .eq('ativo', true).order('categoria').order('nome'))
     setMps(data||[])
+    setModo(m => m || modoContagemInicial((data||[]).some(x => x.contagem_semanal)))
     setLoading(false)
+  }
+
+  async function alternarSemanal(m) {
+    try {
+      await marcarContagemSemanal('materias_primas', m.id, !m.contagem_semanal)
+      setMps(p => p.map(x => x.id === m.id ? { ...x, contagem_semanal: !m.contagem_semanal } : x))
+    } catch (e) { alert(e.message) }
   }
 
   async function loadHistorico() {
@@ -3023,7 +3003,7 @@ export function ConferenciaMP() {
   )
 
   const cats = ['todas', ...new Set(mps.map(m => m.categoria).filter(Boolean))]
-  const filtradas = mps.filter(m => catFiltro === 'todas' || m.categoria === catFiltro)
+  const filtradas = mps.filter(m => (catFiltro === 'todas' || m.categoria === catFiltro) && (modo !== 'semana' || m.contagem_semanal))
   const lancados = mps.filter(m => contagens[m.id] !== undefined && contagens[m.id] !== '')
   const comDiferenca = lancados.filter(m => parseFloat(contagens[m.id]) !== (parseFloat(m.estoque_atual)||0))
   const impactoFinanceiro = lancados.reduce((s,m) => {
@@ -3060,6 +3040,7 @@ export function ConferenciaMP() {
               onChange={e=>setResponsavel(e.target.value)} style={{width:180,fontSize:13}}/>
             <button className="btn btn-ghost btn-sm" onClick={load}><RefreshCw size={13}/></button>
           </div>
+          <BarraContagem modo={modo} onModo={setModo} principais={mps.filter(m => m.contagem_semanal).length} total={mps.length} />
 
           {lancados.length > 0 && (
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
@@ -3101,7 +3082,7 @@ export function ConferenciaMP() {
                         background: diverge?'#fff5f5':tem?'#f0faf0':i%2===0?'#fff':'#fafafa',
                       }}>
                         <div>
-                          <div style={{fontWeight:600,fontSize:13}}>{m.nome}</div>
+                          <div style={{fontWeight:600,fontSize:13}}><Estrela ativo={m.contagem_semanal} onClick={() => alternarSemanal(m)} />{m.nome}</div>
                           <div style={{fontSize:11,color:'var(--gray-400)'}}>
                             {fmtR(parseFloat(m.custo_unitario)||0)}/{m.unidade}
                           </div>

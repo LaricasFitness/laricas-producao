@@ -259,10 +259,13 @@ O sistema calcula custo por dois métodos independentes, que devem convergir.
 
 **Teórico** — produção registrada × ficha técnica. É o CMV por produto.
 
-**Real** — para matéria-prima, `estoque inicial + compras − estoque final`,
-em R$ (`src/lib/cmv.js`). Não depende de ficha nenhuma. Para embalagem
-(sem controle de estoque por contagem), produção × ficha + percentual de
-perda configurável (`perda_embalagem_pct`, padrão 2%).
+**Real** — `estoque inicial + compras − estoque final`, em R$ (`src/lib/cmv.js`).
+Não depende de ficha nenhuma. Vale para matéria-prima e, **a partir de dez/2026**
+(`INICIO_EMB_REAL`, contagem completa de abertura em 30/11/2026), para embalagem e
+rótulo: contagens em `inventarios`, compras em `recebimento_itens`, saídas em
+`producao_diaria` (rótulo, embalagens vinculadas e ajustes do Log). Antes disso — e
+para embalagem nunca contada, sem estoque inicial e final — produção × ficha +
+perda configurável (`perda_embalagem_pct`, padrão 2%), para não sumir do CMV.
 
 - Estoque final = contagem do **último dia do mês**. Sem ela, saldo calculado
   (última contagem + entradas − consumo registrado), marcado "calc.".
@@ -287,22 +290,36 @@ consumo a maior. Truncar em zero apagaria o rombo — foi um bug real.
 
 A **data da NF não diz quando a mercadoria chegou**. Compra com data igual ou
 anterior à última contagem pergunta se já estava contada; a resposta fica em
-`mp_compras.entrou_no_saldo`. Ao excluir ou editar, vale o momento do
-lançamento: compra lançada antes da contagem já foi absorvida por ela.
+`mp_compras.entrou_no_saldo` (embalagem: `recebimento_itens.entrou_no_saldo`).
+Vale o momento do lançamento: compra lançada antes da contagem já foi absorvida
+por ela. Mesma regra para os dois tipos (`src/lib/contagem.jsx`).
 
 **Embalagem** não guarda saldo. É recalculado por `calcularEstoqueCronologico()`
-a partir do último inventário, somando `recebimento_itens` e subtraindo
-`producao_diaria`. O campo `estoque_atual` de embalagens existe mas não é a
-fonte de verdade.
+a partir do último inventário, somando os recebimentos lançados depois dele e
+subtraindo `producao_diaria`. O campo `estoque_atual` de embalagens existe mas não
+é a fonte de verdade. O saldo muda **só por compra e contagem** (o ajuste manual do
+Admin foi retirado). Editar ou excluir compra de embalagem de mês fechado no CMV é
+bloqueado, como na MP.
+
+**Rotina de contagem** (as duas Conferências): toda semana, só os itens principais
+(`contagem_semanal`, ⭐ na tela; sugestão inicial = curva A, ~80% do valor consumido
+em 90 dias); no **último dia do mês, todos** — é o estoque final do CMV (contagem até
+3 dias antes ainda vale; nos últimos 3 dias do mês a tela já abre em "todos"). A
+conferência de embalagem guarda o custo da data, como a de MP (`estoque_embalagem.sql`).
 
 ### O que debita estoque
 
 Só o **registro de produção** (`Producao.jsx`), nunca o planejamento:
 
 - o rótulo do produto — 1 por unidade
-- as embalagens vinculadas — × a quantidade do vínculo
+- as embalagens vinculadas — × a quantidade do vínculo (linhas "… (auto-embalagem)"
+  em `producao_diaria`, somadas por lote)
 - a matéria-prima — pela ficha técnica
 - o desperdício da fase 6, quando vinculado a uma matéria-prima
+
+Editar, excluir, adicionar, mudar a data ou desfazer produção pelo **Log** corrige
+tudo isso junto (`src/lib/producao.js`): devolve a MP de `mp_consumos` e grava um
+ajuste das embalagens vinculadas com a diferença (negativo devolve).
 
 ---
 
@@ -366,7 +383,5 @@ Supabase. Não há ferramenta de migração.
 - Políticas RLS liberam tudo para a chave anônima nas demais tabelas — o login protege a
   interface e as funções `/api`, não o banco (a tabela `usuarios` já é fechada)
 - `MatPrimas.jsx` tem ~2.800 linhas e hospeda componentes de duas páginas
-- Conferência de embalagem lê o custo atual do cadastro, enquanto a de MP
-  congela o custo na data — comparação entre meses fica distorcida
 - Estoque de produto acabado não é controlado (a contagem do Delivery BV é só
   acompanhamento), então o CMV é custo de produção, não custo de vendas

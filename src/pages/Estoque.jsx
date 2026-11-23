@@ -66,8 +66,13 @@ export default function ControleEstoque() {
   const linhas = dados?.cmv?.linhas || []
   const linhasMP = linhas.filter(l => l.tipo === 'mp')
   const linhasEmb = linhas.filter(l => l.tipo === 'emb')
+  // Embalagem por estoque (inicial + compras − final) × pela produção + perda (sem contagem, ou antes de dez/26)
+  const linhasEmbEst = linhasEmb.filter(l => l.ef_origem !== 'producao')
+  const linhasEmbProd = linhasEmb.filter(l => l.ef_origem === 'producao')
   const realMP = soma(linhasMP, 'cmv_valor'), realEmb = soma(linhasEmb, 'cmv_valor')
+  const realEmbEst = soma(linhasEmbEst, 'cmv_valor'), realEmbProd = soma(linhasEmbProd, 'cmv_valor')
   const teoMP = soma(linhasMP, 'teorico_valor'), teoEmb = soma(linhasEmb, 'teorico_valor')
+  const teoEmbEst = soma(linhasEmbEst, 'teorico_valor'), teoEmbProd = soma(linhasEmbProd, 'teorico_valor')
   const fechado = dados?.cmv?.status === 'fechado'
   const ehAdmin = usuarioAtual()?.perfil === 'admin'
 
@@ -238,18 +243,23 @@ export default function ControleEstoque() {
                 ))}
               </div>
               <TabelaReal titulo="🧂 Matéria-prima" sub="contagem física no último dia do mês" lista={linhasMP} total={realMP} />
+              {linhasEmbEst.length > 0 && (
+                <TabelaReal titulo="📦 Embalagens e rótulos" sub="contagem física no último dia do mês" lista={linhasEmbEst} total={realEmbEst} />
+              )}
+              {(linhasEmbProd.length > 0 || !linhasEmbEst.length) && (
               <div className="card">
                 <div style={{ padding: '12px 20px', background: 'var(--purple)', color: '#fff',
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontWeight: 800, fontSize: 14 }}>📦 Embalagens e rótulos</div>
+                    <div style={{ fontWeight: 800, fontSize: 14 }}>📦 Embalagens e rótulos {linhasEmbEst.length ? 'sem contagem' : ''}</div>
                     <div style={{ fontSize: 11, opacity: .75, marginTop: 2 }}>
                       unidades produzidas × embalagem de cada produto · perda de {fmt(dados.perdaEmbPct, 0)}%
+                      {linhasEmbEst.length ? ' · sem contagem que dê o estoque inicial e o final' : ''}
                     </div>
                   </div>
-                  <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>{fmtR(realEmb)}</div>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--gold)' }}>{fmtR(realEmbProd)}</div>
                 </div>
-                {linhasEmb.length === 0 ? (
+                {linhasEmbProd.length === 0 ? (
                   <div style={{ padding: 28, textAlign: 'center', color: 'var(--gray-300)', fontSize: 13 }}>Nenhuma produção registrada no período.</div>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
@@ -264,7 +274,7 @@ export default function ControleEstoque() {
                         </tr>
                       </thead>
                       <tbody>
-                        {linhasEmb.map((l, i) => {
+                        {linhasEmbProd.map((l, i) => {
                           const custo = l.cmv_qtd > 0 ? l.cmv_valor / l.cmv_qtd : 0
                           return (
                             <tr key={l.item_id} style={{ borderTop: '1px solid var(--gray-100)', background: i % 2 ? '#fafafa' : '#fff' }}>
@@ -286,6 +296,7 @@ export default function ControleEstoque() {
                   </div>
                 )}
               </div>
+              )}
             </>
           )}
 
@@ -492,10 +503,14 @@ export default function ControleEstoque() {
             return (
               <>
                 <Grupo titulo="🧂 Matéria-prima" lista={linhasMP} real={realMP} teo={teoMP} />
-                <div className="card card-pad" style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-                  <b style={{ color: 'var(--gray-700)' }}>📦 Embalagens e rótulos: {fmtR(realEmb)}</b> — sem contagem de estoque, o
-                  real é a própria produção × ficha ({fmtR(teoEmb)}) + {fmt(dados.perdaEmbPct, 0)}% de perda. Não há o que comparar.
-                </div>
+                {linhasEmbEst.length > 0 && <Grupo titulo="📦 Embalagens e rótulos" lista={linhasEmbEst} real={realEmbEst} teo={teoEmbEst} />}
+                {linhasEmbProd.length > 0 && (
+                  <div className="card card-pad" style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+                    <b style={{ color: 'var(--gray-700)' }}>📦 Embalagens e rótulos {linhasEmbEst.length ? 'sem contagem' : ''}: {fmtR(realEmbProd)}</b> — sem
+                    estoque inicial e final contados, o real é a própria produção × ficha ({fmtR(teoEmbProd)}) + {fmt(dados.perdaEmbPct, 0)}% de perda.
+                    Não há o que comparar.
+                  </div>
+                )}
 
                 {/* Interpretação */}
                 <div style={{ padding: '14px 18px', borderRadius: 8, background: 'var(--gray-50)',

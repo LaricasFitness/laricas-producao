@@ -64,7 +64,6 @@ function ModalEmb({ emb, onClose, onSaved }) {
       custo_unitario: parseFloat(f.custo_unitario) || 0,
       margem_seguranca: parseFloat(f.margem_seguranca),
       dias_producao: parseInt(f.dias_producao),
-      estoque_atual: parseInt(f.estoque_atual || 0),
       unidade_minima_grafica: parseInt(f.unidade_minima_grafica),
       planejar_como: f.planejar_como || null,
       planejar_fator: f.planejar_como ? (parseFloat(String(f.planejar_fator).replace(',', '.')) || 1) : null,
@@ -75,19 +74,6 @@ function ModalEmb({ emb, onClose, onSaved }) {
       ? await supabase.from('embalagens').insert(payload).select()
       : await supabase.from('embalagens').update(payload).eq('id', emb.id).select()
     if (error) { setErr(error.message); setSaving(false); return }
-
-    // Se editou o estoque atual, cria um snapshot em inventarios para refletir no cálculo cronológico
-    const embId = isNew ? savedRows?.[0]?.id : emb.id
-    const hoje = new Date().toISOString().slice(0,10)
-    if (isNew && parseInt(f.estoque_atual || 0) > 0 && embId) {
-      await supabase.from('inventarios').insert({
-        embalagem_id: embId, quantidade: parseInt(f.estoque_atual || 0), data_inventario: hoje,
-      })
-    } else if (!isNew && parseInt(f.estoque_atual || 0) !== (emb.estoque_atual || 0)) {
-      await supabase.from('inventarios').insert({
-        embalagem_id: emb.id, quantidade: parseInt(f.estoque_atual || 0), data_inventario: hoje,
-      })
-    }
 
     if (!isNew) {
       await registrarAcao({
@@ -143,9 +129,10 @@ function ModalEmb({ emb, onClose, onSaved }) {
           </div>
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">Estoque atual (un)</label>
-              <input type="number" min={0} className="form-input" value={f.estoque_atual}
-                onChange={e => set('estoque_atual', e.target.value)} />
+              <label className="form-label">Estoque</label>
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5, paddingTop: 4 }}>
+                Muda só por compra (Estoque › Compras) e por contagem (Estoque › Conferência), como a matéria-prima.
+              </div>
             </div>
             <div className="form-group">
               <label className="form-label">Custo unitário (R$) — para CMV</label>
@@ -227,87 +214,6 @@ function ModalEmb({ emb, onClose, onSaved }) {
           <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
           <button className="btn btn-primary" onClick={salvar} disabled={saving}>
             {saving ? <RefreshCw size={14} className="spin" /> : isNew ? <><Plus size={14} /> Criar</> : <><Save size={14} /> Salvar</>}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ModalAjuste({ emb, onClose, onSaved }) {
-  const [qtd, setQtd] = useState('')
-  const [tipo, setTipo] = useState('entrada')
-  const [obs, setObs] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  async function salvar() {
-    const n = parseInt(qtd)
-    if (isNaN(n) || n < 0) { alert('Quantidade inválida.'); return }
-    setSaving(true)
-    const anterior = emb.estoque_real ?? emb.estoque_atual ?? 0
-
-    // Calcula o valor absoluto do novo estoque
-    const novoEstoque = tipo === 'entrada' ? anterior + n : n
-
-    // Salva como inventário (ponto de referência datado)
-    const hoje = new Date().toISOString().slice(0, 10)
-    const u = JSON.parse(sessionStorage.getItem('usuario') || '{}')
-    await supabase.from('inventarios').insert({
-      embalagem_id: emb.id,
-      quantidade: novoEstoque,
-      data_inventario: hoje,
-      observacao: obs || (tipo === 'entrada' ? `Entrada manual de ${n} un` : `Ajuste de estoque para ${n} un`),
-      registrado_por: u.nome || 'Admin',
-    })
-
-    await registrarAcao({
-      acao: 'ajuste_estoque',
-      descricao: tipo === 'entrada'
-        ? `Entrada de ${n} un em "${emb.nome}" (${anterior} → ${novoEstoque})`
-        : `Estoque de "${emb.nome}" ajustado para ${novoEstoque} un (era ${anterior})`,
-      tabela: 'inventarios',
-      registroId: emb.id,
-      dadosAnteriores: { estoque_atual: anterior },
-      dadosNovos: { estoque_atual: novoEstoque },
-    })
-    onSaved()
-    setSaving(false)
-  }
-
-  return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ maxWidth: 400 }}>
-        <div className="modal-header">
-          <div className="modal-title">📦 Ajustar estoque</div>
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
-        </div>
-        <div className="modal-body">
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{emb.nome}</div>
-          <div style={{ fontSize: 14, color: 'var(--gray-600)', marginBottom: 4 }}>
-            Estoque atual: <strong>{(emb.estoque_real ?? emb.estoque_atual ?? 0).toLocaleString('pt-BR')} un</strong>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Tipo</label>
-            <select className="form-input" value={tipo} onChange={e => setTipo(e.target.value)}>
-              <option value="entrada">Entrada (chegou pedido da gráfica)</option>
-              <option value="ajuste">Ajuste manual (corrigir valor)</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">{tipo === 'entrada' ? 'Quantidade recebida' : 'Novo valor do estoque'}</label>
-            <input type="number" min={0} className="form-input" value={qtd} onChange={e => setQtd(e.target.value)} autoFocus />
-          </div>
-          {tipo === 'entrada' && (
-            <div className="form-group">
-              <label className="form-label">Observação (opcional)</label>
-              <input className="form-input" value={obs} onChange={e => setObs(e.target.value)} placeholder="Ex: Pedido GRF-2506-01" />
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={salvar} disabled={saving}>
-            {saving ? <RefreshCw size={14} className="spin" /> : <><Save size={14} /> Salvar</>}
           </button>
         </div>
       </div>
@@ -1856,7 +1762,6 @@ export default function Admin({ sub, onSub }) {
   const [embs, setEmbs] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null)
-  const [ajuste, setAjuste] = useState(null)
   const [excluir, setExcluir] = useState(null)
   const [filtro, setFiltro] = useState('todos')
   const [verOcultos, setVerOcultos] = useState(false)
@@ -2008,7 +1913,6 @@ export default function Admin({ sub, onSub }) {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setAjuste(e)} title="Ajustar estoque">📦</button>
                         <button className="btn btn-ghost btn-sm" onClick={() => setModal(e)} title="Editar"><Pencil size={12} /></button>
                       </div>
                     </td>
@@ -2021,7 +1925,6 @@ export default function Admin({ sub, onSub }) {
       )}
 
       {modal && <ModalEmb emb={modal === 'new' ? null : modal} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} />}
-      {ajuste && <ModalAjuste emb={ajuste} onClose={() => setAjuste(null)} onSaved={() => { setAjuste(null); load() }} />}
     </div>}
     </div>
   )
