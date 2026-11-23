@@ -1,5 +1,6 @@
 import { supabase } from '../supabase'
 import { atualizarStatusPedido } from './data'
+import { excluirProducao } from './producao'
 
 function getUsuario() {
   try { return JSON.parse(sessionStorage.getItem('usuario')) } catch { return null }
@@ -35,12 +36,13 @@ export async function carregarLog(limite = 20) {
 export async function reverterAcao(logEntry) {
   const { id, acao, registro_id, dados_anteriores } = logEntry
   try {
-    if (acao === 'registro_producao') {
-      await supabase.from('producao_diaria').delete().eq('id', registro_id)
-    }
-    else if (acao === 'registro_producao_lote') {
-      const ids = dados_anteriores?.ids || []
-      if (ids.length) await supabase.from('producao_diaria').delete().in('id', ids)
+    // Desfazer produção = excluir cada registro como no Log: devolve MP (mp_consumos), rótulo e
+    // embalagens vinculadas. Registro que já não existe (excluído antes) é ignorado.
+    if (acao === 'registro_producao' || acao === 'registro_producao_lote') {
+      const ids = acao === 'registro_producao' ? [registro_id] : (dados_anteriores?.ids || [])
+      for (const rid of ids) {
+        try { await excluirProducao(rid) } catch (e) { if (!/não encontrado/i.test(e.message)) throw e }
+      }
     }
     else if (acao === 'ajuste_estoque') {
       // Deleta o inventário mais recente para essa embalagem (reverte o ponto de referência)

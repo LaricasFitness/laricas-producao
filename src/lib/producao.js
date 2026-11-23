@@ -69,6 +69,64 @@ async function ajustarEstoqueMP(mpId, delta) {
   await somarEstoqueMP(mpId, delta)
 }
 
+// ── Embalagens vinculadas (filme, lata, pote…) ───────────────────────────────
+// Cada unidade produzida baixa o rótulo (o próprio registro em producao_diaria) e as embalagens
+// vinculadas: as do próprio produto (produto_embalagem); sem vínculo próprio, o padrão da categoria
+// (categoria_embalagem). A baixa vinculada fica em producao_diaria com registrado_por "… (auto-embalagem)",
+// somada por embalagem. Corrigir um produto depois (Log) grava um ajuste com a diferença (negativo devolve).
+export async function carregarVinculosEmbalagem() {
+  const [{ data: prod }, { data: cat }] = await Promise.all([
+    supabase.from('produto_embalagem').select('sku_produto, embalagem_id, quantidade'),
+    supabase.from('categoria_embalagem').select('categoria, embalagem_id, quantidade'),
+  ])
+  return { prod: prod || [], cat: cat || [] }
+}
+
+// itens: [{ emb: {codigo, categoria}, qtd }] (qtd negativa = devolução) → { embalagem_id: quantidade }
+export function baixaEmbalagensVinculadas(itens, vinc) {
+  const out = {}
+  for (const { emb, qtd } of itens) {
+    if (!emb || !qtd) continue
+    let links = vinc.prod.filter(v => v.sku_produto === emb.codigo)
+    if (!links.length) links = vinc.cat.filter(v => v.categoria === emb.categoria)
+    for (const v of links) {
+      if (!v.embalagem_id) continue
+      out[v.embalagem_id] = (out[v.embalagem_id] || 0) + qtd * (parseFloat(v.quantidade) || 1)  // ex.: lata leva 8 filmes
+    }
+  }
+  return out
+}
+
+export async function lancarEmbalagensVinculadas(itens, dataProducao, registradoPor, vinc) {
+  vinc = vinc || await carregarVinculosEmbalagem()
+  const linhas = Object.entries(baixaEmbalagensVinculadas(itens, vinc))
+    .map(([embalagem_id, q]) => ({ embalagem_id, quantidade: Math.round(q), data_producao: dataProducao, registrado_por: `${registradoPor} (auto-embalagem)` }))
+    .filter(l => l.quantidade)
+  if (!linhas.length) return
+  const { error } = await supabase.from('producao_diaria').insert(linhas)
+  if (error) throw new Error('Não consegui lançar as embalagens vinculadas: ' + error.message)
+}
+
+// Muda a data de registros de produção levando junto o que depende dela:
+// consumo de MP (mp_consumos) e embalagens vinculadas (devolve na data antiga, baixa na nova)
+export async function moverProducao(ids, novaData) {
+  const { data: rows, error } = await supabase.from('producao_diaria')
+    .select('id, quantidade, data_producao, embalagens(codigo, categoria)').in('id', ids)
+  if (error) throw error
+  const mudam = (rows || []).filter(r => r.data_producao !== novaData)
+  if (!mudam.length) return
+  const idsMudam = mudam.map(r => r.id)
+  const { error: e1 } = await supabase.from('producao_diaria').update({ data_producao: novaData }).in('id', idsMudam)
+  if (e1) throw e1
+  await supabase.from('mp_consumos').update({ data_consumo: novaData }).in('producao_diaria_id', idsMudam)
+  const vinc = await carregarVinculosEmbalagem()
+  for (const data of [...new Set(mudam.map(r => r.data_producao))]) {
+    const doDia = mudam.filter(r => r.data_producao === data)
+    await lancarEmbalagensVinculadas(doDia.map(r => ({ emb: r.embalagens, qtd: -r.quantidade })), data, 'Mudança de data no Log', vinc)
+    await lancarEmbalagensVinculadas(doDia.map(r => ({ emb: r.embalagens, qtd: r.quantidade })), novaData, 'Mudança de data no Log', vinc)
+  }
+}
+
 async function ajustarEstoqueEmb(embId, delta) {
   const { data: e } = await supabase.from('embalagens').select('estoque_atual').eq('id', embId).single()
   const novo = (parseFloat(e?.estoque_atual) || 0) + delta
@@ -85,7 +143,7 @@ async function ajustarEstoqueEmb(embId, delta) {
 export async function editarProducao(rowId, { novoEmbalagemId, novaQuantidade }) {
   const { data: row } = await supabase
     .from('producao_diaria')
-    .select('id, embalagem_id, quantidade, data_producao, embalagens(codigo, nome)')
+    .select('id, embalagem_id, quantidade, data_producao, embalagens(codigo, nome, categoria)')
     .eq('id', rowId).single()
   if (!row) throw new Error('Registro de produção não encontrado.')
 
@@ -128,9 +186,13 @@ export async function editarProducao(rowId, { novoEmbalagemId, novaQuantidade })
   // 4) Debita a embalagem nova
   await ajustarEstoqueEmb(embNovo, -qtdNova)
 
-  // 5) Recalcula e grava o consumo de MP novo
+  // 5) Embalagens vinculadas: devolve as do produto antigo e baixa as do novo (só a diferença fica)
   const { data: embInfo } = await supabase
-    .from('embalagens').select('codigo, nome').eq('id', embNovo).single()
+    .from('embalagens').select('codigo, nome, categoria').eq('id', embNovo).single()
+  await lancarEmbalagensVinculadas([{ emb: row.embalagens, qtd: -qtdAntiga }, { emb: embInfo, qtd: qtdNova }],
+    row.data_producao, 'Edição no Log')
+
+  // 6) Recalcula e grava o consumo de MP novo
   const consumo = await calcularConsumoMP(embInfo?.codigo, qtdNova)
   const linhas = []
   for (const [mpId, g] of Object.entries(consumo)) {
@@ -162,7 +224,7 @@ export async function editarProducao(rowId, { novoEmbalagemId, novaQuantidade })
 export async function excluirProducao(rowId) {
   const { data: row } = await supabase
     .from('producao_diaria')
-    .select('id, embalagem_id, quantidade, embalagens(codigo, nome)')
+    .select('id, embalagem_id, quantidade, data_producao, embalagens(codigo, nome, categoria)')
     .eq('id', rowId).single()
   if (!row) throw new Error('Registro não encontrado.')
 
@@ -182,8 +244,9 @@ export async function excluirProducao(rowId) {
     }
   }
 
-  // Devolve a embalagem e remove o registro
+  // Devolve a embalagem (rótulo e vinculadas) e remove o registro
   await ajustarEstoqueEmb(row.embalagem_id, qtd)
+  await lancarEmbalagensVinculadas([{ emb: row.embalagens, qtd: -qtd }], row.data_producao, 'Exclusão no Log')
   await supabase.from('producao_diaria').delete().eq('id', rowId)
 
   return { nome: row.embalagens?.nome, quantidade: qtd }
@@ -195,7 +258,7 @@ export async function adicionarProducao({ embalagemId, quantidade, dataProducao,
   if (!embalagemId || qtd <= 0) throw new Error('Produto e quantidade são obrigatórios.')
 
   const { data: emb } = await supabase
-    .from('embalagens').select('codigo, nome').eq('id', embalagemId).single()
+    .from('embalagens').select('codigo, nome, categoria').eq('id', embalagemId).single()
 
   const { data: novo, error } = await supabase.from('producao_diaria').insert({
     embalagem_id: embalagemId,
@@ -206,6 +269,7 @@ export async function adicionarProducao({ embalagemId, quantidade, dataProducao,
   if (error) throw error
 
   await ajustarEstoqueEmb(embalagemId, -qtd)
+  await lancarEmbalagensVinculadas([{ emb, qtd }], dataProducao, registradoPor || 'Edição de lote')
 
   const consumo = await calcularConsumoMP(emb?.codigo, qtd)
   const linhas = []

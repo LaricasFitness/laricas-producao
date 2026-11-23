@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { carregarEmbalagens } from '../lib/data'
 import { registrarAcao } from '../lib/log'
 import { somarEstoqueMP, useUmaVez } from '../lib/estoqueMP'
+import { lancarEmbalagensVinculadas } from '../lib/producao'
 import { Save, RefreshCw, CheckCircle, ChevronRight, ChevronLeft } from 'lucide-react'
 
 // Itens fixos das fases internas
@@ -298,36 +299,13 @@ export default function Producao() {
           dadosNovos: { fase1 },
         })
 
-        // Auto-desconta embalagens primárias.
-        // Preferência: vínculo do próprio produto. Sem ele, o padrão da categoria.
-        const [{ data: vincProd }, { data: vinculos }] = await Promise.all([
-          supabase.from('produto_embalagem').select('*').then(r=>r).catch(()=>({data:[]})),
-          supabase.from('categoria_embalagem').select('*'),
-        ])
-        if (vincProd?.length || vinculos?.length) {
-          const descontos = {}
-          for (const r of fase1) {
-            const emb = embalagens.find(x => x.id === r.embalagem_id)
-            if (!emb) continue
-            // Todos os vínculos do produto — não só o primeiro
-            let links = (vincProd || []).filter(v => v.sku_produto === emb.codigo)
-            if (!links.length) links = (vinculos || []).filter(v => v.categoria === emb.categoria)
-            for (const v of links) {
-              if (!v.embalagem_id) continue
-              // Multiplica pela quantidade do vínculo (ex: lata leva 8 filmes)
-              const qtdPorUnidade = parseFloat(v.quantidade) || 1
-              descontos[v.embalagem_id] = (descontos[v.embalagem_id] || 0) + r.quantidade * qtdPorUnidade
-            }
-          }
-          // Insere em producao_diaria como desconto de embalagem primária
-          const embDescontos = Object.entries(descontos).map(([embalagem_id, quantidade]) => ({
-            embalagem_id, quantidade, data_producao: dataStr,
-            registrado_por: registradoPor + ' (auto-embalagem)',
-          }))
-          if (embDescontos.length > 0) {
-            await supabase.from('producao_diaria').insert(embDescontos)
-          }
-        }
+        // Embalagens vinculadas (filme, lata…): vínculo do produto ou padrão da categoria
+        // (a produção já foi gravada: um erro aqui avisa e segue para a baixa de MP)
+        try {
+          await lancarEmbalagensVinculadas(
+            fase1.map(r => ({ emb: embalagens.find(x => x.id === r.embalagem_id), qtd: r.quantidade })),
+            dataStr, registradoPor)
+        } catch (e) { alert(e.message + '\nAvise o administrador: o estoque das embalagens vinculadas deste lote ficou sem baixa.') }
 
         // ── Baixa automática de matérias-primas ─────────────────────────────
         // Só executa se a flag mp_baixa_automatica estiver ativa

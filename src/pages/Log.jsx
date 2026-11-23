@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
-import { editarProducao, excluirProducao, adicionarProducao } from '../lib/producao'
+import { editarProducao, excluirProducao, adicionarProducao, moverProducao } from '../lib/producao'
 import { RefreshCw, AlertTriangle, Download, Pencil, Check, X } from 'lucide-react'
 import { ocultoSazonal } from '../lib/sazonal'
 
@@ -58,7 +58,7 @@ function BlocoLote({ lote, embs, dataAtual, onSaved }) {
     if (novaData === dataAtual) { setEditandoData(false); return }
     setSaving(true)
     const ids = lote.itens.map(r => r.id)
-    await supabase.from('producao_diaria').update({ data_producao: novaData }).in('id', ids)
+    try { await moverProducao(ids, novaData) } catch (e) { alert('Erro ao mudar a data: ' + e.message); setSaving(false); return }
     setSaving(false)
     setEditandoData(false)
     onSaved(ids, novaData)
@@ -354,7 +354,7 @@ function LoteLinha({ lote, embs, onDataSalva }) {
     if (!novaData || novaData === lote.data_producao) { setEditandoData(false); return }
     setSaving(true)
     const ids = lote.itens.map(r => r.id)
-    await supabase.from('producao_diaria').update({ data_producao: novaData }).in('id', ids)
+    try { await moverProducao(ids, novaData) } catch (e) { alert('Erro ao mudar a data: ' + e.message); setSaving(false); return }
     setSaving(false)
     setEditandoData(false)
     onDataSalva(novaData)
