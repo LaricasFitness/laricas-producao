@@ -87,6 +87,7 @@ function resumo(d) {
     numero: String(d.numero ?? ''),
     numeroLoja: String(d.numeroLoja ?? ''),
     data: d.data || '',
+    dataPrevista: /^\d{4}-\d{2}-\d{2}/.test(d.dataPrevista || '') && !String(d.dataPrevista).startsWith('0000') ? String(d.dataPrevista).slice(0, 10) : '',
     cliente: d.contato?.nome || '',
     lojaId: d.loja?.id || null,
     total: d.total ?? null,

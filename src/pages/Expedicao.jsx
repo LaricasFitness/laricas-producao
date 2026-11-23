@@ -28,6 +28,14 @@ const DETALHES_POR_VEZ = 30
 const carregarLidos = () => { try { return JSON.parse(localStorage.getItem(CHAVE_LIDOS)) || [] } catch { return [] } }
 const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 const fmtData = s => s ? s.slice(8, 10) + '/' + s.slice(5, 7) : ''
+
+// Data prevista do pedido no Bling: vermelho se já passou, laranja se é hoje
+function Prevista({ data }) {
+  if (!data) return null
+  const d = new Date(), hoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const cor = data < hoje ? 'var(--danger)' : data === hoje ? 'var(--warning, #b45309)' : 'var(--gray-500)'
+  return <span style={{ fontSize: 11, fontWeight: 700, color: cor }} title="Data prevista no Bling"> · prev. {fmtData(data)}</span>
+}
 const temTeclado = () => window.matchMedia?.('(pointer: fine)').matches
 
 // ───────────── Leitor de código de barras pela câmera (contínuo) ─────────────
@@ -337,7 +345,7 @@ export default function Expedicao() {
         {listaLidos.map(p => (
           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', background: 'var(--gray-50)', borderRadius: 8, fontSize: 13 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div><b>{p.numero}</b> · {p.cliente}</div>
+              <div><b>{p.numero}</b> · {p.cliente}<Prevista data={p.dataPrevista} /></div>
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--danger)', fontWeight: 700 }}> · sem NF</span>}
@@ -383,7 +391,7 @@ export default function Expedicao() {
         {filtrados.map(p => (
           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderBottom: '1px solid var(--gray-100)', fontSize: 13 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div><b>{p.numero}</b> · {p.cliente} <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{fmtData(p.data)}</span></div>
+              <div><b>{p.numero}</b> · {p.cliente} <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>{fmtData(p.data)}</span><Prevista data={p.dataPrevista} /></div>
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.cidade ? ` · ${p.cidade}` : ''}

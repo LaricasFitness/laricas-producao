@@ -24,7 +24,7 @@ export async function gerarPickingDoDia(dataProducao, numeros, geradoPor, onProg
   const semNF = Object.fromEntries((antes?.pedidos || []).filter(p => p.semNF).map(p => [String(p.numero), p.semNF]))
   // só o que o PDF usa
   const guardar = pedidos.map(p => ({
-    id: p.id, numero: p.numero, numeroLoja: p.numeroLoja, data: p.data, cliente: p.cliente, nf: p.nf,
+    id: p.id, numero: p.numero, numeroLoja: p.numeroLoja, data: p.data, dataPrevista: p.dataPrevista || '', cliente: p.cliente, nf: p.nf,
     transportadora: p.transportadora, servico: p.servico, cidade: p.cidade, uf: p.uf,
     loja: nomeLoja(p, lojas), itens: p.itens, obs: p.obs, obsInterna: p.obsInterna,
     ...(semNF[String(p.numero)] ? { semNF: semNF[String(p.numero)] } : {}),
