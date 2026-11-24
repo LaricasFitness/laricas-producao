@@ -158,6 +158,12 @@ export async function montarPdfEnvio(pedidos, onProgresso) {
   for (let i = 0; i < pedidos.length; i += POR_CHAMADA) {
     const lote = pedidos.slice(i, i + POR_CHAMADA)
     const { pedidos: docs } = await chamarExpedicao('documentos', { ids: lote.map(p => p.id) })
+    // limite de requisições do Bling num pedido: espera e pede de novo só esses (até 3 vezes)
+    for (let t = 1; t <= 3 && docs.some(x => x.limite); t++) {
+      await new Promise(ok => setTimeout(ok, 2500 * t))
+      const { pedidos: denovo } = await chamarExpedicao('documentos', { ids: docs.filter(x => x.limite).map(x => x.id) })
+      for (const n of denovo) { const k = docs.findIndex(x => String(x.id) === String(n.id)); if (k >= 0) docs[k] = n }
+    }
     for (const p of lote) {
       const doc = docs.find(x => String(x.id) === String(p.id)) || { avisos: [], erro: 'Sem resposta do servidor.' }
       const r = { numero: doc.numero || p.numero, cliente: doc.cliente || p.cliente, transportadora: doc.transportadora || p.transportadora || '',

@@ -32,7 +32,7 @@
 
 import crypto from 'node:crypto'
 import { exigirSessao } from './_sessao.mjs'
-import { ErroConexao, banco, pedirToken, salvarTokens, tokenBling, bling } from './_bling.mjs'
+import { ErroConexao, ErroLimite, banco, pedirToken, salvarTokens, tokenBling, bling } from './_bling.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -458,6 +458,7 @@ async function documentosEnvio(tk, ids) {
     } catch (e) {
       if (e instanceof ErroConexao) throw e
       item.erro = e.message
+      if (e instanceof ErroLimite) item.limite = true // o navegador pede de novo depois de uma pausa
     }
     saida.push(item)
   }
