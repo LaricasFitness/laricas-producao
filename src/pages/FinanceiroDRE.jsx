@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
+  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 
@@ -68,6 +69,8 @@ function DescItem({ x, visao }) {
   if (x.tipo === 'cmv') return <>Fechamento de estoque: {x.c.nome} {x.c.ef_origem === 'calculado' && <span className="pill warning">estoque final calculado</span>}{x.c.ef_origem === 'producao' && <span className="pill warning">pela produção</span>}</>
   if (x.tipo === 'envio') return <>{fmt(x.pedidos, 0)} pedidos × R$ {fmt(x.valor / x.pedidos)} por pedido</>
   if (x.tipo === 'manual') return <>Manual: {x.m.descricao}</>
+  if (x.tipo === 'rateio') return <>Rateio: {x.r.descricao} <span className="pill neutral">parcela {x.parcela}/{x.r.parcelas}</span></>
+  if (x.tipo === 'cmvmkt') return <>Produtos sem venda: {x.g.nome} ({x.g.pedidos} pedido(s), custo da ficha)</>
   const l = x.l
   return <>
     <span style={{ color: 'var(--gray-500)' }}>{x.tipo === 'pagar' ? `comp. ${dt(l.competencia)} · venc. ${dt(l.vencimento)}` : `${dt(l.data)} · ${l.banco}`}</span> · <b>{l.nome || '—'}</b>
@@ -111,6 +114,7 @@ function TelaDRE({ d }) {
   grupo('fo'); grupo('fa'); grupo('fm'); grupo('fc'); total('Total de despesas fixas', -c.fixas)
   total('EBITDA', c.ebitda); grupo('fin'); grupo('inv'); total('Lucro líquido', c.ll)
   if (visao === 'competencia' && v._socaixa) { linhas.push(<tr key="gsc"><td colSpan={3} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>Pagos no Bling, fora da competência</td></tr>); linha('_socaixa', 'Compras de estoque (CMV vem do fechamento) e mídia paga (vem da planilha da agência)', v._socaixa.valor, -1) }
+  if (visao === 'competencia' && v._rateado) { linhas.push(<tr key="grt"><td colSpan={3} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>Rateados (entram pelas parcelas)</td></tr>); linha('_rateado', 'Contas do Bling divididas em parcelas mensais', v._rateado.valor, -1) }
   if (visao === 'caixa') { linhas.push(<tr key="gfo"><td colSpan={3} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>Fora do resultado</td></tr>); for (const p of d.plano.filter(p => p.grupo === 'fora')) if (v[p.id]) linha(p.id, p.nome, v[p.id].valor, 1) }
   const pe = c.mcl > 0 ? c.fixas / (c.mcl / base) : NaN
   const K = [
@@ -249,6 +253,19 @@ function TelaLancamentos({ d, fechado, onSalvo }) {
     } catch (e) { alert(erroMsg(e)) }
   }
   const semConta = (origem === 'pagar' ? d.pagar : d.caixa).filter(l => !classificar(l, origem, d).conta).length
+  const rateioDe = l => l.id_bling && (d.rateios || []).find(r => String(r.id_bling) === String(l.id_bling))
+  async function ratear(l, c) {
+    const n = parseInt(window.prompt(`Dividir ${brl(+l.valor)} (${l.nome}) em quantas parcelas mensais, a partir de ${rotuloMes(l.competencia.slice(0, 7))}?`, '12'), 10)
+    if (!n || n < 2) return
+    const { error } = await supabase.from('dre_rateios').insert({ descricao: `${l.nome}: ${l.observacoes || l.categoria || ''}`.slice(0, 200), conta: c.conta || 'vo.outras',
+      valor_total: +l.valor, parcelas: Math.min(n, 60), mes_inicio: l.competencia.slice(0, 7), id_bling: String(l.id_bling), por: usuario().nome || null })
+    if (error) alert(erroMsg(error)); else onSalvo()
+  }
+  async function desfazerRateio(rt) {
+    if (!window.confirm(`Desfazer o rateio "${rt.descricao}"? A conta volta inteira para ${rotuloMes(rt.mes_inicio)}.`)) return
+    const { error } = await supabase.from('dre_rateios').delete().eq('id', rt.id)
+    if (error) alert(erroMsg(error)); else onSalvo()
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div className="card card-pad" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -278,6 +295,9 @@ function TelaLancamentos({ d, fechado, onSalvo }) {
               </select>
               {c.como && <span className={`pill ${COMO[c.como][1]}`} style={{ marginLeft: 4 }}>{COMO[c.como][0]}{c.como === 'manual' && c.por ? ` · ${c.por}` : ''}</span>}
               {!c.conta && <span className="pill danger" style={{ marginLeft: 4 }}>falta</span>}
+              {origem === 'pagar' && l.id_bling && (rateioDe(l)
+                ? <span className="pill purple" style={{ marginLeft: 4, cursor: fechado ? 'default' : 'pointer' }} title="Clique para desfazer" onClick={() => !fechado && desfazerRateio(rateioDe(l))}>rateado em {rateioDe(l).parcelas}x</span>
+                : !fechado && <button className="btn btn-ghost btn-sm" style={{ marginLeft: 4, fontSize: 11 }} onClick={() => ratear(l, c)}>Ratear</button>)}
             </td>
             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{origem === 'caixa' && l.tipo === 'receita' ? '' : '−'}{brl(+l.valor)}</td>
           </tr>))}</tbody>
@@ -377,7 +397,7 @@ function TelaReceitas({ d, fechado, onSalvo }) {
 const SUGESTOES = [
   ['Pagar.me: taxas descontadas na venda', 'vc.cartao'], ['Mercado Pago: taxas descontadas na venda', 'vc.cartao'], ['Shopify Payments: taxas', 'vc.cartao'],
   ['Shopify: checkout abandonado', 'vc.cartao'], ['Meta (planilha da agência)', 'vm.midia'], ['Google (planilha da agência)', 'vm.midia'],
-  ['Produtos enviados a influenciadores', 'vm.influ'], ['Produtos enviados a influenciadores (saem do CMV)', 'cmv.mp'], ['Fidelimax: anuidade ÷ 12', 'vm.ferr'],
+  ['Fidelimax: anuidade ÷ 12', 'vm.ferr'],
 ]
 function TelaManuais({ d, fechado, onSalvo }) {
   const [novo, setNovo] = useState({ descricao: '', conta: '', valor: '' })
@@ -416,6 +436,125 @@ function TelaManuais({ d, fechado, onSalvo }) {
       {!fechado && faltam.length > 0 && <div className="card card-pad" style={{ fontSize: 12 }}>
         <b>Costumam entrar todo mês:</b> {faltam.map(([desc, conta]) => <button key={desc} className="btn btn-ghost btn-sm" style={{ margin: 3 }} onClick={() => setNovo({ descricao: desc, conta, valor: '' })}>+ {desc}</button>)}
       </div>}
+      <ProdutosMarketing d={d} fechado={fechado} onSalvo={onSalvo} />
+      <Rateios d={d} fechado={fechado} onSalvo={onSalvo} />
+    </div>
+  )
+}
+
+// ── Produto que saiu sem venda: sai do CMV e entra no marketing ──────────────
+async function chamarFin(corpo) {
+  const r = await fetch('/api/financeiro', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(j.erro || (r.status === 404 ? 'Função do financeiro não encontrada (só no site publicado).' : `Erro ${r.status}`))
+  return j
+}
+function ProdutosMarketing({ d, fechado, onSalvo }) {
+  const grupos = d.comp?.extras?.cmv_marketing || []
+  const [ocupado, setOcupado] = useState('')
+  const [erro, setErro] = useState('')
+  const [aberto, setAberto] = useState(null)
+  async function buscar() {
+    setErro(''); setOcupado('Lendo os pedidos do mês no Bling…')
+    try {
+      const { marketing = [] } = await chamarFin({ acao: 'pedidos', mes: d.mes })
+      const itens = {}
+      let faltam = marketing.map(p => String(p.id))
+      for (let volta = 0; faltam.length && volta < 60; volta++) {
+        setOcupado(`Lendo os itens: ${marketing.length - faltam.length}/${marketing.length}`)
+        const r = await chamarFin({ acao: 'itens', ids: faltam.slice(0, 40) })
+        for (const p of r.pedidos) itens[p.id] = p.itens
+        faltam = [...(r.faltam || []), ...faltam.slice(40)]
+        if (r.faltam?.length) await new Promise(ok => setTimeout(ok, 3000))
+      }
+      if (faltam.length) throw new Error(`O Bling não devolveu ${faltam.length} pedido(s). Tente de novo em instantes.`)
+      setOcupado('Calculando o custo pela ficha…')
+      const novos = await custoMarketing(marketing.map(p => ({ ...p, itens: itens[String(p.id)] || [] })))
+      const agora = new Date().toISOString()
+      const { error } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao: 'competencia', extras: { ...(d.comp?.extras || {}), cmv_marketing: novos, cmv_marketing_em: agora }, atualizado_em: agora }, { onConflict: 'mes,visao' })
+      if (error) throw error
+      onSalvo()
+    } catch (e) { setErro(erroMsg(e)) }
+    setOcupado('')
+  }
+  const total = grupos.reduce((t, g) => t + g.mp + g.emb, 0)
+  return (
+    <div className="card">
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }}><b>Produtos que saíram sem venda</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+          (lojas do Bling {Object.values(TIPOS_MKT).filter(([n]) => !/Shopify/.test(n)).map(([n]) => n).join(', ')} e pedidos da Shopify pagos 100% com voucher):
+          saem do CMV pelo custo da ficha e entram no marketing</span></div>
+        {!fechado && <button className="btn btn-ghost btn-sm" onClick={buscar} disabled={!!ocupado}><RefreshCw size={13} className={ocupado ? 'spin' : ''} /> {grupos.length ? 'Atualizar do Bling' : 'Buscar no Bling'}</button>}
+      </div>
+      {ocupado && <div style={{ padding: 10, fontSize: 12 }}>{ocupado}</div>}
+      {erro && <div className="alert-banner danger" style={{ margin: 10 }}>{erro}</div>}
+      {grupos.length > 0 && <div className="tbl-wrap"><table>
+        <thead><tr><th>Origem</th><th>Vai para</th><th style={{ textAlign: 'right' }}>Pedidos</th><th style={{ textAlign: 'right' }}>Matéria-prima</th><th style={{ textAlign: 'right' }}>Embalagem</th><th style={{ textAlign: 'right' }}>Sai do CMV</th></tr></thead>
+        <tbody>
+          {grupos.flatMap(g => [
+            <tr key={g.tipo} onClick={() => setAberto(a => a === g.tipo ? null : g.tipo)} style={{ cursor: 'pointer' }}>
+              <td>{aberto === g.tipo ? '▾ ' : '▸ '}{g.nome}{g.semFicha?.length > 0 && <span className="pill warning" style={{ marginLeft: 4 }}>{g.semFicha.length} item(ns) sem ficha</span>}</td>
+              <td style={{ fontSize: 12 }}>{d.plano.find(p => p.id === g.conta)?.nome || g.conta}</td>
+              <td style={{ textAlign: 'right' }}>{g.pedidos}</td><td style={{ textAlign: 'right' }}>{brl(g.mp)}</td><td style={{ textAlign: 'right' }}>{brl(g.emb)}</td>
+              <td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(g.mp + g.emb)}</td>
+            </tr>,
+            aberto === g.tipo && <tr key={g.tipo + ':d'}><td colSpan={6} style={{ background: 'var(--gray-50)', fontSize: 12 }}>
+              {g.itens.map(it => <div key={it.codigo}>{fmt(it.qtd, 0)} × {it.descricao || it.codigo} <span style={{ color: 'var(--gray-500)' }}>({it.codigo}: {brl(it.mpUnit + it.embUnit)} cada)</span></div>)}
+              {g.semFicha?.length > 0 && <div style={{ color: 'var(--danger)', marginTop: 4 }}>Sem ficha no sistema (não entraram; se precisar, lance em Manuais): {g.semFicha.map(x => `${x.qtd} × ${x.codigo}`).join(', ')}</div>}
+            </td></tr>,
+          ])}
+          <tr style={{ fontWeight: 700, background: 'var(--gray-50)' }}><td colSpan={5}>Total que sai do CMV e entra no marketing</td><td style={{ textAlign: 'right' }}>{brl(total)}</td></tr>
+        </tbody>
+      </table></div>}
+      {d.comp?.extras?.cmv_marketing_em && <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--gray-500)' }}>Lido do Bling em {new Date(d.comp.extras.cmv_marketing_em).toLocaleString('pt-BR')}</div>}
+    </div>
+  )
+}
+
+// ── Rateios: despesa dividida em parcelas mensais ────────────────────────────
+function Rateios({ d, fechado, onSalvo }) {
+  const [novo, setNovo] = useState({ descricao: '', conta: 'vo.equip', valor_total: '', parcelas: '12', mes_inicio: d.mes })
+  const ativos = (d.rateios || []).map(r => ({ r, p: parcelaDoMes(r, d.mes) })).filter(x => x.p)
+  const futuros = (d.rateios || []).filter(r => r.mes_inicio > d.mes)
+  async function adicionar() {
+    if (!novo.descricao || !num(novo.valor_total) || !(+novo.parcelas >= 2)) return alert('Preencha descrição, valor total e parcelas (2 ou mais).')
+    const { error } = await supabase.from('dre_rateios').insert({ ...novo, valor_total: num(novo.valor_total), parcelas: +novo.parcelas, por: usuario().nome || null })
+    if (error) return alert(erroMsg(error))
+    setNovo(n => ({ ...n, descricao: '', valor_total: '' })); onSalvo()
+  }
+  async function excluir(r) {
+    if (!window.confirm(`Excluir o rateio "${r.descricao}"? Some de todos os meses.`)) return
+    const { error } = await supabase.from('dre_rateios').delete().eq('id', r.id)
+    if (error) alert(erroMsg(error)); else onSalvo()
+  }
+  return (
+    <div className="card">
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)' }}><b>Rateios</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+        (despesa dividida em parcelas mensais. Conta do Bling: use "Ratear" em Lançamentos; ela sai do mês da compra e entra só pelas parcelas.
+        Os "Planilha: …" são os rateios antigos que ainda não terminaram)</span></div>
+      <div className="tbl-wrap"><table>
+        <thead><tr><th>Descrição</th><th>Conta</th><th style={{ textAlign: 'right' }}>Total</th><th>Parcela</th><th>Até</th><th style={{ textAlign: 'right' }}>Neste mês</th><th /></tr></thead>
+        <tbody>
+          {ativos.map(({ r, p }) => <tr key={r.id}>
+            <td>{r.descricao} {r.id_bling ? <span className="pill neutral">Bling</span> : r.obs ? <span className="pill neutral">{r.obs}</span> : null}</td>
+            <td style={{ fontSize: 12 }}>{d.plano.find(x => x.id === r.conta)?.nome || r.conta}</td>
+            <td style={{ textAlign: 'right' }}>{brl(+r.valor_total)}</td><td>{p.n}/{r.parcelas}</td><td>{rotuloMes(fimRateio(r))}</td>
+            <td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(p.valor)}</td>
+            <td>{!fechado && <button className="btn btn-ghost btn-sm" onClick={() => excluir(r)}><Trash2 size={12} /></button>}</td>
+          </tr>)}
+          {!ativos.length && <tr><td colSpan={7} style={{ color: 'var(--gray-400)' }}>Nenhum rateio neste mês.</td></tr>}
+          {!fechado && <tr>
+            <td><input className="form-input" placeholder="Descrição" value={novo.descricao} onChange={e => setNovo(n => ({ ...n, descricao: e.target.value }))} /></td>
+            <td><select className="form-input" value={novo.conta} onChange={e => setNovo(n => ({ ...n, conta: e.target.value }))}><OpcoesConta plano={d.plano} /></select></td>
+            <td><input className="form-input" style={{ width: 100, textAlign: 'right' }} placeholder="Total" value={novo.valor_total} onChange={e => setNovo(n => ({ ...n, valor_total: e.target.value }))} /></td>
+            <td><input className="form-input" style={{ width: 60 }} value={novo.parcelas} onChange={e => setNovo(n => ({ ...n, parcelas: e.target.value }))} /></td>
+            <td><input type="month" className="form-input" style={{ width: 150 }} value={novo.mes_inicio} onChange={e => setNovo(n => ({ ...n, mes_inicio: e.target.value }))} title="Mês da 1ª parcela" /></td>
+            <td colSpan={2}><button className="btn btn-primary btn-sm" onClick={adicionar}><Plus size={12} /> Rateio</button></td>
+          </tr>}
+          <tr style={{ fontWeight: 700, background: 'var(--gray-50)' }}><td colSpan={5}>Total do mês</td><td style={{ textAlign: 'right' }}>{brl(ativos.reduce((t, x) => t + x.p.valor, 0))}</td><td /></tr>
+        </tbody>
+      </table></div>
+      {futuros.length > 0 && <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--gray-500)' }}>{futuros.length} rateio(s) começam depois deste mês.</div>}
     </div>
   )
 }
@@ -498,6 +637,8 @@ function TelaFechamento({ d, onSalvo, irPara }) {
     ['Receitas lançadas', recVazias.length <= 2, recVazias.length ? `sem valor: ${recVazias.join(', ')}` : 'todos os canais com valor', 'receitas'],
     ['Pedidos do mês (embalagem de envio)', totalPedidos(d) > 0, `${fmt(totalPedidos(d), 0)} pedidos`, 'receitas'],
     ['CMV fechado (estoque)', !d.cmvProvisorio && d.cmv.length > 0, d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`, null],
+    ['Produtos sem venda (marketing) lidos do Bling', !!d.comp?.extras?.cmv_marketing_em,
+      d.comp?.extras?.cmv_marketing_em ? `${brl((d.comp.extras.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'em Manuais › Produtos que saíram sem venda › Buscar no Bling', 'manuais'],
     ['Lançamentos manuais revisados', d.manuais.length > 0, `${d.manuais.length} lançamento(s): taxas, mídia, influenciadores, anuidades`, 'manuais'],
     ['Saldos dos bancos batem com o Bling', bancosOk, bancosOk ? 'todas as contas conferem' : 'lance os saldos e confira na Auditoria', 'auditoria'],
   ]

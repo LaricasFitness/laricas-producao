@@ -1,5 +1,5 @@
 import { supabase } from '../supabase'
-import { calcularCMVMes } from './cmv'
+import { calcularCMVMes, custoPorSku } from './cmv'
 
 // DRE Laricas (Financeiro › DRE), dre_laricas.sql.
 //
@@ -11,6 +11,8 @@ import { calcularCMVMes } from './cmv'
 // Cada lançamento do Bling cai numa conta do plano (dre_plano) pela classificação à mão (dre_classificacao),
 // senão pela regra da categoria + fornecedor, senão pela regra só da categoria (dre_regras).
 // Auditoria: ponte competência → caixa linha a linha, e o caixa conferido com os saldos dos bancos (dre_saldos).
+// Rateios (dre_rateios): despesa dividida em parcelas mensais. Produto que saiu sem venda (lojas de marketing do
+// Bling e Shopify com voucher 100%) sai do CMV pelo custo da ficha e entra no marketing (dre_mes.extras.cmv_marketing).
 
 // Blocos fixos da DRE, na ordem. sinal: +1 soma no resultado, −1 subtrai
 export const GRUPOS = [
@@ -66,6 +68,8 @@ export async function carregarMes(mes) {
     buscarTudo(() => supabase.from('dre_mes').select('*').eq('mes', mes)),
     supabase.from('configuracoes').select('valor').eq('chave', 'dre_embalagem_envio').maybeSingle(),
   ])
+  let rateios = []
+  try { rateios = await buscarTudo(() => supabase.from('dre_rateios').select('*').order('mes_inicio')) } catch { /* dre_laricas_2.sql não aplicado */ }
   // CMV: fechado (congelado) ou, no mês aberto, o provisório calculado agora
   let cmv = fech, cmvProvisorio = false
   if (!cmv.length) {
@@ -73,7 +77,7 @@ export async function carregarMes(mes) {
   }
   const visao = v => dreMes.find(r => r.visao === v) || null
   return {
-    mes, plano, regras, classif, pagar, caixa, receitas, manuais, cmv, cmvProvisorio,
+    mes, plano, regras, classif, pagar, caixa, receitas, manuais, cmv, cmvProvisorio, rateios,
     saldos: saldos.filter(s => s.mes === mes), saldosAnt: saldos.filter(s => s.mes === ant),
     comp: visao('competencia'), cx: visao('caixa'),
     envioPorPedido: parseFloat(cfg?.data?.valor) || 1.75,
@@ -102,6 +106,43 @@ export const sinalCaixa = l => (l.tipo === 'receita' || /entrada/i.test(l.catego
 // ── Montagem ─────────────────────────────────────────────────────────────────
 // v[conta] = { valor (positivo = no sentido da linha), itens: [{ tipo, valor, ... }] }
 // Chaves especiais: _semrec (receita sem conta), _sem (despesa sem conta), _socaixa (pago no Bling, fora da competência)
+// Rateio: despesa dividida em parcelas iguais a partir de mes_inicio. Com id_bling, a conta do Bling sai da
+// competência (entra só pelas parcelas); sem id_bling (rateios antigos da planilha), a conta já ficou no passado.
+const somaMeses = (m, n) => { const d = new Date(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+export const fimRateio = r => somaMeses(r.mes_inicio, (r.parcelas || 1) - 1)
+export const parcelaDoMes = (r, mes) => {
+  if (mes < r.mes_inicio || mes > fimRateio(r)) return null
+  let n = 0; for (let m = r.mes_inicio; m <= mes; m = somaMeses(m, 1)) n++
+  return { n, valor: Math.round(+r.valor_total / r.parcelas * 100) / 100 }
+}
+
+// Produto que saiu sem venda: sai do CMV (pelo custo da ficha) e entra no marketing
+export const TIPOS_MKT = {
+  degustacao: ['Ativação - Degustação', 'vm.ativ'], premiacao: ['Ativação - Premiação', 'vm.ativ'],
+  marketing: ['Marketing', 'vm.influ'], voucher: ['Shopify com voucher 100%', 'vm.influ'], bonificacao: ['Bonificação', 'vm.bonif'],
+}
+
+// pedidos: [{ id, numero, tipo, loja, itens: [{ codigo, descricao, quantidade }] }] → grupos para dre_mes.extras.cmv_marketing
+export async function custoMarketing(pedidos) {
+  const custo = await custoPorSku()
+  const grupos = {}
+  for (const p of pedidos) {
+    const [nome, conta] = TIPOS_MKT[p.tipo] || [p.tipo, 'vm.outros']
+    const g = grupos[p.tipo] ||= { tipo: p.tipo, nome, conta, pedidos: 0, mp: 0, emb: 0, itens: {}, semFicha: {} }
+    g.pedidos++
+    for (const it of p.itens || []) {
+      const c = custo(it.codigo)
+      const chave = it.codigo || it.descricao
+      if (!c) { g.semFicha[chave] = (g.semFicha[chave] || 0) + it.quantidade; continue }
+      const x = g.itens[it.codigo] ||= { codigo: it.codigo, descricao: it.descricao, qtd: 0, mpUnit: c.mpUnit, embUnit: c.embUnit }
+      x.qtd += it.quantidade
+      g.mp += c.mpUnit * it.quantidade; g.emb += c.embUnit * it.quantidade
+    }
+  }
+  return Object.values(grupos).map(g => ({ ...g, mp: Math.round(g.mp * 100) / 100, emb: Math.round(g.emb * 100) / 100,
+    itens: Object.values(g.itens).sort((a, b) => b.qtd - a.qtd), semFicha: Object.entries(g.semFicha).map(([codigo, qtd]) => ({ codigo, qtd })) }))
+}
+
 export const totalPedidos = d => d.receitas.reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
 export function montar(d, visao) {
   const planoDe = Object.fromEntries(d.plano.map(p => [p.id, p]))
@@ -116,7 +157,16 @@ export function montar(d, visao) {
     const ped = totalPedidos(d)
     if (ped) add('cmv.envio', ped * d.envioPorPedido, { tipo: 'envio', pedidos: ped })
     for (const m of d.manuais) if (+m.valor) add(m.conta, +m.valor, { tipo: 'manual', m })
+    for (const r of d.rateios || []) { const p = parcelaDoMes(r, d.mes); if (p) add(r.conta, p.valor, { tipo: 'rateio', r, parcela: p.n }) }
+    for (const g of d.comp?.extras?.cmv_marketing || []) {
+      const conta = planoDe[g.conta] ? g.conta : 'vm.outros'
+      if (g.mp) add('cmv.mp', -g.mp, { tipo: 'cmvmkt', g })
+      if (g.emb) add('cmv.emb', -g.emb, { tipo: 'cmvmkt', g })
+      if (g.mp + g.emb) add(conta, g.mp + g.emb, { tipo: 'cmvmkt', g })
+    }
+    const rateados = new Set((d.rateios || []).filter(r => r.id_bling).map(r => String(r.id_bling)))
     for (const l of d.pagar) {
+      if (l.id_bling && rateados.has(String(l.id_bling))) { add('_rateado', +l.valor, { tipo: 'pagar', l, c: classificar(l, 'pagar', d) }); continue }
       const c = classificar(l, 'pagar', d)
       const fora = c.como !== 'manual' && (c.soCaixa || planoDe[c.conta]?.so_caixa)
       add(fora ? '_socaixa' : (c.conta || '_sem'), +l.valor, { tipo: 'pagar', l, c })

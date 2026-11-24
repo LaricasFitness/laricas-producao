@@ -217,12 +217,13 @@ function destinoAtrasada(c, fechamentos) {
 }
 
 // ── Teórico: produção registrada × ficha técnica ─────────────────
+// Sem período (ini nulo): só as fichas, para custoPorSku
 export async function calcularTeorico(ini, fim) {
   const [embs, producao, prodComps, preps, prepComps, catEmbs, prodEmbs, cfgPerda, mps] = await Promise.all([
     buscarTudo(() => supabase.from('embalagens').select('id,codigo,nome,categoria,tipo,custo_unitario').eq('ativo', true).order('id')),
-    buscarTudo(() => supabase.from('producao_diaria').select('id,embalagem_id,quantidade')
+    ini ? buscarTudo(() => supabase.from('producao_diaria').select('id,embalagem_id,quantidade')
       .gte('data_producao', ini).lte('data_producao', fim)
-      .not('registrado_por', 'ilike', '%(auto-embalagem)%').order('id')),
+      .not('registrado_por', 'ilike', '%(auto-embalagem)%').order('id')) : [],
     buscarTudo(() => supabase.from('produto_composicao').select('id,sku_produto,preparacao_id,quantidade_por_unidade').order('id')),
     buscarTudo(() => supabase.from('preparacoes').select('id,nome,tipo,rendimento_estimado,rendimento_real_medio,perda_percentual').order('id')),
     buscarTudo(() => supabase.from('preparacao_composicao').select('id,preparacao_id,quantidade,materia_prima_id,sub_preparacao_id').order('id')),
@@ -302,11 +303,18 @@ export async function calcularTeorico(ini, fim) {
     prodPorSku[emb.codigo].qtd += p.quantidade
   }
 
+  // Custo unitário da ficha (matéria-prima + rótulo + embalagens vinculadas)
+  const unitario = emb => ({
+    mpUnit: prodComps.filter(c => c.sku_produto === emb.codigo).reduce((s, c) => s + custoPrepPorG(c.preparacao_id) * (parseFloat(c.quantidade_por_unidade) || 0), 0),
+    embUnit: (parseFloat(emb.custo_unitario) || 0) + (custoEmbSku[emb.codigo] ?? (custoEmbCat[emb.categoria] || 0)),
+  })
+  const embPorCodigo = {}; for (const e of embs) if (e.codigo) embPorCodigo[e.codigo] = e
+  const custoSku = codigo => embPorCodigo[codigo] && (prodComps.some(c => c.sku_produto === codigo) || embPorCodigo[codigo].tipo === 'rotulo') ? unitario(embPorCodigo[codigo]) : null
+
   const mpQtd = {}   // consumo teórico de MP no mês, por MP
   const produzidos = Object.values(prodPorSku).map(({ emb, qtd }) => {
     const comps = prodComps.filter(c => c.sku_produto === emb.codigo)
-    const mpUnit = comps.reduce((s, c) => s + custoPrepPorG(c.preparacao_id) * (parseFloat(c.quantidade_por_unidade) || 0), 0)
-    const embUnit = (parseFloat(emb.custo_unitario) || 0) + (custoEmbSku[emb.codigo] ?? (custoEmbCat[emb.categoria] || 0))
+    const { mpUnit, embUnit } = unitario(emb)
 
     const porMP = {}
     for (const cp of comps) {
@@ -335,12 +343,15 @@ export async function calcularTeorico(ini, fim) {
   }
 
   return {
-    produzidos, mpQtd, embQtd, perdaEmbPct,
+    produzidos, mpQtd, embQtd, perdaEmbPct, custoSku,
     cmvMP: produzidos.reduce((s, p) => s + p.mpUnit * p.qtd, 0),
     cmvEmb: produzidos.reduce((s, p) => s + p.embUnit * p.qtd, 0),
     unidades: produzidos.reduce((s, p) => s + p.qtd, 0),
   }
 }
+
+// Custo unitário da ficha por SKU (código do rótulo): { mpUnit, embUnit } ou null se não houver ficha
+export async function custoPorSku() { return (await calcularTeorico(null, null)).custoSku }
 
 // ── CMV real de um mês ───────────────────────────────────────────
 // Mês fechado: devolve o congelado. Aberto: calcula ao vivo (provisório).

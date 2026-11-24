@@ -19,7 +19,9 @@
 //
 // POST {acao:'pedidos', mes:'AAAA-MM'}  pedidos de venda do mês no Bling (Em aberto + Atendido) por loja, sem os
 //   sem loja ("nenhuma"): quantidade, total e total dos produtos. Base do nº de pedidos (embalagem de envio)
-//   e da receita de Revenda e Venda direta pelas vendas do Bling.
+//   e da receita de Revenda e Venda direta pelas vendas do Bling. Também lista os pedidos de produto para
+//   marketing (lojas Bonificação, Ativação - Premiação, Ativação - Degustação, Marketing e Shopify 100% voucher).
+// POST {acao:'itens', ids:[...]}  itens (código, quantidade) de até 40 pedidos; `faltam` se o Bling pediu pausa.
 //
 // Escopos do app do Bling: Caixas e Bancos, Contas a Pagar, Contas a Receber,
 // Categorias - Receitas e Despesas e Contatos (mudar escopo derruba o acesso: reconectar na Expedição).
@@ -238,7 +240,7 @@ async function itensContas(tk, db, fonte, c, de, ate) {
 async function pedidosDoMes(tk, mes) {
   const sit = await situacoes(tk), nomes = await lojas(tk)
   const q0 = { limite: 100, dataInicial: mes + '-01', dataFinal: ultimoDia(mes), 'idsSituacoes[]': [sit.aberto, sit.atendido] }
-  const porLoja = {}, vistos = new Set()
+  const porLoja = {}, vistos = new Set(), marketing = []
   for (let pg = 1; pg <= 80; pg++) {
     const d = (await bling(tk, `/pedidos/vendas?${qs({ ...q0, pagina: pg })}`))?.data || []
     let novos = 0
@@ -249,12 +251,33 @@ async function pedidosDoMes(tk, mes) {
       if (!id) continue                              // loja "nenhuma": fora da contagem
       const l = porLoja[id] ||= { lojaId: id, nome: nomes[id] || String(id), pedidos: 0, total: 0, totalProdutos: 0 }
       l.pedidos++; l.total += Number(p.total) || 0; l.totalProdutos += Number(p.totalProdutos) || 0
+      // produto que saiu sem venda: lojas de marketing e pedidos da Shopify pagos 100% com voucher
+      const tipo = LOJAS_MKT.find(([re]) => re.test(l.nome))?.[1]
+        || ((/shopify/i.test(l.nome) || /^\d{10,}$/.test(p.numeroLoja || '')) && (Number(p.totalProdutos) || 0) > 0 && (Number(p.total) || 0) <= 0.01 ? 'voucher' : null)
+      if (tipo) marketing.push({ id: p.id, numero: p.numero, tipo, loja: l.nome })
     }
     if (d.length < 100 || !novos) break
   }
   const lista = Object.values(porLoja).map(l => ({ ...l, total: Math.round(l.total * 100) / 100, totalProdutos: Math.round(l.totalProdutos * 100) / 100 }))
     .sort((a, b) => b.pedidos - a.pedidos)
-  return { mes, lojas: lista, pedidos: lista.reduce((t, l) => t + l.pedidos, 0), lidos: vistos.size }
+  return { mes, lojas: lista, pedidos: lista.reduce((t, l) => t + l.pedidos, 0), lidos: vistos.size, marketing }
+}
+// Lojas do Bling cujos pedidos são produto para marketing (o nome da loja decide)
+const LOJAS_MKT = [[/bonifica/i, 'bonificacao'], [/premia/i, 'premiacao'], [/degusta/i, 'degustacao'], [/marketing/i, 'marketing']]
+
+// Itens (código e quantidade) de até 40 pedidos. Limite do Bling no meio: devolve o que leu e os que faltam.
+async function itensDosPedidos(tk, ids) {
+  const pedidos = []
+  for (let i = 0; i < ids.length; i++) {
+    try {
+      const d = (await bling(tk, `/pedidos/vendas/${ids[i]}`))?.data
+      pedidos.push({ id: ids[i], itens: (d?.itens || []).map(it => ({ codigo: it.codigo || '', descricao: it.descricao || '', quantidade: Number(it.quantidade) || 0 })) })
+    } catch (e) {
+      if (e instanceof ErroLimite) return { pedidos, faltam: ids.slice(i) }
+      throw e
+    }
+  }
+  return { pedidos, faltam: [] }
 }
 
 // ───────────── Rota ─────────────
@@ -269,9 +292,14 @@ export default async function handler(req, res) {
     const { acao, fonte, de, ate, completo } = req.body || {}
     if (acao === 'pedidos') {
       const mes = String(req.body.mes || '')
-      if (!/^d{4}-d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
       const db = banco(), tk = await tokenBling(db)
       return res.status(200).json(await pedidosDoMes(tk, mes))
+    }
+    if (acao === 'itens') {
+      const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(String).filter(x => /^\d+$/.test(x)).slice(0, 40)
+      const db = banco(), tk = await tokenBling(db)
+      return res.status(200).json(await itensDosPedidos(tk, ids))
     }
     if (acao !== 'bling') return res.status(400).json({ erro: 'Ação inválida' })
     if (!['caixa', 'pagar', 'receber'].includes(fonte)) return res.status(400).json({ erro: 'Fonte inválida' })

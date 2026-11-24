@@ -77,6 +77,13 @@ Uma tela por mês, abas na ordem do fechamento:
   fechamento de estoque (`fechamento_cmv`) + embalagem de envio (pedidos × `configuracoes.dre_embalagem_envio`) +
   auxiliares. Compras de estoque e Tráfego Pago pagos no Bling ficam só no caixa (`so_caixa`). **Manuais**: taxas
   descontadas na venda, mídia da planilha da agência, acertos sem caixa, reclassificações (valor negativo), anuidades ÷ 12.
+- **Rateios** (`dre_rateios`, `dre_laricas_2.sql`): despesa dividida em parcelas mensais. "Ratear" numa conta do
+  Bling tira a conta do mês da compra e lança as parcelas; os "Planilha: …" são os rateios antigos da planilha
+  que ainda correm (os que o Bling já tem em parcelas mensais ficaram de fora). Equipamentos ficam acima do
+  EBITDA, em outras despesas variáveis.
+- **Produtos que saíram sem venda**: pedidos do mês das lojas do Bling Bonificação, Ativação - Premiação, Ativação -
+  Degustação e Marketing, e os da Shopify pagos 100% com voucher (`api/financeiro` ações `pedidos` e `itens`),
+  valorizados pela ficha (`custoPorSku` em `cmv.js`), saem do CMV e entram no marketing (`dre_mes.extras.cmv_marketing`).
 - **Caixa**: extrato do Bling (`dre_caixa_lancamentos`).
 - Classificação de cada lançamento: à mão (`dre_classificacao`, pelo id do Bling, sobrevive à atualização) > regra
   de categoria + fornecedor > regra só da categoria (`dre_regras`); contas em `dre_plano` (aba **Plano e regras**).
