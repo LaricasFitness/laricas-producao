@@ -33,6 +33,7 @@
 import { exigirSessao } from './_sessao.mjs'
 import { ErroConexao, ErroLimite, banco, tokenBling, bling } from './_bling.mjs'
 import { lojas, situacoes } from './expedicao.mjs'
+import { lalamove } from './lalamove.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -376,7 +377,20 @@ export default async function handler(req, res) {
       const { data, error } = await banco().from('lalamove_corridas').select('order_id, status, preco, criado_em, rota_label')
         .eq('ambiente', 'producao').gte('criado_em', `${mes}-01T03:00:00Z`).lt('criado_em', `${prox}-01T03:00:00Z`)
       if (error) throw error
-      return res.status(200).json({ mes, corridas: data || [] })
+      // valor final cobrado (com ajustes e paradas extras) e situação de cada corrida, direto da Lalamove
+      const corridas = data || [], db = banco()
+      for (let i = 0; i < corridas.length; i += 5) {
+        await Promise.all(corridas.slice(i, i + 5).map(async c => {
+          if (!/^\d+$/.test(c.order_id || '')) return
+          try {
+            const o = await lalamove('GET', `/v3/orders/${c.order_id}`)
+            const preco = Number(o.priceBreakdown?.total ?? 0) || null
+            c.status = o.status || c.status; if (preco) { c.preco = preco; c.final = true }
+            await db.from('lalamove_corridas').update({ status: c.status, ...(preco ? { preco } : {}) }).eq('order_id', c.order_id)
+          } catch { /* fica o que está gravado */ }
+        }))
+      }
+      return res.status(200).json({ mes, corridas })
     }
     if (acao === 'melhorenvio') {
       const mes = String(req.body.mes || '')

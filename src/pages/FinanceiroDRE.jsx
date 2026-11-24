@@ -924,7 +924,7 @@ function TelaPassos({ d, onSalvo, irPara }) {
     { id: 'frete_correios', t: 'Correios: as duas faturas que cobrem o mês', auto: fr.correios.ok, aba: 'manuais', det: fr.correios.detalhe,
       como: 'Correios Empresas › Faturas › extrato analítico (.csv) da fatura que fecha dia 15 deste mês e da que fecha dia 15 do mês seguinte. Manuais › Fretes pela data do envio.' },
     { id: 'frete_lalamove', t: 'Lalamove: Order Report do mês', auto: fr.lalamove.ok, aba: 'manuais', det: fr.lalamove.detalhe,
-      como: 'As corridas chamadas pelo sistema entram sozinhas ao abrir o mês. Para incluir as chamadas pelo app e o valor final cobrado: portal da Lalamove › Relatórios › Order Report do mês (.xlsx) › Manuais › Fretes pela data do envio.' },
+      como: 'As corridas chamadas pelo sistema entram sozinhas ao abrir o mês, com o valor final cobrado (a API da Lalamove só enxerga essas). Se alguma corrida foi chamada pelo app (ex.: coleta em fornecedor), importe o Order Report do mês (portal › Relatórios, .xlsx) em Manuais › Fretes; não duplica.' },
     { id: 'frete_melhorenvio', t: 'Melhor Envio: relatório de envios do mês', auto: fr.melhorenvio.ok, aba: 'manuais', det: fr.melhorenvio.detalhe,
       como: 'Vem sozinho pela API do Melhor Envio ao abrir o mês (precisa do MELHORENVIO_TOKEN na Vercel). Sem o token: Melhor Envio › Relatórios › Relatório de envios do mês (.xlsx) › Manuais › Fretes. Mês sem envio: marque à mão.' },
     { id: 'midia', t: 'Meta e Google pela planilha da agência', auto: manuaisDe(/^vm\.midia$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vm\.midia$/).length} lançamento(s) de mídia`,

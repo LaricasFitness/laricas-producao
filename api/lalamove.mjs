@@ -44,7 +44,7 @@ const base = () => ambiente() === 'producao' ? 'https://rest.lalamove.com' : 'ht
 const configurada = () => !!(process.env.LALAMOVE_API_KEY && process.env.LALAMOVE_API_SECRET)
 
 // Assinatura HMAC da API v3: "{tempo}\r\n{MÉTODO}\r\n{caminho}\r\n\r\n{corpo}"
-async function lalamove(metodo, caminho, dados) {
+export async function lalamove(metodo, caminho, dados) {
   if (!configurada()) throw new Error('Lalamove não configurada no Vercel (LALAMOVE_API_KEY e LALAMOVE_API_SECRET).')
   const corpo = dados ? JSON.stringify({ data: dados }) : ''
   const tempo = Date.now().toString()
