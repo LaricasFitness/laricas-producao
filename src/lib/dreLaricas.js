@@ -192,6 +192,15 @@ export function montar(d, visao) {
     }
     // Reembolso/estorno recebido de uma despesa (entrada no extrato classificada numa conta de despesa): reduz a
     // despesa no mês em que entrou. Contas que na competência vêm de outra fonte (estoque, envio estimado) ficam fora.
+    // tarifas bancárias debitadas direto no extrato (sem conta a pagar): competência = mês do débito.
+    // A que também existe no contas a pagar (mesmo valor) já entrou por lá.
+    const finPagar = d.pagar.filter(l => classificar(l, 'pagar', d).conta === 'fin.desp').map(l => Math.round(+l.valor * 100))
+    for (const l of d.caixa) {
+      if (sinalCaixa(l) > 0 || classificar(l, 'caixa', d).conta !== 'fin.desp') continue
+      const i = finPagar.indexOf(Math.round(+l.valor * 100))
+      if (i >= 0) { finPagar.splice(i, 1); continue }
+      add('fin.desp', +l.valor, { tipo: 'caixa', l, c: classificar(l, 'caixa', d), sinal: -1 })
+    }
     for (const l of d.caixa) {
       if (sinalCaixa(l) < 0) continue
       const c = classificar(l, 'caixa', d), g = planoDe[c.conta]?.grupo
