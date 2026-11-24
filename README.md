@@ -82,8 +82,12 @@ Uma tela por mês, abas na ordem do fechamento:
   que ainda correm (os que o Bling já tem em parcelas mensais ficaram de fora). Equipamentos ficam acima do
   EBITDA, em outras despesas variáveis.
 - **Produtos que saíram sem venda**: pedidos do mês das lojas do Bling Bonificação, Ativação - Premiação, Ativação -
-  Degustação e Marketing, e os da Shopify pagos 100% com voucher (`api/financeiro` ações `pedidos` e `itens`),
+  Degustação e Marketing, e os da Shopify com voucher de metade ou mais (só a parte do voucher) (`api/financeiro` ações `pedidos` e `itens`),
   valorizados pela ficha (`custoPorSku` em `cmv.js`), saem do CMV e entram no marketing (`dre_mes.extras.cmv_marketing`).
+- **Fretes** (`dre_fretes`, `dre_laricas_3.sql`, leitura em `src/lib/fretes.js`): extrato analítico da fatura dos
+  Correios (.csv), Order Report da Lalamove e relatório de envios do Melhor Envio (.xlsx), cada envio no mês da
+  data dele. As faturas e recargas dessas três no Bling ficam só no caixa.
+- **Auditoria › CMV do caixa ao consumo**: compras pagas → compras recebidas → estoque inicial e final → CMV da DRE.
 - **Caixa**: extrato do Bling (`dre_caixa_lancamentos`).
 - Classificação de cada lançamento: à mão (`dre_classificacao`, pelo id do Bling, sobrevive à atualização) > regra
   de categoria + fornecedor > regra só da categoria (`dre_regras`); contas em `dre_plano` (aba **Plano e regras**).
