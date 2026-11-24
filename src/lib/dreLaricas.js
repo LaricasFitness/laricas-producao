@@ -195,6 +195,8 @@ export function montar(d, visao) {
     for (const l of d.caixa) {
       if (sinalCaixa(l) < 0) continue
       const c = classificar(l, 'caixa', d), g = planoDe[c.conta]?.grupo
+      // rendimentos de aplicação e juros recebidos só existem no extrato: competência = mês em que entraram
+      if (c.conta === 'fin.rec') { add('fin.rec', +l.valor, { tipo: 'caixa', l, c, sinal: 1 }); continue }
       if (!c.conta || ['rec', 'fora', 'fin'].includes(g) || planoDe[c.conta]?.so_caixa || (c.como !== 'manual' && c.soCaixa)) continue
       add(c.conta, -l.valor, { tipo: 'estorno', l, c })
     }
@@ -313,4 +315,96 @@ export function conciliacaoCMV(d) {
     pagoMP: pago('cmv.mp'), pagoEmb: pago('cmv.emb'), pagoEnvio: pago('cmv.envio'), pagoInsumos: pago('cmv.insumos'),
     pagoTotal: itensCx.reduce((t, x) => t + x.valor, 0),
   }
+}
+
+// ── Prova da competência (a partir de nov/26) ────────────────────────────────
+// Lucro por competência − resultado de caixa (sem transferências e aportes) = variação do que ficou pendente:
+//   + Δ a receber (plataformas: painel de cada uma; revenda: contas a receber do Bling)
+//   + Δ estoque contado (fechamento do CMV) + Δ despesas antecipadas (rateios a apropriar) + Δ carteiras pré-pagas
+//   − Δ contas a pagar (Bling, na data) − Δ Correios a pagar (envios de faturas ainda não vencidas)
+//   + estimativas sem saldo conferível (embalagem sem contagem, embalagem de envio por pedido)
+// Cada saldo vem de fora da DRE; o que sobra ("não explicado") é erro em algum lugar da competência.
+export const PROVA_DESDE = '2026-11'
+export const ITENS_PROVA = [
+  { id: 'receber:ifood', nome: 'iFood: a receber', lado: 1, onde: 'Portal do Parceiro › Financeiro › repasses futuros (todas as lojas)' },
+  { id: 'receber:99food', nome: '99 Food: a receber', lado: 1, onde: 'Portal 99 Food › Financeiro › a receber' },
+  { id: 'receber:keeta', nome: 'Keeta: a receber', lado: 1, onde: 'Keeta Merchant › Finanças › a receber' },
+  { id: 'receber:anotaai', nome: 'Anota.AI: a receber', lado: 1, onde: 'Anota.AI › Financeiro › a receber' },
+  { id: 'receber:pagarme', nome: 'Pagar.me: a receber', lado: 1, onde: 'Dashboard Pagar.me › Recebíveis › saldo a receber (+ saldo disponível não sacado)' },
+  { id: 'receber:mercadopago', nome: 'Mercado Pago e Mercado Livre: a liberar', lado: 1, onde: 'Mercado Pago › Seu dinheiro › a liberar (+ saldo disponível não transferido)' },
+  { id: 'receber:rits', nome: 'Clube (Rits Pay): a receber', lado: 1, onde: 'Rits Pay › Financeiro › a receber' },
+  { id: 'receber:bling', nome: 'Revenda e venda direta: a receber (Bling)', lado: 1, auto: true },
+  { id: 'carteira:lalamove', nome: 'Lalamove: saldo da carteira', lado: 1, onde: 'Lalamove Business › Carteira (saldo)' },
+  { id: 'carteira:melhorenvio', nome: 'Melhor Envio: saldo da carteira', lado: 1, onde: 'Melhor Envio › Carteira (saldo)' },
+  { id: 'carteira:midia', nome: 'Meta e Google: crédito − fatura em aberto', lado: 1, onde: 'Gerenciador de anúncios › Faturamento (negativo se há valor a pagar)' },
+  { id: 'estoque', nome: 'Estoque contado (matéria-prima e embalagem)', lado: 1, auto: true },
+  { id: 'antecipadas', nome: 'Despesas antecipadas (rateios a apropriar)', lado: 1, auto: true },
+  { id: 'pagar:bling', nome: 'Contas a pagar em aberto (Bling)', lado: -1, auto: true },
+  { id: 'pagar:correios', nome: 'Correios a pagar (envios de faturas não vencidas)', lado: -1, auto: true },
+]
+
+// Saldo a apropriar dos rateios no fim de `mes`
+export const antecipadasEm = (rateios, mes) => (rateios || []).filter(r => r.mes_inicio <= mes).reduce((t, r) => {
+  const p = parcelaDoMes(r, mes), apropriado = p ? p.n * p.valor : (mes > fimRateio(r) ? +r.valor_total : 0)
+  return t + Math.max(0, +r.valor_total - apropriado)
+}, 0)
+
+// Contas a pagar (ou a receber) em aberto numa data: competência até a data e ainda não pagas nela
+// (em aberto hoje, ou pagas depois da data). Provisão dos Correios fica fora: vem de pagar:correios.
+// Contas a receber: só revenda e venda direta (as plataformas vêm do painel de cada uma).
+export async function abertoEm(tipo, data, pagasDepois) {
+  const tabela = tipo === 'pagar' ? 'dre_contas_competencia' : 'dre_receber_competencia'
+  const cols = 'id_bling, competencia, valor, situacao, nome, categoria'
+  const abertas = await buscarTudo(() => supabase.from(tabela).select(cols).lte('competencia', data).not('situacao', 'in', '("Pago","pago")').order('id_bling'))
+  const ids = [...new Set(pagasDepois.map(String))], pagas = []
+  for (let i = 0; i < ids.length; i += 200) pagas.push(...await buscarTudo(() => supabase.from(tabela).select(cols).lte('competencia', data).in('id_bling', ids.slice(i, i + 200)).order('id_bling')))
+  const vistos = new Set(), lista = []
+  for (const c of [...abertas, ...pagas]) {
+    if (!c.id_bling || vistos.has(c.id_bling)) continue
+    vistos.add(c.id_bling)
+    if (tipo === 'pagar' && /correios/i.test(c.nome || '') && /frete/i.test(c.categoria || '')) continue
+    if (tipo === 'receber' && !/revenda|venda direta/i.test(c.categoria || '')) continue
+    lista.push(c)
+  }
+  return { saldo: Math.round(lista.reduce((t, c) => t + +c.valor, 0) * 100) / 100, n: lista.length, parciais: lista.filter(c => /parcial/i.test(c.situacao || '')).length }
+}
+
+// Correios a pagar numa data: envios até a data cuja fatura vence depois dela (ou ainda sem vencimento)
+export async function correiosAPagarEm(data) {
+  try {
+    const ls = await buscarTudo(() => supabase.from('dre_fretes').select('valor, data, vencimento').eq('origem', 'correios').lte('data', data).or(`vencimento.gt.${data},vencimento.is.null`).order('data'))
+    return Math.round(ls.reduce((t, l) => t + +l.valor, 0) * 100) / 100
+  } catch { return null }   // antes do dre_laricas_5.sql (sem vencimento): fica faltando
+}
+
+// bal: linhas de dre_balanco do mês; balAnt: do mês anterior (saldo inicial quando o do mês não tem saldo_ini)
+export function prova(d, bal, balAnt, correios) {
+  const vc = montar(d, 'competencia'), vx = montar(d, 'caixa'), c = calcular(vc, d.plano)
+  const resCx = d.caixa.reduce((t, l) => t + sinalCaixa(l) * (+l.valor), 0)
+  const foraCx = d.plano.filter(p => p.grupo === 'fora' && p.id !== 'fora.ajuste').reduce((t, p) => t + (vx[p.id]?.itens || []).reduce((s, x) => s + x.sinal * (+x.l.valor), 0), 0)
+  const ajuste = (vx['fora.ajuste']?.itens || []).reduce((s, x) => s + x.sinal * (+x.l.valor), 0)
+  const linhaDe = id => bal.find(b => b.item === id), antDe = id => balAnt.find(b => b.item === id)
+  const est = d.cmv.filter(x => x.ei_valor != null && x.ef_valor != null)
+  const itens = ITENS_PROVA.map(it => {
+    let ini = null, fim = null
+    if (it.id === 'estoque') { ini = est.reduce((t, x) => t + +x.ei_valor, 0); fim = est.reduce((t, x) => t + +x.ef_valor, 0) }
+    else if (it.id === 'antecipadas') { ini = antecipadasEm(d.rateios, mesAnterior(d.mes)); fim = antecipadasEm(d.rateios, d.mes) }
+    else if (it.id === 'pagar:correios') { ini = correios?.ini ?? null; fim = correios?.fim ?? null }
+    else { const b = linhaDe(it.id); fim = b ? +b.saldo : null; ini = b?.saldo_ini != null ? +b.saldo_ini : antDe(it.id) ? +antDe(it.id).saldo : null }
+    const delta = ini != null && fim != null ? fim - ini : null
+    return { ...it, ini, fim, delta, efeito: delta == null ? null : it.lado * delta, detalhe: linhaDe(it.id)?.detalhe || null }
+  })
+  // estimativas: consumo estimado × compras do mês (sem saldo que dê para conferir)
+  const pagarConta = k => d.pagar.filter(l => classificar(l, 'pagar', d).conta === k).reduce((t, l) => t + +l.valor, 0)
+  const embProd = d.cmv.filter(x => x.tipo === 'emb' && (x.ei_valor == null || x.ef_valor == null)).reduce((t, x) => t + (+x.cmv_valor || 0), 0)
+  const envioComp = (vc['cmv.envio']?.itens || []).filter(x => x.tipo === 'envio' || x.tipo === 'sacola').reduce((t, x) => t + x.valor, 0)
+  const estimativas = [
+    embProd ? { id: 'est:emb', nome: 'Embalagem sem contagem: compras − consumo estimado pela produção', efeito: pagarConta('cmv.emb') - embProd } : null,
+    { id: 'est:envio', nome: 'Embalagem de envio e sacolas: compras − estimado por pedido', efeito: pagarConta('cmv.envio') - envioComp },
+  ].filter(Boolean)
+  const resOper = resCx - foraCx - ajuste
+  const alvo = c.ll - resOper
+  const explicado = itens.reduce((t, x) => t + (x.efeito || 0), 0) + estimativas.reduce((t, x) => t + x.efeito, 0)
+  const faltam = itens.filter(x => x.efeito == null)
+  return { ll: c.ll, resCx, foraCx, ajuste, resOper, alvo, itens, estimativas, explicado, naoExplicado: faltam.length ? null : alvo - explicado, faltam }
 }

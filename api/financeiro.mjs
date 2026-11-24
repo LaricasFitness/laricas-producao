@@ -306,6 +306,22 @@ export default async function handler(req, res) {
       const db = banco(), tk = await tokenBling(db)
       return res.status(200).json(await itensDosPedidos(tk, ids))
     }
+    if (acao === 'pagas') {
+      // contas a pagar (ou a receber) PAGAS entre duas datas: as que estavam em aberto no fim de um mês e foram
+      // pagas depois. Junto com as que continuam em aberto, dá o saldo a pagar/receber de qualquer data passada.
+      const tipo = req.body.tipo === 'receber' ? 'receber' : 'pagar'
+      const de = String(req.body.de || ''), ate = String(req.body.ate || '')
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate)) return res.status(400).json({ erro: 'Datas inválidas' })
+      const db = banco(), tk = await tokenBling(db)
+      const contas = [], vistos = new Set()
+      for (let pg = 1; pg <= 40; pg++) {
+        const d = (await bling(tk, `/contas/${tipo}?${qs({ pagina: pg, limite: 100, dataPagamentoInicial: de, dataPagamentoFinal: ate })}`))?.data || []
+        let novos = 0
+        for (const c of d) if (!vistos.has(String(c.id))) { vistos.add(String(c.id)); novos++; contas.push({ id: String(c.id), valor: Number(c.valor) || 0, situacao: Number(c.situacao) || null }) }
+        if (d.length < 100 || !novos) break
+      }
+      return res.status(200).json({ tipo, de, ate, contas })
+    }
     if (acao !== 'bling') return res.status(400).json({ erro: 'Ação inválida' })
     if (!['caixa', 'pagar', 'receber'].includes(fonte)) return res.status(400).json({ erro: 'Fonte inválida' })
     if (!DATA.test(de || '') || !DATA.test(ate || '') || de > ate) return res.status(400).json({ erro: 'Período inválido' })

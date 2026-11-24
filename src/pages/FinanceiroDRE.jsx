@@ -4,6 +4,7 @@ import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
   parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia, sinalCaixa,
+  PROVA_DESDE, ITENS_PROVA, prova, abertoEm, correiosAPagarEm,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
@@ -198,6 +199,114 @@ function ConciliacaoCMV({ d }) {
   )
 }
 
+// Prova da competência: lucro por competência − caixa = variação do que ficou pendente (saldos conferidos por fora)
+function ProvaCompetencia({ d, fechado }) {
+  const [bal, setBal] = useState(null)
+  const [balAnt, setBalAnt] = useState([])
+  const [correios, setCorreios] = useState(null)
+  const [form, setForm] = useState({})
+  const [ocupado, setOcupado] = useState('')
+  const [msg, setMsg] = useState(null)
+  const ant = mesAnterior(d.mes), fim = ultimoDia(d.mes), fimAnt = ultimoDia(ant)
+  async function carregar() {
+    try {
+      const [{ data: b, error }, { data: a }, ci, cf] = await Promise.all([
+        supabase.from('dre_balanco').select('*').eq('mes', d.mes), supabase.from('dre_balanco').select('*').eq('mes', ant),
+        correiosAPagarEm(fimAnt), correiosAPagarEm(fim)])
+      if (error) throw error
+      setBal(b || []); setBalAnt(a || []); setCorreios({ ini: ci, fim: cf })
+      const f = {}
+      for (const it of ITENS_PROVA.filter(x => !x.auto)) {
+        const r = (b || []).find(x => x.item === it.id), ra = (a || []).find(x => x.item === it.id)
+        f[it.id] = { ini: r?.saldo_ini != null ? String(r.saldo_ini).replace('.', ',') : ra ? String(ra.saldo).replace('.', ',') : '', fim: r ? String(r.saldo).replace('.', ',') : '', iniTravado: !!ra }
+      }
+      setForm(f)
+    } catch (e) { setMsg({ tipo: 'danger', txt: /dre_balanco/.test(e.message || '') ? 'Aplique o dre_laricas_5.sql no Supabase.' : erroMsg(e) }) }
+  }
+  useEffect(() => { if (d.mes >= PROVA_DESDE) carregar() }, [d.mes])   // eslint-disable-line react-hooks/exhaustive-deps
+  if (d.mes < PROVA_DESDE) return <div className="card card-pad" style={{ fontSize: 13, color: 'var(--gray-600)' }}><b>Prova da competência:</b> começa em {rotuloMes(PROVA_DESDE)} (precisa dos saldos a receber e das carteiras no fim do mês anterior).</div>
+  if (!bal) return <div className="card card-pad"><RefreshCw size={13} className="spin" /> Prova da competência…</div>
+  const p = prova(d, bal, balAnt, correios)
+  async function salvarManuais() {
+    setOcupado('Salvando…'); setMsg(null)
+    try {
+      const rows = Object.entries(form).filter(([, v]) => String(v.fim).trim() !== '').map(([item, v]) => ({
+        mes: d.mes, item, saldo: num(v.fim), saldo_ini: String(v.ini).trim() === '' ? null : num(v.ini), origem: 'manual', por: usuario().nome || null, em: new Date().toISOString() }))
+      const { error } = await supabase.from('dre_balanco').upsert(rows, { onConflict: 'mes,item' })
+      if (error) throw error
+      await carregar()
+    } catch (e) { setMsg({ tipo: 'danger', txt: erroMsg(e) }) }
+    setOcupado('')
+  }
+  async function calcularBling() {
+    setMsg(null)
+    try {
+      const hoje = new Date().toISOString().slice(0, 10), mais1 = s => new Date(Date.parse(s) + 864e5).toISOString().slice(0, 10)
+      const rows = []
+      for (const tipo of ['pagar', 'receber']) {
+        setOcupado(`Lendo no Bling as contas a ${tipo} pagas depois de ${dt(fimAnt)}…`)
+        // pagas depois de cada data = estavam em aberto nela (o Bling filtra pela data de pagamento)
+        const pagasIni = await chamarFin({ acao: 'pagas', tipo, de: mais1(fimAnt), ate: hoje })
+        const pagasFim = await chamarFin({ acao: 'pagas', tipo, de: mais1(fim), ate: hoje })
+        const [i, f] = await Promise.all([abertoEm(tipo, fimAnt, pagasIni.contas.map(c => c.id)), abertoEm(tipo, fim, pagasFim.contas.map(c => c.id))])
+        rows.push({ mes: d.mes, item: `${tipo}:bling`, saldo_ini: i.saldo, saldo: f.saldo, origem: 'auto', por: usuario().nome || null, em: new Date().toISOString(),
+          detalhe: { contas_ini: i.n, contas_fim: f.n, parciais: i.parciais + f.parciais, calculado_em: new Date().toISOString() } })
+      }
+      const { error } = await supabase.from('dre_balanco').upsert(rows, { onConflict: 'mes,item' })
+      if (error) throw error
+      await carregar()
+    } catch (e) { setMsg({ tipo: 'danger', txt: erroMsg(e) }) }
+    setOcupado('')
+  }
+  const v = x => x == null ? <span style={{ color: 'var(--gray-400)' }}>—</span> : brl(x)
+  const ok = p.naoExplicado != null && Math.abs(p.naoExplicado) < 1
+  return (
+    <div className="card">
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)' }}>
+        <b>Prova da competência</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+          (lucro por competência − resultado de caixa = o que ficou pendente. Cada saldo é conferido fora da DRE; o que sobrar é erro na competência)</span>
+      </div>
+      <div className="kpi-row" style={{ padding: 10 }}>
+        <div className="kpi neutral"><div className="kpi-label">Lucro por competência</div><div className="kpi-value">{brl(p.ll)}</div></div>
+        <div className="kpi neutral"><div className="kpi-label">Resultado de caixa (sem transferências e aportes)</div><div className="kpi-value">{brl(p.resOper)}</div></div>
+        <div className="kpi neutral"><div className="kpi-label">Diferença a explicar</div><div className="kpi-value">{brl(p.alvo)}</div></div>
+        <div className={`kpi ${p.naoExplicado == null ? 'neutral' : ok ? 'ok' : 'danger'}`}><div className="kpi-label">Não explicado</div>
+          <div className="kpi-value">{p.naoExplicado == null ? '—' : ok ? '✓ 0,00' : brl(p.naoExplicado)}</div>
+          <div className="kpi-detail">{p.naoExplicado == null ? `faltam ${p.faltam.length} saldo(s)` : ok ? 'competência provada' : 'erro em algum lugar da competência'}</div></div>
+      </div>
+      <div className="tbl-wrap"><table>
+        <thead><tr><th>Saldo</th><th style={{ textAlign: 'right' }}>Fim de {rotuloMes(ant)}</th><th style={{ textAlign: 'right' }}>Fim de {rotuloMes(d.mes)}</th><th style={{ textAlign: 'right' }}>Explica</th></tr></thead>
+        <tbody>
+          {p.itens.map(it => <tr key={it.id}>
+            <td>{it.nome} {it.auto ? <span className="pill neutral">automático</span> : <span style={{ fontSize: 11, color: 'var(--gray-500)' }}><br />{it.onde}</span>}
+              {it.detalhe?.contas_fim != null && <span style={{ fontSize: 11, color: 'var(--gray-500)' }}> · {it.detalhe.contas_ini} → {it.detalhe.contas_fim} contas{it.detalhe.parciais ? ` (${it.detalhe.parciais} com pagamento parcial: valor cheio)` : ''}</span>}</td>
+            <td style={{ textAlign: 'right' }}>{it.auto || fechado || form[it.id]?.iniTravado ? v(it.ini)
+              : <input className="form-input" style={{ width: 110, textAlign: 'right' }} inputMode="decimal" value={form[it.id]?.ini ?? ''} onChange={e => setForm(f => ({ ...f, [it.id]: { ...f[it.id], ini: e.target.value } }))} />}</td>
+            <td style={{ textAlign: 'right' }}>{it.auto || fechado ? v(it.fim)
+              : <input className="form-input" style={{ width: 110, textAlign: 'right' }} inputMode="decimal" value={form[it.id]?.fim ?? ''} onChange={e => setForm(f => ({ ...f, [it.id]: { ...f[it.id], fim: e.target.value } }))} />}</td>
+            <td style={{ textAlign: 'right', fontWeight: 700 }}>{v(it.efeito)}</td>
+          </tr>)}
+          {p.estimativas.map(e => <tr key={e.id}><td>{e.nome} <span className="pill warning">estimativa</span></td><td /><td /><td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(e.efeito)}</td></tr>)}
+          <tr style={{ fontWeight: 800, background: 'var(--gray-50)' }}><td colSpan={3}>Explicado</td><td style={{ textAlign: 'right' }}>{brl(p.explicado)}</td></tr>
+          <tr style={{ fontWeight: 800, background: ok ? 'var(--purple-pale)' : undefined, color: p.naoExplicado != null && !ok ? 'var(--danger)' : undefined }}>
+            <td colSpan={3}>Diferença a explicar − explicado = não explicado</td><td style={{ textAlign: 'right' }}>{p.naoExplicado == null ? '—' : brl(p.naoExplicado)}</td></tr>
+        </tbody>
+      </table></div>
+      {p.ajuste ? <div style={{ padding: '6px 14px', fontSize: 12, color: 'var(--warning, #b45309)' }}>Ajustes de saldo no Bling neste mês: {brl(p.ajuste)} (fora da conta: não é resultado nem pendência).</div> : null}
+      {!fechado && <div style={{ display: 'flex', gap: 8, padding: 10, flexWrap: 'wrap' }}>
+        <button className="btn btn-primary btn-sm" onClick={salvarManuais} disabled={!!ocupado}><Save size={13} /> Salvar saldos</button>
+        <button className="btn btn-ghost btn-sm" onClick={calcularBling} disabled={!!ocupado}><RefreshCw size={13} className={ocupado ? 'spin' : ''} /> Calcular a pagar e a receber no Bling</button>
+        {ocupado && <span style={{ fontSize: 12 }}>{ocupado}</span>}
+      </div>}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ margin: 10 }}>{msg.txt}</div>}
+      <div style={{ padding: '0 14px 10px', fontSize: 11, color: 'var(--gray-500)' }}>
+        Se sobrar diferença: abra a ponte abaixo e procure a linha cuja diferença não bate com a variação do saldo correspondente
+        (ex.: receitas do delivery × variação do a receber do iFood). Venda lançada a mais, despesa esquecida ou CMV errado aparecem aqui.
+      </div>
+    </div>
+  )
+}
+
 function TelaAuditoria({ d, fechado, onSalvo }) {
   const p = useMemo(() => ponte(d), [d])
   const [abertos, setAbertos] = useState(new Set())
@@ -242,6 +351,7 @@ function TelaAuditoria({ d, fechado, onSalvo }) {
         </table></div>
         {!fechado && <div style={{ padding: 10 }}><button className="btn btn-primary btn-sm" onClick={salvarSaldos} disabled={salvando}><Save size={13} /> Salvar saldos</button></div>}
       </div>
+      <ProvaCompetencia d={d} fechado={fechado} />
       <ConciliacaoCMV d={d} />
       <div className="card">
         <div style={{ padding: '10px 14px', fontWeight: 800, borderBottom: '1px solid var(--gray-100)' }}>Ponte competência → caixa <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--gray-500)' }}>(efeito de cada linha no resultado; clique para ver os lançamentos dos dois lados)</span></div>
@@ -522,7 +632,9 @@ function Fretes({ d, fechado, onSalvo }) {
       const quem = usuario().nome || null
       const linhas = lidos.flatMap(l => l.linhas).map(l => ({ ...l, por: quem }))
       for (let i = 0; i < linhas.length; i += 500) {
-        const { error } = await supabase.from('dre_fretes').upsert(linhas.slice(i, i + 500), { onConflict: 'chave' })
+        let { error } = await supabase.from('dre_fretes').upsert(linhas.slice(i, i + 500), { onConflict: 'chave' })
+        // antes do dre_laricas_5.sql não existe a coluna vencimento
+        if (error && /vencimento/.test(error.message)) ({ error } = await supabase.from('dre_fretes').upsert(linhas.slice(i, i + 500).map(({ vencimento, ...l }) => l), { onConflict: 'chave' }))
         if (error) throw error
       }
       setLidos([]); setMsg({ tipo: 'ok', txt: `${linhas.length} envio(s) gravados. Cada um conta no mês da data do envio.` }); onSalvo()
@@ -798,6 +910,8 @@ function TelaPassos({ d, onSalvo, irPara }) {
     { grupo: '5. Conferência' },
     { id: 'saldos', t: 'Saldos dos bancos batem com o Bling', auto: bancosOk, aba: 'auditoria', det: bancosOk ? 'todas as contas conferem' : 'lance os saldos do fim do mês e do anterior',
       como: 'Auditoria › saldo de cada conta no último dia (do extrato do banco). Diferença = lançamento faltando no Bling.' },
+    ...(d.mes >= PROVA_DESDE ? [{ id: 'prova', t: 'Prova da competência: "não explicado" = 0', aba: 'auditoria', det: 'saldos a receber e das carteiras no fim do mês + cálculo no Bling',
+      como: 'Auditoria › Prova da competência: lance o a receber de cada plataforma e o saldo das carteiras no último dia do mês (o do mês anterior já vem), clique em "Calcular a pagar e a receber no Bling" e salve. Se sobrar diferença, ela aponta um erro na competência: procure na ponte. Marque quando zerar.' }] : []),
     { id: 'ponte', t: 'Revisar a ponte competência → caixa e a DRE', aba: 'auditoria', det: `lucro por competência ${brl(c.ll)} · resultado de caixa ${brl(p.resCx)}`,
       como: 'Auditoria › abra as linhas com diferença grande e veja se o motivo faz sentido. Depois olhe a DRE linha a linha. Marque quando estiver ok.' },
   ]

@@ -47,6 +47,9 @@ function lerCorreios(texto) {
   }
   const iTot = ls.findIndex(l => l[0] === 'Total da Fatura')
   const total = iTot >= 0 ? num(ls[iTot][2]) : null
+  // vencimento da fatura: até ele, os envios dela estão a pagar (prova da competência)
+  const venc = fat[cab.findIndex(c => /VENCIMENTO/.test(c))] || ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(venc)) for (const l of out) l.vencimento = venc
   return { origem: 'correios', documento: `fatura ${fatura}`, linhas: out, totalArquivo: total }
 }
 
