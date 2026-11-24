@@ -18,6 +18,12 @@ const r2 = v => Math.round(v * 100) / 100 + 0
 export function lerRelatorioMercadoPago(texto) {
   const linhas = lerCSV(texto)
   const cab = (linhas.shift() || []).map(h => (String(h).match(/\(([^)]+)\)\s*$/) || [])[1] || String(h).trim())
+  return agruparVendasMP(cab, linhas)
+}
+
+// cab: códigos das colunas do relatório (date_created, status, ...); linhas: valores na mesma ordem.
+// Usado pelo .csv e pela API do Mercado Pago (api/financeiro, ação mercadopago, devolve no mesmo formato).
+export function agruparVendasMP(cab, linhas) {
   const col = k => cab.indexOf(k)
   const ix = { data: col('date_created'), status: col('status'), valor: col('transaction_amount'), tarifa: col('mercadopago_fee'),
     plataforma: col('marketplace_fee'), cupom: col('coupon_fee'), liquido: col('net_received_amount'), devolvido: col('amount_refunded'),

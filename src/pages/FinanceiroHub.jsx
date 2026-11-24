@@ -8,7 +8,7 @@ import {
 import { arquivoParaEnvio } from '../lib/arquivoEnvio'
 import { lerPlanilha99 } from '../lib/planilha99'
 import { lerPlanilhaKeeta } from '../lib/planilhaKeeta'
-import { lerRelatorioMercadoPago } from '../lib/relatorioMercadoPago'
+import { lerRelatorioMercadoPago, agruparVendasMP } from '../lib/relatorioMercadoPago'
 import FinanceiroDRE from './FinanceiroDRE'
 import { margemPorCanal, POOLS_ENVIO } from '../lib/margemCanal'
 
@@ -732,6 +732,28 @@ function FaturamentoPlataformas({ onMudou }) {
     setBuscandoSite(false)
   }
 
+  // Mercado Pago (relatório .csv ou API): Ativação e Balcão por mês da compra → fila; taxas do Pix do site e links → DRE
+  async function filaMercadoPago({ meses, fora, taxasFora }, origemNome) {
+    if (!meses.length) throw new Error('Nenhuma venda das lojas Ativação ou Loja.')
+    const txtFora = Object.entries(fora).map(([k, v]) => `${k}: R$ ${fmt(v)}`).join('; ')
+    const taxasTxt = await gravarTaxasMercadoPago(taxasFora)
+    setFila(q => [...q, ...meses.map(e => naFila({
+      ...paraForm(e), origem: 'planilha', arquivo: origemNome,
+      aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago (as taxas delas já entram na comissão deste canal).`
+        + (txtFora ? ` Fora da DRE (já vêm de outras fontes): ${txtFora}.` : '')
+        + (taxasTxt[e.mes] ? ` ${taxasTxt[e.mes]}` : ''),
+    }))])
+  }
+  const [buscandoMP, setBuscandoMP] = useState(false)
+  async function buscarMercadoPago() {
+    setBuscandoMP(true); setMsg(null)
+    try {
+      const j = await chamarFinanceiro({ acao: 'mercadopago', mes })
+      await filaMercadoPago(agruparVendasMP(j.cab, j.linhas), 'Mercado Pago (API)')
+    } catch (e) { setMsg({ tipo: 'danger', txt: `Mercado Pago: ${e.message || e}` }) }
+    setBuscandoMP(false)
+  }
+
   async function carregar() {
     const [{ data, error }, { data: fech }] = await Promise.all([
       supabase.from('dre_canal_competencia').select('*').order('canal').order('unidade'),
@@ -753,16 +775,7 @@ function FaturamentoPlataformas({ onMudou }) {
       try {
         if (ehCsv(file)) {
           // Mercado Pago (relatório de Vendas): Ativação e Balcão por mês da compra
-          const { meses, fora, taxasFora } = lerRelatorioMercadoPago(await file.text())
-          if (!meses.length) throw new Error('Nenhuma venda das lojas Ativação ou Loja no arquivo.')
-          const txtFora = Object.entries(fora).map(([k, v]) => `${k}: R$ ${fmt(v)}`).join('; ')
-          const taxasTxt = await gravarTaxasMercadoPago(taxasFora)
-          setFila(q => [...q, ...meses.map(e => naFila({
-            ...paraForm(e), origem: 'planilha', arquivo: file.name,
-            aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago (as taxas delas já entram na comissão deste canal).`
-              + (txtFora ? ` Fora da DRE neste arquivo (já vêm de outras fontes): ${txtFora}.` : '')
-              + (taxasTxt[e.mes] ? ` ${taxasTxt[e.mes]}` : ''),
-          }))])
+          await filaMercadoPago(lerRelatorioMercadoPago(await file.text()), file.name)
           setLendo(n => n - 1)
           continue
         }
@@ -845,6 +858,9 @@ function FaturamentoPlataformas({ onMudou }) {
         <input type="month" className="form-input" value={mes} onChange={e => setMes(e.target.value)} style={{ width: 160, fontSize: 13 }} />
         <button className="btn btn-primary btn-sm" disabled={semTab || lendo > 0} onClick={() => ref.current?.click()}>
           {lendo > 0 ? <RefreshCw size={13} className="spin" /> : <Camera size={13} />} {lendo > 0 ? `Lendo ${lendo} arquivo(s)…` : 'Ler print ou planilha'}
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={semTab || fechado || buscandoMP} onClick={buscarMercadoPago} title="Vendas do mês no Mercado Pago (maquininhas Ativação e Loja, Pix do site): o mesmo que o relatório de Vendas .csv">
+          <RefreshCw size={13} className={buscandoMP ? 'spin' : ''} /> {buscandoMP ? 'Buscando no Mercado Pago…' : 'Ativação e Balcão: buscar no Mercado Pago'}
         </button>
         <button className="btn btn-primary btn-sm" disabled={semTab || fechado || buscandoSite} onClick={buscarShopify} title="Pedidos do mês na Shopify, sem os brindes da régua">
           {buscandoSite ? <RefreshCw size={13} className="spin" /> : <RefreshCw size={13} />} {buscandoSite ? 'Buscando na Shopify…' : 'Site: buscar na Shopify'}

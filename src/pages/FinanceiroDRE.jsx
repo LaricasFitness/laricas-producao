@@ -621,6 +621,37 @@ function Fretes({ d, fechado, onSalvo }) {
   const [lidos, setLidos] = useState([])
   const [msg, setMsg] = useState(null)
   const [ocupado, setOcupado] = useState(false)
+  const [auto, setAuto] = useState('')
+  // Automático (mês aberto): Melhor Envio pela API e Lalamove pelas corridas chamadas pelo sistema.
+  // O relatório de cada um, se importado depois, completa e corrige (mesma chave: não duplica).
+  async function buscarAuto() {
+    setAuto('buscando…')
+    const quem = usuario().nome || null, linhas = [], partes = []
+    try {
+      const j = await chamarFin({ acao: 'melhorenvio', mes: d.mes })
+      const ok = (j.envios || []).filter(e => !/cancel/i.test(e.status || '') && e.preco)
+      linhas.push(...ok.map(e => ({ origem: 'melhorenvio', chave: `melhorenvio:${e.codigo}`, data: e.data, mes: e.data.slice(0, 7), valor: e.preco,
+        descricao: `${e.transportadora} ${e.servico} · ${e.cidade} · ${e.status}`.slice(0, 160), documento: 'API Melhor Envio', por: quem })))
+      partes.push(`Melhor Envio: ${ok.length} etiqueta(s)`)
+    } catch (e) { partes.push(`Melhor Envio: ${e.message}`) }
+    try {
+      const { corridas: c } = await chamarFin({ acao: 'lalamove', mes: d.mes })
+      const ok = (c || []).filter(x => x.order_id && +x.preco && !/CANCEL|REJECT|EXPIRE/i.test(x.status || ''))
+      linhas.push(...ok.map(x => { const data = new Date(x.criado_em).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+        return { origem: 'lalamove', chave: `lalamove:${x.order_id}`, data, mes: data.slice(0, 7), valor: +x.preco, descricao: `${x.status} · ${x.rota_label || ''}`.slice(0, 160), documento: 'corridas do sistema', por: quem } }))
+      partes.push(`Lalamove: ${ok.length} corrida(s) chamadas pelo sistema`)
+    } catch (e) { partes.push(`Lalamove: ${e.message}`) }
+    try {
+      // não sobrescreve o que já veio do relatório (que tem o valor final cobrado)
+      const { data: ja } = await supabase.from('dre_fretes').select('chave, documento').in('chave', linhas.map(l => l.chave).slice(0, 1000))
+      const doRelatorio = new Set((ja || []).filter(x => !/^API|corridas do sistema/.test(x.documento || '')).map(x => x.chave))
+      const novas = linhas.filter(l => !doRelatorio.has(l.chave) && l.mes === d.mes)
+      if (novas.length) { const { error } = await supabase.from('dre_fretes').upsert(novas, { onConflict: 'chave' }); if (error) throw error }
+      setAuto(partes.join(' · ') + '.')
+      if (novas.length) onSalvo()
+    } catch (e) { setAuto(partes.join(' · ') + `. Não gravei: ${erroMsg(e)}`) }
+  }
+  useEffect(() => { if (!fechado && d.mes <= new Date().toISOString().slice(0, 7)) buscarAuto() }, [d.mes])   // eslint-disable-line react-hooks/exhaustive-deps
   async function ler(files) {
     setMsg(null); const out = []
     for (const f of files) { try { out.push({ nome: f.name, ...(await lerArquivoFrete(f)) }) } catch (e) { setMsg({ tipo: 'danger', txt: e.message }) } }
@@ -649,6 +680,7 @@ function Fretes({ d, fechado, onSalvo }) {
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)' }}><b>Fretes pela data do envio</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
         (Correios: extrato analítico da fatura, .csv · Lalamove: Order Report, .xlsx · Melhor Envio: relatório de envios, .xlsx. As faturas e recargas dessas três no Bling ficam só no caixa)</span></div>
       <div style={{ padding: 10, display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
+        {auto && <span style={{ width: '100%', fontSize: 12, color: 'var(--gray-500)' }}>Automático: {auto} {!fechado && <button className="btn btn-ghost btn-sm" onClick={() => buscarAuto()}><RefreshCw size={12} /> buscar de novo</button>}</span>}
         {Object.entries(ORIGENS_FRETE).map(([k, nome]) => <span key={k}>{nome}: {doMes[k] ? <b>{brl(doMes[k].v)}</b> : <span style={{ color: 'var(--danger)' }}>sem relatório</span>}{doMes[k] && <span style={{ color: 'var(--gray-500)' }}> ({doMes[k].n})</span>}</span>)}
       </div>
       {!fechado && <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -882,7 +914,7 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Lançamentos › botão "Ratear" na conta do Bling. Os rateios do mês aparecem no fim da aba Manuais.' },
     { grupo: '2. Receitas' },
     { id: 'rec_delivery', t: 'Deliverys e marketplace: bruto, promoções, comissão e pedidos', auto: !faltaDelivery.length, aba: 'receitas', det: faltaDelivery.length ? `sem valor: ${faltaDelivery.join(', ')}` : 'todos com valor',
-      como: 'Lance o faturamento das plataformas (Importar e classificar › Faturamento das plataformas) e use "Preencher" na aba Receitas. Keeta pelo bruto. Canal sem venda no mês: marque à mão.' },
+      como: 'Lance o faturamento das plataformas (Importar e classificar › Faturamento das plataformas: iFood, 99, Keeta e Anota.AI por print ou planilha; Ativação e Balcão pelo botão "buscar no Mercado Pago") e use "Preencher" na aba Receitas. Keeta pelo bruto. Canal sem venda no mês: marque à mão.' },
     { id: 'rec_site', t: 'Site, clube e balcão', auto: !faltaSite.length, aba: 'receitas', det: faltaSite.length ? `sem valor: ${faltaSite.join(', ')}` : 'todos com valor',
       como: 'Site: bruto com o cupom em descontos. Balcão: Mercado Pago + PIX direto. Ativação e licenciamento, se houver.' },
     { id: 'rec_b2b', t: 'Revenda e venda direta, e os pedidos do Bling', auto: !faltaB2b.length && totalPedidos(d) > 0, aba: 'receitas',
@@ -892,9 +924,9 @@ function TelaPassos({ d, onSalvo, irPara }) {
     { id: 'frete_correios', t: 'Correios: as duas faturas que cobrem o mês', auto: fr.correios.ok, aba: 'manuais', det: fr.correios.detalhe,
       como: 'Correios Empresas › Faturas › extrato analítico (.csv) da fatura que fecha dia 15 deste mês e da que fecha dia 15 do mês seguinte. Manuais › Fretes pela data do envio.' },
     { id: 'frete_lalamove', t: 'Lalamove: Order Report do mês', auto: fr.lalamove.ok, aba: 'manuais', det: fr.lalamove.detalhe,
-      como: 'Portal da Lalamove › Relatórios › Order Report do dia 1 ao último dia do mês (.xlsx). Manuais › Fretes pela data do envio.' },
+      como: 'As corridas chamadas pelo sistema entram sozinhas ao abrir o mês. Para incluir as chamadas pelo app e o valor final cobrado: portal da Lalamove › Relatórios › Order Report do mês (.xlsx) › Manuais › Fretes pela data do envio.' },
     { id: 'frete_melhorenvio', t: 'Melhor Envio: relatório de envios do mês', auto: fr.melhorenvio.ok, aba: 'manuais', det: fr.melhorenvio.detalhe,
-      como: 'Melhor Envio › Relatórios › Relatório de envios do mês (.xlsx). Manuais › Fretes pela data do envio. Mês sem envio: marque à mão.' },
+      como: 'Vem sozinho pela API do Melhor Envio ao abrir o mês (precisa do MELHORENVIO_TOKEN na Vercel). Sem o token: Melhor Envio › Relatórios › Relatório de envios do mês (.xlsx) › Manuais › Fretes. Mês sem envio: marque à mão.' },
     { id: 'midia', t: 'Meta e Google pela planilha da agência', auto: manuaisDe(/^vm\.midia$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vm\.midia$/).length} lançamento(s) de mídia`,
       como: 'Manuais › "+ Meta (planilha da agência)" e "+ Google (planilha da agência)" com o investimento do mês.' },
     { id: 'taxas', t: 'Taxas descontadas na venda (Mercado Pago, Pagar.me, Shopify, checkout)', auto: manuaisDe(/^vc\.cartao$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vc\.cartao$/).length} lançamento(s) de taxas`,

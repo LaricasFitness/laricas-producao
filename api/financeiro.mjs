@@ -22,6 +22,10 @@
 //   e da receita de Revenda e Venda direta pelas vendas do Bling. Também lista os pedidos de produto para
 //   marketing (lojas Bonificação, Ativação - Premiação, Ativação - Degustação, Marketing e Shopify com voucher de metade ou mais).
 // POST {acao:'itens', ids:[...]}  itens (código, quantidade) de até 40 pedidos; `faltam` se o Bling pediu pausa.
+// POST {acao:'pagas', tipo:'pagar'|'receber', de, ate}  contas pagas no período (prova da competência).
+// POST {acao:'mercadopago', mes}  vendas do mês no Mercado Pago (API, MP_ACCESS_TOKEN), no formato do relatório .csv.
+// POST {acao:'melhorenvio', mes}  etiquetas do mês no Melhor Envio (API, MELHORENVIO_TOKEN).
+// POST {acao:'lalamove', mes}  corridas da Lalamove chamadas pelo sistema no mês (lalamove_corridas).
 //
 // Escopos do app do Bling: Caixas e Bancos, Contas a Pagar, Contas a Receber,
 // Categorias - Receitas e Despesas e Contatos (mudar escopo derruba o acesso: reconectar na Expedição).
@@ -263,6 +267,58 @@ async function pedidosDoMes(tk, mes) {
     .sort((a, b) => b.pedidos - a.pedidos)
   return { mes, lojas: lista, pedidos: lista.reduce((t, l) => t + l.pedidos, 0), lidos: vistos.size, marketing }
 }
+// ───────────── Mercado Pago (só leitura): vendas do mês no formato do relatório de Vendas (.csv) ─────────────
+// Mesmas colunas que src/lib/relatorioMercadoPago.js lê; "description" é o nome da loja (Point/QR), como no relatório.
+const MP_COLS = ['date_created', 'status', 'transaction_amount', 'mercadopago_fee', 'marketplace_fee', 'coupon_fee',
+  'net_received_amount', 'amount_refunded', 'financing_fee', 'marketplace', 'description', 'payment_type', 'reason']
+async function mp(caminho) {
+  const r = await fetch('https://api.mercadopago.com' + caminho, { headers: { Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}` } })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(`Mercado Pago: ${j.message || r.status}`)
+  return j
+}
+async function vendasMercadoPago(mes) {
+  const eu = await mp('/users/me')
+  const lojas = {}
+  try { for (const s of (await mp(`/users/${eu.id}/stores/search?limit=100`)).results || []) lojas[String(s.id)] = s.name } catch { /* sem lojas cadastradas */ }
+  const ini = `${mes}-01T00:00:00.000-03:00`, fim = `${ultimoDia(mes)}T23:59:59.999-03:00`
+  const linhas = []
+  for (let offset = 0; offset < 10000; offset += 100) {
+    const j = await mp(`/v1/payments/search?${qs({ sort: 'date_created', criteria: 'asc', range: 'date_created', begin_date: ini, end_date: fim, limit: 100, offset })}`)
+    for (const p of j.results || []) {
+      const fee = t => (p.fee_details || []).filter(f => f.type === t).reduce((s, f) => s + (Number(f.amount) || 0), 0)
+      const dc = String(p.date_created || '')   // 2026-10-05T10:03:45.000-03:00 → 05/10/2026 10:03:45 (horário de Brasília)
+      linhas.push([`${dc.slice(8, 10)}/${dc.slice(5, 7)}/${dc.slice(0, 4)} ${dc.slice(11, 19)}`, p.status, p.transaction_amount, fee('mercadopago_fee'),
+        fee('application_fee'), p.coupon_amount || 0, p.transaction_details?.net_received_amount || 0, p.transaction_amount_refunded || 0,
+        fee('financing_fee'), p.marketplace || '', lojas[String(p.store_id || '')] || '', p.payment_type_id || '', p.description || ''])
+    }
+    if (!j.results || j.results.length < 100) break
+  }
+  return { mes, cab: MP_COLS, linhas }
+}
+
+// ───────────── Melhor Envio (só leitura): etiquetas do mês, para os fretes por competência ─────────────
+async function enviosMelhorEnvio(mes) {
+  const envios = []
+  for (let pg = 1; pg <= 50; pg++) {
+    const r = await fetch(`https://www.melhorenvio.com.br/api/v2/me/orders?page=${pg}`, {
+      headers: { Authorization: `Bearer ${process.env.MELHORENVIO_TOKEN}`, Accept: 'application/json', 'User-Agent': 'Laricas Producao (financeiro)' } })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(`Melhor Envio: ${j.message || r.status}`)
+    const d = j.data || []
+    for (const o of d) {
+      const data = String(o.created_at || '').slice(0, 10)
+      if (data.slice(0, 7) !== mes) continue
+      envios.push({ codigo: o.protocol || o.id, data, status: o.status, preco: Number(o.price) || 0,
+        transportadora: o.service?.company?.name || '', servico: o.service?.name || '', cidade: o.to?.city || '' })
+    }
+    // a lista vem da mais nova para a mais antiga: parou de ter envio do mês ou acabou
+    const maisAntigo = d.map(o => String(o.created_at || '').slice(0, 7)).sort()[0]
+    if (!d.length || pg >= (j.last_page || 1) || (maisAntigo && maisAntigo < mes)) break
+  }
+  return { mes, envios }
+}
+
 // Lojas do Bling cujos pedidos são produto para marketing (o nome da loja decide)
 const LOJAS_MKT = [[/bonifica/i, 'bonificacao'], [/premia/i, 'premiacao'], [/degusta/i, 'degustacao'], [/marketing/i, 'marketing']]
 // Shopify: pedido em que o cliente pagou no máximo metade dos produtos (voucher de influenciador/presente).
@@ -305,6 +361,28 @@ export default async function handler(req, res) {
       const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(String).filter(x => /^\d+$/.test(x)).slice(0, 40)
       const db = banco(), tk = await tokenBling(db)
       return res.status(200).json(await itensDosPedidos(tk, ids))
+    }
+    if (acao === 'mercadopago') {
+      const mes = String(req.body.mes || '')
+      if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      if (!process.env.MP_ACCESS_TOKEN) return res.status(400).json({ erro: 'Falta configurar MP_ACCESS_TOKEN na Vercel (Mercado Pago › Suas integrações › Credenciais de produção › Access Token).' })
+      return res.status(200).json(await vendasMercadoPago(mes))
+    }
+    if (acao === 'lalamove') {
+      // corridas chamadas pelo sistema (Expedição › baixa), em produção, no mês (horário de Brasília)
+      const mes = String(req.body.mes || '')
+      if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      const prox = new Date(Date.UTC(+mes.slice(0, 4), +mes.slice(5, 7), 1)).toISOString().slice(0, 7)
+      const { data, error } = await banco().from('lalamove_corridas').select('order_id, status, preco, criado_em, rota_label')
+        .eq('ambiente', 'producao').gte('criado_em', `${mes}-01T03:00:00Z`).lt('criado_em', `${prox}-01T03:00:00Z`)
+      if (error) throw error
+      return res.status(200).json({ mes, corridas: data || [] })
+    }
+    if (acao === 'melhorenvio') {
+      const mes = String(req.body.mes || '')
+      if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      if (!process.env.MELHORENVIO_TOKEN) return res.status(400).json({ erro: 'Falta configurar MELHORENVIO_TOKEN na Vercel (Melhor Envio › Integrações › Permissões de acesso › gerar token, com leitura de envios).' })
+      return res.status(200).json(await enviosMelhorEnvio(mes))
     }
     if (acao === 'pagas') {
       // contas a pagar (ou a receber) PAGAS entre duas datas: as que estavam em aberto no fim de um mês e foram
