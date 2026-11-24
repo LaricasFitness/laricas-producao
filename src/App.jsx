@@ -14,6 +14,7 @@ import EstoqueHub from './pages/EstoqueHub'
 import Precificacao from './pages/Precificacao'
 import FinanceiroHub from './pages/FinanceiroHub'
 import Hoje from './pages/Hoje'
+import Conexoes from './lib/conexoes'
 
 const PERM_MAP = {
   dashboard:'estoque', pedidos:'estoque', compras:'estoque',
@@ -135,6 +136,7 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-spacer" />
+        {usuario.perfil === 'admin' && <Conexoes />}
         <div className="sidebar-user">
           <div className="avatar">{(usuario.nome || '?').trim().charAt(0).toUpperCase()}</div>
           <div className="user-info">

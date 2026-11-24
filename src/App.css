@@ -617,3 +617,13 @@ tr:not(.row-danger):not(.row-warning):hover td { background: var(--gray-50); }
   }
   .kpi-value { font-size: 19px !important; }
 }
+
+/* Conexões com outros sistemas (menu lateral, admin) */
+.sidebar-conexoes { padding: 8px 10px; margin: 0 4px 6px; border-top: 1px solid rgba(255,255,255,0.10); font-size: 12px; color: rgba(255,255,255,0.78); }
+.conexoes-titulo { display: flex; align-items: center; justify-content: space-between; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
+.conexoes-titulo .icon-btn { color: rgba(255,255,255,0.6); padding: 2px; }
+.conexao-linha { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+.conexao-ponto { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.conexao-btn { font-size: 11px; color: #fff; text-decoration: underline; opacity: .85; }
+.conexao-btn:hover { opacity: 1; }
+.conexao-falta { font-size: 10px; color: rgba(255,255,255,0.45); }

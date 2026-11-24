@@ -734,9 +734,14 @@ export default async function handler(req, res) {
     const db = banco()
     if (acao === 'status') {
       const { data } = await db.from('integracao_tokens').select('atualizado_em').eq('servico', 'bling').maybeSingle()
+      // conectado de verdade: o token vale (ou renova). Token guardado mas sem renovação = precisa reconectar
+      let blingOk = false
+      if (data) { try { await tokenBling(db); blingOk = true } catch { /* expirado */ } }
       return res.status(200).json({
-        bling: !!data, bling_desde: data?.atualizado_em || null,
+        bling: blingOk, bling_guardado: !!data, bling_desde: data?.atualizado_em || null,
         shopify: !!(process.env.SHOPIFY_LOJA && process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET),
+        mercadopago: !!process.env.MP_ACCESS_TOKEN, melhorenvio: !!process.env.MELHORENVIO_TOKEN,
+        lalamove: !!(process.env.LALAMOVE_API_KEY && process.env.LALAMOVE_API_SECRET),
       })
     }
     const tk = await tokenBling(db)
