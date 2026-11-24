@@ -384,6 +384,16 @@ function TelaReceitas({ d, fechado, onSalvo }) {
           if (v) { n++; return { ...row, bruto: Math.round(v * 100) / 100 } }
           return row
         }
+        if (row.canal === 'Balcão') {
+          // Balcão = maquininha "Loja" (relatório do Mercado Pago) + PIX direto (loja Balcão do Bling); competência = caixa
+          const pix = (bl.lojas || []).find(l => /balc/i.test(l.nome))
+          if (!c && !pix) return row
+          n++
+          const r2 = v => Math.round(v * 100) / 100
+          return { ...row, bruto: r2((+c?.vendas || 0) + (pix?.totalProdutos || 0)) || '',
+            descontos: r2((+c?.promocoes || 0) + Math.max(0, (pix?.totalProdutos || 0) - (pix?.total || 0))) || '',
+            comissao: r2((+c?.taxas || 0) + (+c?.servicos || 0) - (+c?.ajustes || 0)) || '', pedidos: (nVendas + (pix?.pedidos || 0)) || '' }
+        }
         if (c) { n++; return { ...row, pedidos: num(row.pedidos) || nVendas || '', bruto: +c.vendas || '', descontos: +c.promocoes || '', comissao: ((+c.taxas || 0) + (+c.servicos || 0) - (+c.ajustes || 0)) || '' } }
         if (loja && ['Revenda', 'Venda direta'].includes(row.canal)) { n++; return { ...row, bruto: loja.totalProdutos || loja.total, descontos: Math.max(0, Math.round(((loja.totalProdutos || 0) - (loja.total || 0)) * 100) / 100) || '' } }
         return row
