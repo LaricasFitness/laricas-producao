@@ -37,6 +37,7 @@ export const CANAIS = [
   ['Site', 'rec.site'], ['Clube de assinatura', 'rec.clube'], ['iFood BV', 'rec.delivery'], ['iFood ZN', 'rec.delivery'], ['iFood BK', 'rec.delivery'],
   ['iFood PR', 'rec.delivery'], ['99 Food BV', 'rec.delivery'], ['99 Food BK', 'rec.delivery'], ['Keeta', 'rec.delivery'], ['Anota.AI BV', 'rec.delivery'],
   ['Mercado Livre', 'rec.mkt'], ['Revenda', 'rec.b2b'], ['Venda direta', 'rec.direta'], ['Balcão', 'rec.balcao'], ['Ativação', 'rec.ativ'], ['Licenciamento e royalties', 'rec.lic'],
+  ['Multas e reembolsos recebidos', 'rec.outras'],
 ]
 
 export const ultimoDia = m => `${m}-${String(new Date(+m.slice(0, 4), +m.slice(5, 7), 0).getDate()).padStart(2, '0')}`
@@ -91,7 +92,9 @@ const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 export function regraDe(l, regras) {
   const cat = l.categoria || ''
   const daCat = regras.filter(r => r.categoria === cat)
-  return daCat.find(r => r.fornecedor && norm(l.nome).includes(norm(r.fornecedor))) || daCat.find(r => !r.fornecedor) || null
+  // "fornecedor" da regra procura no nome e no histórico (ex.: "multa" em Reembolsos e Multas)
+  const texto = norm(`${l.nome || ''} ${l.observacoes || ''} ${l.historico || ''}`)
+  return daCat.find(r => r.fornecedor && texto.includes(norm(r.fornecedor))) || daCat.find(r => !r.fornecedor) || null
 }
 // → { conta, como: 'manual' | 'fornecedor' | 'categoria' | null, soCaixa }
 export function classificar(l, origem, d) {
@@ -186,6 +189,14 @@ export function montar(d, visao) {
       const c = classificar(l, 'pagar', d)
       const fora = c.como !== 'manual' && (c.soCaixa || planoDe[c.conta]?.so_caixa)
       add(fora ? '_socaixa' : (c.conta || '_sem'), +l.valor, { tipo: 'pagar', l, c })
+    }
+    // Reembolso/estorno recebido de uma despesa (entrada no extrato classificada numa conta de despesa): reduz a
+    // despesa no mês em que entrou. Contas que na competência vêm de outra fonte (estoque, envio estimado) ficam fora.
+    for (const l of d.caixa) {
+      if (sinalCaixa(l) < 0) continue
+      const c = classificar(l, 'caixa', d), g = planoDe[c.conta]?.grupo
+      if (!c.conta || ['rec', 'fora', 'fin'].includes(g) || planoDe[c.conta]?.so_caixa || (c.como !== 'manual' && c.soCaixa)) continue
+      add(c.conta, -l.valor, { tipo: 'estorno', l, c })
     }
   } else {
     for (const l of d.caixa) {

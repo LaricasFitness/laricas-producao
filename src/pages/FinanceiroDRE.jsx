@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
-  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia,
+  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia, sinalCaixa,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
@@ -72,6 +72,7 @@ function DescItem({ x, visao }) {
   if (x.tipo === 'sacola') return <>Ativação: {fmt(x.pedidos, 0)} vendas × 1 sacola de R$ {fmt(x.unit)}</>
   if (x.tipo === 'manual') return <>Manual: {x.m.descricao}</>
   if (x.tipo === 'frete') return <>Fretes {ORIGENS_FRETE[x.f.origem]}: {x.f.envios} lançamento(s) pela data do envio <span style={{ color: 'var(--gray-500)' }}>({x.f.docs.join(', ')})</span></>
+  if (x.tipo === 'estorno') return <>Reembolso recebido: {dt(x.l.data)} · <b>{x.l.nome}</b> · {x.l.historico || x.l.categoria} <span className="pill neutral">reduz a despesa</span></>
   if (x.tipo === 'rateio') return <>Rateio: {x.r.descricao} <span className="pill neutral">parcela {x.parcela}/{x.r.parcelas}</span></>
   if (x.tipo === 'cmvmkt') return <>Produtos sem venda: {x.g.nome} ({x.g.pedidos} pedido(s), custo da ficha)</>
   const l = x.l
@@ -377,6 +378,12 @@ function TelaReceitas({ d, fechado, onSalvo }) {
         // nº de vendas do relatório ("Vendas (133)"), para a sacola da ativação e os pedidos dos deliverys
         const nVendas = +(String((c?.detalhes || []).find(x => x.grupo === 'vendas')?.descricao || '').match(/\((\d+)/) || [])[1] || 0
         if (num(row.bruto)) return nVendas && !num(row.pedidos) ? { ...row, pedidos: nVendas } : row
+        if (row.conta === 'rec.outras') {
+          // multas de cancelamento do clube e reembolsos recebidos: competência = mês em que entraram no caixa
+          const v = d.caixa.filter(l => sinalCaixa(l) > 0 && classificar(l, 'caixa', d).conta === 'rec.outras').reduce((t, l) => t + +l.valor, 0)
+          if (v) { n++; return { ...row, bruto: Math.round(v * 100) / 100 } }
+          return row
+        }
         if (c) { n++; return { ...row, pedidos: num(row.pedidos) || nVendas || '', bruto: +c.vendas || '', descontos: +c.promocoes || '', comissao: ((+c.taxas || 0) + (+c.servicos || 0) - (+c.ajustes || 0)) || '' } }
         if (loja && ['Revenda', 'Venda direta'].includes(row.canal)) { n++; return { ...row, bruto: loja.totalProdutos || loja.total, descontos: Math.max(0, Math.round(((loja.totalProdutos || 0) - (loja.total || 0)) * 100) / 100) || '' } }
         return row
@@ -680,7 +687,7 @@ function TelaPlano({ d, onSalvo }) {
       <div className="card">
         <div style={{ padding: '10px 14px', fontWeight: 800, borderBottom: '1px solid var(--gray-100)' }}>Regras: categoria do Bling → conta <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--gray-500)' }}>(a regra com fornecedor vale antes; "só no caixa" = na competência a conta vem de outra fonte)</span></div>
         <div className="tbl-wrap"><table style={{ minWidth: 760 }}>
-          <thead><tr><th>Categoria no Bling</th><th>Fornecedor contém</th><th>Conta Laricas</th><th>Só no caixa</th><th style={{ textAlign: 'right' }}>Lançamentos no mês</th><th /></tr></thead>
+          <thead><tr><th>Categoria no Bling</th><th>Fornecedor ou histórico contém</th><th>Conta Laricas</th><th>Só no caixa</th><th style={{ textAlign: 'right' }}>Lançamentos no mês</th><th /></tr></thead>
           <tbody>
             {d.regras.slice().sort((a, b) => a.categoria.localeCompare(b.categoria) || (a.fornecedor ? -1 : 1)).map(r => <tr key={r.id}>
               <td>{r.categoria}</td><td>{r.fornecedor || <span style={{ color: 'var(--gray-300)' }}>qualquer</span>}</td>
@@ -691,7 +698,7 @@ function TelaPlano({ d, onSalvo }) {
             </tr>)}
             <tr>
               <td><input className="form-input" list="cats-bling" placeholder="Categoria do Bling" value={nova.categoria} onChange={e => setNova(n => ({ ...n, categoria: e.target.value }))} /><datalist id="cats-bling">{cats.map(c => <option key={c} value={c} />)}</datalist></td>
-              <td><input className="form-input" placeholder="ex.: leovini" value={nova.fornecedor} onChange={e => setNova(n => ({ ...n, fornecedor: e.target.value }))} /></td>
+              <td><input className="form-input" placeholder="ex.: leovini, multa" value={nova.fornecedor} onChange={e => setNova(n => ({ ...n, fornecedor: e.target.value }))} /></td>
               <td><select className="form-input" value={nova.conta} onChange={e => setNova(n => ({ ...n, conta: e.target.value }))}><option value="">Conta…</option><OpcoesConta plano={d.plano} /></select></td>
               <td><input type="checkbox" checked={nova.so_caixa} onChange={e => setNova(n => ({ ...n, so_caixa: e.target.checked }))} /></td>
               <td colSpan={2}><button className="btn btn-primary btn-sm" onClick={addRegra}><Plus size={12} /> Regra</button></td>
