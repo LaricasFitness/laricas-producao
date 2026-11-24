@@ -61,9 +61,30 @@ As abas de Estoque e Custos reutilizam componentes exportados de
 `Embalagens.jsx` e `MatPrimas.jsx` — esses dois arquivos **não são mais
 páginas**, só hospedam componentes.
 
-O menu **Financeiro** é `FinanceiroHub.jsx` (DRE por competência e por caixa, Margem por canal, Importar e
-classificar; regras em `src/lib/dre.js`). Os arquivos `Fin*.jsx` são do módulo financeiro antigo e não são
-importados por nada.
+O menu **Financeiro** é `FinanceiroHub.jsx`: DRE (`FinanceiroDRE.jsx`, regras em `src/lib/dreLaricas.js`), Margem
+por canal e Importar e classificar (leitura dos arquivos e das plataformas em `src/lib/dre.js`). Os arquivos
+`Fin*.jsx` são do módulo financeiro antigo e não são importados por nada.
+
+### DRE Laricas (Financeiro › DRE)
+
+Uma tela por mês, abas na ordem do fechamento:
+- **DRE**: competência ou caixa; cada linha abre os lançamentos que a somam; indicadores (CMV %, CMO, prime cost,
+  margem de contribuição, EBITDA, ponto de equilíbrio); exporta para Excel.
+- **Competência**: receitas por canal em **Receitas** (bruto no faturamento, descontos/promoções nas deduções,
+  comissão da plataforma nas despesas variáveis comerciais, pedidos). "Preencher" usa o faturamento das plataformas
+  (`dre_canal_competencia`) e as vendas do Bling de Revenda e Venda direta (`api/financeiro`, ação `pedidos`:
+  pedidos atendidos + em aberto, sem a loja "nenhuma"). Despesas: contas a pagar do Bling pela competência. CMV:
+  fechamento de estoque (`fechamento_cmv`) + embalagem de envio (pedidos × `configuracoes.dre_embalagem_envio`) +
+  auxiliares. Compras de estoque e Tráfego Pago pagos no Bling ficam só no caixa (`so_caixa`). **Manuais**: taxas
+  descontadas na venda, mídia da planilha da agência, acertos sem caixa, reclassificações (valor negativo), anuidades ÷ 12.
+- **Caixa**: extrato do Bling (`dre_caixa_lancamentos`).
+- Classificação de cada lançamento: à mão (`dre_classificacao`, pelo id do Bling, sobrevive à atualização) > regra
+  de categoria + fornecedor > regra só da categoria (`dre_regras`); contas em `dre_plano` (aba **Plano e regras**).
+- **Auditoria**: ponte competência → caixa por linha (receitas por recebedor, porque Pagar.me e Mercado Pago misturam
+  canais); a soma das diferenças fecha exatamente. Saldos de cada banco (`dre_saldos`) conferidos com o movimento do
+  Bling; ajustes de saldo do Bling destacados.
+- **Fechamento**: checklist e cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
+  receitas, manuais, saldos e lançamentos do mês. Só admin reabre.
 
 ---
 
@@ -376,7 +397,9 @@ ajuste das embalagens vinculadas com a diferença (negativo devolve).
 **Sistema** — `configuracoes`, `usuarios`
 
 **Financeiro (DRE)** — `dre_contas_competencia`, `dre_receber_competencia`, `dre_caixa_lancamentos`,
-`dre_caixa` (balancete), `dre_mes` (cadeado), `dre_mapa` (classificação), `bling_contas` (cache da API)
+`dre_caixa` (balancete), `dre_mes` (cadeado), `bling_contas` (cache da API); DRE Laricas (`dre_laricas.sql`):
+`dre_plano`, `dre_regras`, `dre_classificacao`, `dre_receitas`, `dre_manuais`, `dre_saldos`. `dre_mapa` era da
+classificação antiga e não é mais usada.
 
 Tabelas `fin_*` pertencem ao módulo financeiro antigo, desativado.
 

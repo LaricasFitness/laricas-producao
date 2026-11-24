@@ -17,11 +17,16 @@
 // (bling_contas.sql, só a função lê). O detalhe é lido de novo quando o valor ou o vencimento mudam, ou
 // com `completo` (para pegar categoria/competência alteradas no Bling). A situação vem sempre da lista.
 //
+// POST {acao:'pedidos', mes:'AAAA-MM'}  pedidos de venda do mês no Bling (Em aberto + Atendido) por loja, sem os
+//   sem loja ("nenhuma"): quantidade, total e total dos produtos. Base do nº de pedidos (embalagem de envio)
+//   e da receita de Revenda e Venda direta pelas vendas do Bling.
+//
 // Escopos do app do Bling: Caixas e Bancos, Contas a Pagar, Contas a Receber,
 // Categorias - Receitas e Despesas e Contatos (mudar escopo derruba o acesso: reconectar na Expedição).
 
 import { exigirSessao } from './_sessao.mjs'
 import { ErroConexao, ErroLimite, banco, tokenBling, bling } from './_bling.mjs'
+import { lojas, situacoes } from './expedicao.mjs'
 
 export const config = { maxDuration: 60 }
 
@@ -229,6 +234,29 @@ async function itensContas(tk, db, fonte, c, de, ate) {
   return itens
 }
 
+// ───────────── Pedidos do mês ─────────────
+async function pedidosDoMes(tk, mes) {
+  const sit = await situacoes(tk), nomes = await lojas(tk)
+  const q0 = { limite: 100, dataInicial: mes + '-01', dataFinal: ultimoDia(mes), 'idsSituacoes[]': [sit.aberto, sit.atendido] }
+  const porLoja = {}, vistos = new Set()
+  for (let pg = 1; pg <= 80; pg++) {
+    const d = (await bling(tk, `/pedidos/vendas?${qs({ ...q0, pagina: pg })}`))?.data || []
+    let novos = 0
+    for (const p of d) {
+      if (vistos.has(p.id)) continue
+      vistos.add(p.id); novos++
+      const id = p.loja?.id || 0
+      if (!id) continue                              // loja "nenhuma": fora da contagem
+      const l = porLoja[id] ||= { lojaId: id, nome: nomes[id] || String(id), pedidos: 0, total: 0, totalProdutos: 0 }
+      l.pedidos++; l.total += Number(p.total) || 0; l.totalProdutos += Number(p.totalProdutos) || 0
+    }
+    if (d.length < 100 || !novos) break
+  }
+  const lista = Object.values(porLoja).map(l => ({ ...l, total: Math.round(l.total * 100) / 100, totalProdutos: Math.round(l.totalProdutos * 100) / 100 }))
+    .sort((a, b) => b.pedidos - a.pedidos)
+  return { mes, lojas: lista, pedidos: lista.reduce((t, l) => t + l.pedidos, 0), lidos: vistos.size }
+}
+
 // ───────────── Rota ─────────────
 
 export default async function handler(req, res) {
@@ -239,6 +267,12 @@ export default async function handler(req, res) {
     if (!ORIGENS.some(r => r.test(origem))) return res.status(403).json({ erro: 'Origem não autorizada' })
 
     const { acao, fonte, de, ate, completo } = req.body || {}
+    if (acao === 'pedidos') {
+      const mes = String(req.body.mes || '')
+      if (!/^d{4}-d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      const db = banco(), tk = await tokenBling(db)
+      return res.status(200).json(await pedidosDoMes(tk, mes))
+    }
     if (acao !== 'bling') return res.status(400).json({ erro: 'Ação inválida' })
     if (!['caixa', 'pagar', 'receber'].includes(fonte)) return res.status(400).json({ erro: 'Fonte inválida' })
     if (!DATA.test(de || '') || !DATA.test(ate || '') || de > ate) return res.status(400).json({ erro: 'Período inválido' })

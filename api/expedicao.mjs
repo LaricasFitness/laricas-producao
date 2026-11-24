@@ -48,7 +48,7 @@ const dormir = ms => new Promise(ok => setTimeout(ok, ms))
 // Nome das lojas (canais de venda) do Bling: { id: 'Shopify Laricas' }. Pede o escopo "Canais de venda"
 // no app do Bling; sem ele, volta vazio e a tela deduz o nome (Shopify pelo nº da loja).
 let LOJAS = null, LOJAS_EM = 0
-async function lojas(tk) {
+export async function lojas(tk) {
   if (LOJAS && Date.now() - LOJAS_EM < 3600e3) return LOJAS
   const mapa = {}
   try {
@@ -62,7 +62,7 @@ async function lojas(tk) {
 }
 
 let SITUACOES = null
-async function situacoes(tk) {
+export async function situacoes(tk) {
   if (SITUACOES) return SITUACOES
   let lista = []
   try {

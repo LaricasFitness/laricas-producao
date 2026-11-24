@@ -314,7 +314,7 @@ export function linhasBling(fonte, itens, hoje) {
     const sit = c => c.situacao === 2 ? 'Pago' : [3, 6].includes(c.situacao) ? 'Parcial'
       : !c.vencimento ? 'Em aberto' : c.vencimento < hoje ? 'Atrasada' : c.vencimento === hoje ? 'Vencendo hoje' : 'Em aberto'
     return contas.map(c => ({
-      competencia: c.competencia, vencimento_mes: c.vencimento ? `${c.vencimento.slice(5, 7)}/${c.vencimento.slice(0, 4)}` : null,
+      id_bling: c.id_bling, competencia: c.competencia, vencimento_mes: c.vencimento ? `${c.vencimento.slice(5, 7)}/${c.vencimento.slice(0, 4)}` : null,
       nome: c.nome, categoria: c.categoria, observacoes: c.historico, valor: c.valor, situacao: sit(c),
       vencimento: c.vencimento, data_baixa: null,
     }))
