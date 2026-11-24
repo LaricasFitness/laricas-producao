@@ -84,6 +84,9 @@ Uma tela por mês, abas na ordem do fechamento:
 - **Produtos que saíram sem venda**: pedidos do mês das lojas do Bling Bonificação, Ativação - Premiação, Ativação -
   Degustação e Marketing, e os da Shopify com voucher de metade ou mais (só a parte do voucher) (`api/financeiro` ações `pedidos` e `itens`),
   valorizados pela ficha (`custoPorSku` em `cmv.js`), saem do CMV e entram no marketing (`dre_mes.extras.cmv_marketing`).
+- **Taxas do Mercado Pago**: o relatório de Vendas (Faturamento das plataformas) lança sozinho, por mês da venda, as
+  taxas das vendas que não são Balcão nem Ativação (Pix do site, links) em `dre_manuais`; a fatura do Mercado Pago
+  não entra na competência (mistura Mercado Livre, Balcão e Ativação, que já trazem as taxas na comissão).
 - **Fretes** (`dre_fretes`, `dre_laricas_3.sql`, leitura em `src/lib/fretes.js`): extrato analítico da fatura dos
   Correios (.csv), Order Report da Lalamove e relatório de envios do Melhor Envio (.xlsx), cada envio no mês da
   data dele. As faturas e recargas dessas três no Bling ficam só no caixa.

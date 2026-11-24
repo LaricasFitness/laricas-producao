@@ -437,7 +437,7 @@ function TelaReceitas({ d, fechado, onSalvo }) {
 
 // ── Lançamentos manuais ───────────────────────────────────────────────────────
 const SUGESTOES = [
-  ['Pagar.me: taxas descontadas na venda', 'vc.cartao'], ['Mercado Pago: taxas descontadas na venda', 'vc.cartao'], ['Shopify Payments: taxas', 'vc.cartao'],
+  ['Pagar.me: taxas descontadas na venda', 'vc.cartao'], ['Shopify Payments: taxas', 'vc.cartao'],
   ['Shopify: checkout abandonado', 'vc.cartao'], ['Meta (planilha da agência)', 'vm.midia'], ['Google (planilha da agência)', 'vm.midia'],
   ['Fidelimax: anuidade ÷ 12', 'vm.ferr'],
 ]
@@ -764,8 +764,8 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Melhor Envio › Relatórios › Relatório de envios do mês (.xlsx). Manuais › Fretes pela data do envio. Mês sem envio: marque à mão.' },
     { id: 'midia', t: 'Meta e Google pela planilha da agência', auto: manuaisDe(/^vm\.midia$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vm\.midia$/).length} lançamento(s) de mídia`,
       como: 'Manuais › "+ Meta (planilha da agência)" e "+ Google (planilha da agência)" com o investimento do mês.' },
-    { id: 'taxas', t: 'Taxas descontadas na venda (Pagar.me, Mercado Pago, Shopify, checkout)', auto: manuaisDe(/^vc\.cartao$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vc\.cartao$/).length} lançamento(s) de taxas`,
-      como: 'Manuais › um lançamento para cada (relatório de cada plataforma).' },
+    { id: 'taxas', t: 'Taxas descontadas na venda (Mercado Pago, Pagar.me, Shopify, checkout)', auto: manuaisDe(/^vc\.cartao$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vc\.cartao$/).length} lançamento(s) de taxas`,
+      como: 'Mercado Pago: vem sozinho ao importar o relatório de Vendas (Importar e classificar › Faturamento das plataformas); Balcão e Ativação já trazem as taxas na comissão e o Mercado Livre, pela planilha dele. Não lance a fatura do Mercado Pago: ela mistura tudo isso. Pagar.me, Shopify Payments e checkout abandonado: um lançamento manual para cada.' },
     { id: 'anuidades', t: 'Anuidades ÷ 12 e acertos sem caixa', aba: 'manuais', det: `${d.manuais.length} lançamento(s) manuais no mês`,
       como: 'Manuais › Fidelimax (4.190 ÷ 12) e acertos como o da Dark Store. Marque quando conferir.' },
     { grupo: '4. CMV' },

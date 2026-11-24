@@ -676,6 +676,32 @@ const doForm = f => ({
   total_faturamento: String(f.total_faturamento ?? '').trim() === '' ? null : numTxt(f.total_faturamento),
 })
 
+// Taxas do Mercado Pago das vendas que não são Balcão nem Ativação (Pix do site, links de pagamento): vão para a
+// DRE de competência pelo mês da venda, como "Cartão e meios de pagamento" (dre_manuais, um lançamento por mês,
+// refeito a cada importação). As de Balcão e Ativação já ficam na comissão desses canais; as do Mercado Livre,
+// na comissão do Mercado Livre (planilha do ML). A fatura do Mercado Pago (cobrança) fica só no caixa.
+const DESC_TAXAS_MP = 'Mercado Pago: taxas do Pix do site e links (relatório de vendas)'
+async function gravarTaxasMercadoPago(taxasFora) {
+  const txt = {}
+  for (const [mes, valor] of Object.entries(taxasFora || {})) {
+    if (!valor) continue
+    try {
+      const { data: ja, error } = await supabase.from('dre_manuais').select('id, descricao, valor').eq('mes', mes).ilike('descricao', 'Mercado Pago%')
+      if (error) throw error
+      const antigos = (ja || []).filter(m => m.descricao !== DESC_TAXAS_MP)
+      if (antigos.length && window.confirm(`${rotuloMes(mes)}: o relatório de vendas dá R$ ${fmt(valor)} de taxas do Mercado Pago (Pix do site e links).\n\nApagar o(s) lançamento(s) manual(is) ${antigos.map(m => `"${m.descricao}" (R$ ${fmt(+m.valor)})`).join(', ')}, que viriam em dobro com as comissões do Mercado Livre, do Balcão e da Ativação?`)) {
+        const { error: e1 } = await supabase.from('dre_manuais').delete().in('id', antigos.map(m => m.id)); if (e1) throw e1
+      }
+      const { error: e2 } = await supabase.from('dre_manuais').delete().eq('mes', mes).eq('descricao', DESC_TAXAS_MP); if (e2) throw e2
+      const { error: e3 } = await supabase.from('dre_manuais').insert({ mes, descricao: DESC_TAXAS_MP, conta: 'vc.cartao', valor, por: usuarioNome() }); if (e3) throw e3
+      txt[mes] = `Taxas do Mercado Pago do Pix do site e links em ${rotuloMes(mes)}: R$ ${fmt(valor)}, lançadas na DRE (Cartão e meios de pagamento).`
+    } catch (e) {
+      txt[mes] = `Taxas do Mercado Pago do Pix do site e links em ${rotuloMes(mes)}: R$ ${fmt(valor)}. Não consegui lançar na DRE: ${/fechado/i.test(e.message) ? 'o mês está fechado.' : semTabela(e) ? 'aplique o dre_laricas.sql.' : e.message}`
+    }
+  }
+  return txt
+}
+
 function FaturamentoPlataformas({ onMudou }) {
   const [mes, setMes] = useState(mesPassado)
   const [todas, setTodas] = useState([])   // todos os meses: ensina nome da loja → unidade
@@ -730,11 +756,12 @@ function FaturamentoPlataformas({ onMudou }) {
           const { meses, fora, taxasFora } = lerRelatorioMercadoPago(await file.text())
           if (!meses.length) throw new Error('Nenhuma venda das lojas Ativação ou Loja no arquivo.')
           const txtFora = Object.entries(fora).map(([k, v]) => `${k}: R$ ${fmt(v)}`).join('; ')
+          const taxasTxt = await gravarTaxasMercadoPago(taxasFora)
           setFila(q => [...q, ...meses.map(e => naFila({
             ...paraForm(e), origem: 'planilha', arquivo: file.name,
             aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago (as taxas delas já entram na comissão deste canal).`
               + (txtFora ? ` Fora da DRE neste arquivo (já vêm de outras fontes): ${txtFora}.` : '')
-              + (taxasFora[e.mes] ? ` Taxas do Mercado Pago dessas outras vendas em ${rotuloMes(e.mes)}: R$ ${fmt(taxasFora[e.mes])} → lance em DRE › Manuais › "Mercado Pago: taxas descontadas na venda".` : ''),
+              + (taxasTxt[e.mes] ? ` ${taxasTxt[e.mes]}` : ''),
           }))])
           setLendo(n => n - 1)
           continue
