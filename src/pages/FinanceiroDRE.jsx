@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
@@ -30,10 +30,13 @@ export default function FinanceiroDRE() {
   const [d, setD] = useState(null)
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
+  const mesAtual = useRef(mes)
+  mesAtual.current = mes
   async function load() {
+    const alvo = mes
     setLoading(true); setErro('')
-    try { setD(await carregarMes(mes)) } catch (e) { setErro(erroMsg(e)); setD(null) }
-    setLoading(false)
+    try { const r = await carregarMes(alvo); if (mesAtual.current === alvo) setD(r) } catch (e) { if (mesAtual.current === alvo) { setErro(erroMsg(e)); setD(null) } }
+    if (mesAtual.current === alvo) setLoading(false)   // trocou de mês no meio: quem manda é a carga do mês novo
   }
   useEffect(() => { load() }, [mes])   // eslint-disable-line react-hooks/exhaustive-deps
   const fechado = !!d?.comp?.fechado_em
@@ -50,7 +53,8 @@ export default function FinanceiroDRE() {
         {ABAS.map(([id, nome]) => <button key={id} className={`tab${aba === id ? ' active' : ''}`} onClick={() => setAba(id)}>{nome}</button>)}
       </div>
       {erro && <div className="alert-banner danger">{erro}</div>}
-      {loading && !d ? <div className="loading"><RefreshCw size={14} className="spin" /></div> : d && <>
+      {/* key por mês: ao trocar o mês, cada aba recomeça com os dados do mês novo (sem levar o que estava digitado) */}
+      {!d || d.mes !== mes ? (loading && <div className="loading"><RefreshCw size={14} className="spin" /></div>) : <Fragment key={d.mes}>
         {aba === 'dre' && <TelaDRE d={d} />}
         {aba === 'auditoria' && <TelaAuditoria d={d} fechado={fechado} onSalvo={load} />}
         {aba === 'lanc' && <TelaLancamentos d={d} fechado={fechado} onSalvo={load} />}
@@ -58,7 +62,7 @@ export default function FinanceiroDRE() {
         {aba === 'manuais' && <TelaManuais d={d} fechado={fechado} onSalvo={load} />}
         {aba === 'plano' && <TelaPlano d={d} onSalvo={load} />}
         {aba === 'passos' && <TelaPassos d={d} onSalvo={load} irPara={setAba} />}
-      </>}
+      </Fragment>}
     </div>
   )
 }
