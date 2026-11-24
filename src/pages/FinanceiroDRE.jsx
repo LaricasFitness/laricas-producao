@@ -3,9 +3,10 @@ import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
-  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT,
+  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
+import { lerArquivoFrete, ORIGENS_FRETE } from '../lib/fretes'
 
 // Financeiro › DRE: regras em src/lib/dreLaricas.js. Abas na ordem do fechamento do mês.
 
@@ -69,6 +70,7 @@ function DescItem({ x, visao }) {
   if (x.tipo === 'cmv') return <>Fechamento de estoque: {x.c.nome} {x.c.ef_origem === 'calculado' && <span className="pill warning">estoque final calculado</span>}{x.c.ef_origem === 'producao' && <span className="pill warning">pela produção</span>}</>
   if (x.tipo === 'envio') return <>{fmt(x.pedidos, 0)} pedidos × R$ {fmt(x.valor / x.pedidos)} por pedido</>
   if (x.tipo === 'manual') return <>Manual: {x.m.descricao}</>
+  if (x.tipo === 'frete') return <>Fretes {ORIGENS_FRETE[x.f.origem]}: {x.f.envios} lançamento(s) pela data do envio <span style={{ color: 'var(--gray-500)' }}>({x.f.docs.join(', ')})</span></>
   if (x.tipo === 'rateio') return <>Rateio: {x.r.descricao} <span className="pill neutral">parcela {x.parcela}/{x.r.parcelas}</span></>
   if (x.tipo === 'cmvmkt') return <>Produtos sem venda: {x.g.nome} ({x.g.pedidos} pedido(s), custo da ficha)</>
   const l = x.l
@@ -159,6 +161,37 @@ function TelaDRE({ d }) {
 }
 
 // ── Auditoria ─────────────────────────────────────────────────────────────────
+// CMV do caixa ao consumo: compras pagas → compras recebidas → estoque inicial e final → CMV da DRE
+function ConciliacaoCMV({ d }) {
+  const c = useMemo(() => conciliacaoCMV(d), [d])
+  const L = (t, v, det, forte) => <tr style={forte ? { fontWeight: 800, background: 'var(--purple-pale)' } : undefined}><td>{t}{det && <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>{det}</div>}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{v == null ? '' : brl(v)}</td></tr>
+  const bloco = (nome, x, pago) => [
+    <tr key={nome}><td colSpan={2} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>{nome}</td></tr>,
+    L('Compras pagas no mês (caixa)', pago, 'o que saiu do banco para fornecedores desta categoria'),
+    L('Compras recebidas no mês (entradas de estoque)', x.compras, 'diferença para as pagas = compras a prazo deste mês − pagamentos de compras de meses anteriores'),
+    L('+ Estoque no início do mês', x.ei), L('− Estoque no fim do mês', -x.ef, 'contagem (ou calculado, se não houve contagem)'),
+    L('= Consumido pelo estoque', x.cmvEstoque, null, true),
+    x.pelaProducao ? L('+ Itens sem contagem, pela produção × ficha', x.pelaProducao) : null,
+  ]
+  return (
+    <div className="card">
+      <div style={{ padding: '10px 14px', fontWeight: 800, borderBottom: '1px solid var(--gray-100)' }}>CMV: do caixa ao consumo <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--gray-500)' }}>
+        (o caixa mostra as compras; o CMV é o que foi consumido: estoque inicial + compras − estoque final)</span></div>
+      {d.cmvProvisorio && <div className="alert-banner warning" style={{ margin: 10 }}>CMV provisório: o mês ainda não teve o estoque fechado.</div>}
+      <div className="tbl-wrap"><table><tbody>
+        {bloco('Matéria-prima', c.mp, c.pagoMP)}
+        {bloco('Embalagem do produto', c.emb, c.pagoEmb)}
+        <tr><td colSpan={2} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>Ajustes da DRE</td></tr>
+        {L('+ Embalagem de envio (pedidos × R$ por pedido)', c.envio, `pago no caixa: ${brl(c.pagoEnvio)}`)}
+        {L('+ Insumos auxiliares (contas a pagar por competência)', c.insumos, `pago no caixa: ${brl(c.pagoInsumos)}`)}
+        {c.marketing ? L('− Produtos que saíram sem venda (vão para marketing)', -c.marketing) : null}
+        {c.manuais ? L('± Lançamentos manuais no CMV', c.manuais) : null}
+        {L('= CMV da DRE de competência', c.cmvDRE, `CMV do caixa (tudo que foi pago): ${brl(c.pagoTotal)}`, true)}
+      </tbody></table></div>
+    </div>
+  )
+}
+
 function TelaAuditoria({ d, fechado, onSalvo }) {
   const p = useMemo(() => ponte(d), [d])
   const [abertos, setAbertos] = useState(new Set())
@@ -203,6 +236,7 @@ function TelaAuditoria({ d, fechado, onSalvo }) {
         </table></div>
         {!fechado && <div style={{ padding: 10 }}><button className="btn btn-primary btn-sm" onClick={salvarSaldos} disabled={salvando}><Save size={13} /> Salvar saldos</button></div>}
       </div>
+      <ConciliacaoCMV d={d} />
       <div className="card">
         <div style={{ padding: '10px 14px', fontWeight: 800, borderBottom: '1px solid var(--gray-100)' }}>Ponte competência → caixa <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--gray-500)' }}>(efeito de cada linha no resultado; clique para ver os lançamentos dos dois lados)</span></div>
         <div className="tbl-wrap"><table>
@@ -436,8 +470,56 @@ function TelaManuais({ d, fechado, onSalvo }) {
       {!fechado && faltam.length > 0 && <div className="card card-pad" style={{ fontSize: 12 }}>
         <b>Costumam entrar todo mês:</b> {faltam.map(([desc, conta]) => <button key={desc} className="btn btn-ghost btn-sm" style={{ margin: 3 }} onClick={() => setNovo({ descricao: desc, conta, valor: '' })}>+ {desc}</button>)}
       </div>}
+      <Fretes d={d} fechado={fechado} onSalvo={onSalvo} />
       <ProdutosMarketing d={d} fechado={fechado} onSalvo={onSalvo} />
       <Rateios d={d} fechado={fechado} onSalvo={onSalvo} />
+    </div>
+  )
+}
+
+// ── Fretes por competência: relatórios dos Correios, da Lalamove e do Melhor Envio ─────────────
+function Fretes({ d, fechado, onSalvo }) {
+  const [lidos, setLidos] = useState([])
+  const [msg, setMsg] = useState(null)
+  const [ocupado, setOcupado] = useState(false)
+  async function ler(files) {
+    setMsg(null); const out = []
+    for (const f of files) { try { out.push({ nome: f.name, ...(await lerArquivoFrete(f)) }) } catch (e) { setMsg({ tipo: 'danger', txt: e.message }) } }
+    setLidos(out)
+  }
+  async function gravar() {
+    setOcupado(true); setMsg(null)
+    try {
+      const quem = usuario().nome || null
+      const linhas = lidos.flatMap(l => l.linhas).map(l => ({ ...l, por: quem }))
+      for (let i = 0; i < linhas.length; i += 500) {
+        const { error } = await supabase.from('dre_fretes').upsert(linhas.slice(i, i + 500), { onConflict: 'chave' })
+        if (error) throw error
+      }
+      setLidos([]); setMsg({ tipo: 'ok', txt: `${linhas.length} envio(s) gravados. Cada um conta no mês da data do envio.` }); onSalvo()
+    } catch (e) { setMsg({ tipo: 'danger', txt: /fechado/i.test(e.message) ? e.message + ' (algum envio é de um mês já fechado)' : erroMsg(e) }) }
+    setOcupado(false)
+  }
+  const doMes = {}
+  for (const f of d.fretes || []) { const o = doMes[f.origem] ||= { n: 0, v: 0 }; o.n++; o.v += +f.valor }
+  const resumo = l => { const m = {}; for (const x of l.linhas) m[x.mes] = (m[x.mes] || 0) + x.valor; return Object.entries(m).sort().map(([k, v]) => `${rotuloMes(k)}: ${brl(v)}`).join(' · ') }
+  return (
+    <div className="card">
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)' }}><b>Fretes pela data do envio</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
+        (Correios: extrato analítico da fatura, .csv · Lalamove: Order Report, .xlsx · Melhor Envio: relatório de envios, .xlsx. As faturas e recargas dessas três no Bling ficam só no caixa)</span></div>
+      <div style={{ padding: 10, display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
+        {Object.entries(ORIGENS_FRETE).map(([k, nome]) => <span key={k}>{nome}: {doMes[k] ? <b>{brl(doMes[k].v)}</b> : <span style={{ color: 'var(--danger)' }}>sem relatório</span>}{doMes[k] && <span style={{ color: 'var(--gray-500)' }}> ({doMes[k].n})</span>}</span>)}
+      </div>
+      {!fechado && <div style={{ padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <input type="file" multiple accept=".csv,.xlsx" onChange={e => ler([...e.target.files])} />
+        {lidos.map(l => <div key={l.nome} style={{ fontSize: 12 }}>
+          <b>{ORIGENS_FRETE[l.origem]}</b> · {l.documento} · {l.linhas.length} lançamento(s) · {brl(l.linhas.reduce((t, x) => t + x.valor, 0))}
+          {l.totalArquivo != null && (Math.abs(l.totalArquivo - l.linhas.reduce((t, x) => t + x.valor, 0)) < 0.01 ? <span className="pill ok" style={{ marginLeft: 4 }}>bate com o total da fatura</span> : <span className="pill danger" style={{ marginLeft: 4 }}>total da fatura: {brl(l.totalArquivo)}</span>)}
+          <div style={{ color: 'var(--gray-500)' }}>{resumo(l)}</div>
+        </div>)}
+        {lidos.length > 0 && <div><button className="btn btn-primary btn-sm" onClick={gravar} disabled={ocupado}><Save size={13} /> Gravar fretes</button></div>}
+      </div>}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ margin: 10 }}>{msg.txt}</div>}
     </div>
   )
 }
@@ -463,13 +545,13 @@ function ProdutosMarketing({ d, fechado, onSalvo }) {
       for (let volta = 0; faltam.length && volta < 60; volta++) {
         setOcupado(`Lendo os itens: ${marketing.length - faltam.length}/${marketing.length}`)
         const r = await chamarFin({ acao: 'itens', ids: faltam.slice(0, 40) })
-        for (const p of r.pedidos) itens[p.id] = p.itens
+        for (const p of r.pedidos) itens[p.id] = p
         faltam = [...(r.faltam || []), ...faltam.slice(40)]
         if (r.faltam?.length) await new Promise(ok => setTimeout(ok, 3000))
       }
       if (faltam.length) throw new Error(`O Bling não devolveu ${faltam.length} pedido(s). Tente de novo em instantes.`)
       setOcupado('Calculando o custo pela ficha…')
-      const novos = await custoMarketing(marketing.map(p => ({ ...p, itens: itens[String(p.id)] || [] })))
+      const novos = await custoMarketing(marketing.map(p => ({ ...p, ...(itens[String(p.id)] || { itens: [] }) })))
       const agora = new Date().toISOString()
       const { error } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao: 'competencia', extras: { ...(d.comp?.extras || {}), cmv_marketing: novos, cmv_marketing_em: agora }, atualizado_em: agora }, { onConflict: 'mes,visao' })
       if (error) throw error
@@ -482,7 +564,7 @@ function ProdutosMarketing({ d, fechado, onSalvo }) {
     <div className="card">
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: 1 }}><b>Produtos que saíram sem venda</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-          (lojas do Bling {Object.values(TIPOS_MKT).filter(([n]) => !/Shopify/.test(n)).map(([n]) => n).join(', ')} e pedidos da Shopify pagos 100% com voucher):
+          (lojas do Bling {Object.values(TIPOS_MKT).filter(([n]) => !/Shopify/.test(n)).map(([n]) => n).join(', ')} e pedidos da Shopify com voucher):
           saem do CMV pelo custo da ficha e entram no marketing</span></div>
         {!fechado && <button className="btn btn-ghost btn-sm" onClick={buscar} disabled={!!ocupado}><RefreshCw size={13} className={ocupado ? 'spin' : ''} /> {grupos.length ? 'Atualizar do Bling' : 'Buscar no Bling'}</button>}
       </div>
@@ -499,7 +581,7 @@ function ProdutosMarketing({ d, fechado, onSalvo }) {
               <td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(g.mp + g.emb)}</td>
             </tr>,
             aberto === g.tipo && <tr key={g.tipo + ':d'}><td colSpan={6} style={{ background: 'var(--gray-50)', fontSize: 12 }}>
-              {g.itens.map(it => <div key={it.codigo}>{fmt(it.qtd, 0)} × {it.descricao || it.codigo} <span style={{ color: 'var(--gray-500)' }}>({it.codigo}: {brl(it.mpUnit + it.embUnit)} cada)</span></div>)}
+              {g.itens.map(it => <div key={it.codigo}>{fmt(it.qtd, Number.isInteger(it.qtd) ? 0 : 1)} × {it.descricao || it.codigo} <span style={{ color: 'var(--gray-500)' }}>({it.codigo}: {brl(it.mpUnit + it.embUnit)} cada)</span></div>)}
               {g.semFicha?.length > 0 && <div style={{ color: 'var(--danger)', marginTop: 4 }}>Sem ficha no sistema (não entraram; se precisar, lance em Manuais): {g.semFicha.map(x => `${x.qtd} × ${x.codigo}`).join(', ')}</div>}
             </td></tr>,
           ])}
@@ -637,6 +719,8 @@ function TelaFechamento({ d, onSalvo, irPara }) {
     ['Receitas lançadas', recVazias.length <= 2, recVazias.length ? `sem valor: ${recVazias.join(', ')}` : 'todos os canais com valor', 'receitas'],
     ['Pedidos do mês (embalagem de envio)', totalPedidos(d) > 0, `${fmt(totalPedidos(d), 0)} pedidos`, 'receitas'],
     ['CMV fechado (estoque)', !d.cmvProvisorio && d.cmv.length > 0, d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`, null],
+    ['Fretes dos Correios, Lalamove e Melhor Envio importados', ['correios', 'lalamove', 'melhorenvio'].every(o => (d.fretes || []).some(f => f.origem === o)),
+      `${(d.fretes || []).length} envio(s) do mês; faltando: ${['correios', 'lalamove', 'melhorenvio'].filter(o => !(d.fretes || []).some(f => f.origem === o)).map(o => ORIGENS_FRETE[o]).join(', ') || 'nenhum'}`, 'manuais'],
     ['Produtos sem venda (marketing) lidos do Bling', !!d.comp?.extras?.cmv_marketing_em,
       d.comp?.extras?.cmv_marketing_em ? `${brl((d.comp.extras.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'em Manuais › Produtos que saíram sem venda › Buscar no Bling', 'manuais'],
     ['Lançamentos manuais revisados', d.manuais.length > 0, `${d.manuais.length} lançamento(s): taxas, mídia, influenciadores, anuidades`, 'manuais'],

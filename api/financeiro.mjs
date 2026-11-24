@@ -20,7 +20,7 @@
 // POST {acao:'pedidos', mes:'AAAA-MM'}  pedidos de venda do mês no Bling (Em aberto + Atendido) por loja, sem os
 //   sem loja ("nenhuma"): quantidade, total e total dos produtos. Base do nº de pedidos (embalagem de envio)
 //   e da receita de Revenda e Venda direta pelas vendas do Bling. Também lista os pedidos de produto para
-//   marketing (lojas Bonificação, Ativação - Premiação, Ativação - Degustação, Marketing e Shopify 100% voucher).
+//   marketing (lojas Bonificação, Ativação - Premiação, Ativação - Degustação, Marketing e Shopify com voucher de metade ou mais).
 // POST {acao:'itens', ids:[...]}  itens (código, quantidade) de até 40 pedidos; `faltam` se o Bling pediu pausa.
 //
 // Escopos do app do Bling: Caixas e Bancos, Contas a Pagar, Contas a Receber,
@@ -251,9 +251,10 @@ async function pedidosDoMes(tk, mes) {
       if (!id) continue                              // loja "nenhuma": fora da contagem
       const l = porLoja[id] ||= { lojaId: id, nome: nomes[id] || String(id), pedidos: 0, total: 0, totalProdutos: 0 }
       l.pedidos++; l.total += Number(p.total) || 0; l.totalProdutos += Number(p.totalProdutos) || 0
-      // produto que saiu sem venda: lojas de marketing e pedidos da Shopify pagos 100% com voucher
+      // produto que saiu sem venda: lojas de marketing e pedidos da Shopify pagos com voucher
       const tipo = LOJAS_MKT.find(([re]) => re.test(l.nome))?.[1]
-        || ((/shopify/i.test(l.nome) || /^\d{10,}$/.test(p.numeroLoja || '')) && (Number(p.totalProdutos) || 0) > 0 && (Number(p.total) || 0) <= 0.01 ? 'voucher' : null)
+        || ((/shopify/i.test(l.nome) || /^\d{10,}$/.test(p.numeroLoja || '')) && (Number(p.totalProdutos) || 0) > 0
+          && (Number(p.total) || 0) <= VOUCHER_MIN * Number(p.totalProdutos) ? 'voucher' : null)
       if (tipo) marketing.push({ id: p.id, numero: p.numero, tipo, loja: l.nome })
     }
     if (d.length < 100 || !novos) break
@@ -264,6 +265,9 @@ async function pedidosDoMes(tk, mes) {
 }
 // Lojas do Bling cujos pedidos são produto para marketing (o nome da loja decide)
 const LOJAS_MKT = [[/bonifica/i, 'bonificacao'], [/premia/i, 'premiacao'], [/degusta/i, 'degustacao'], [/marketing/i, 'marketing']]
+// Shopify: pedido em que o cliente pagou no máximo metade dos produtos (voucher de influenciador/presente).
+// A parte paga pelo voucher sai do CMV; cupom comum (10%, 20%) continua desconto de venda.
+const VOUCHER_MIN = 0.5
 
 // Itens (código e quantidade) de até 40 pedidos. Limite do Bling no meio: devolve o que leu e os que faltam.
 async function itensDosPedidos(tk, ids) {
@@ -271,7 +275,8 @@ async function itensDosPedidos(tk, ids) {
   for (let i = 0; i < ids.length; i++) {
     try {
       const d = (await bling(tk, `/pedidos/vendas/${ids[i]}`))?.data
-      pedidos.push({ id: ids[i], itens: (d?.itens || []).map(it => ({ codigo: it.codigo || '', descricao: it.descricao || '', quantidade: Number(it.quantidade) || 0 })) })
+      pedidos.push({ id: ids[i], itens: (d?.itens || []).map(it => ({ codigo: it.codigo || '', descricao: it.descricao || '', quantidade: Number(it.quantidade) || 0 })),
+        totalProdutos: Number(d?.totalProdutos) || 0, total: Number(d?.total) || 0, frete: Number(d?.transporte?.frete) || 0 })
     } catch (e) {
       if (e instanceof ErroLimite) return { pedidos, faltam: ids.slice(i) }
       throw e

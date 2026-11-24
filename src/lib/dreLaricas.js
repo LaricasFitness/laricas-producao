@@ -12,7 +12,7 @@ import { calcularCMVMes, custoPorSku } from './cmv'
 // senão pela regra da categoria + fornecedor, senão pela regra só da categoria (dre_regras).
 // Auditoria: ponte competência → caixa linha a linha, e o caixa conferido com os saldos dos bancos (dre_saldos).
 // Rateios (dre_rateios): despesa dividida em parcelas mensais. Produto que saiu sem venda (lojas de marketing do
-// Bling e Shopify com voucher 100%) sai do CMV pelo custo da ficha e entra no marketing (dre_mes.extras.cmv_marketing).
+// Bling e Shopify com voucher, só a parte que o voucher pagou) sai do CMV pelo custo da ficha e entra no marketing (dre_mes.extras.cmv_marketing).
 
 // Blocos fixos da DRE, na ordem. sinal: +1 soma no resultado, −1 subtrai
 export const GRUPOS = [
@@ -63,13 +63,14 @@ export async function carregarMes(mes) {
     buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('*').eq('mes', mes).order('data')),
     buscarTudo(() => supabase.from('dre_receitas').select('*').eq('mes', mes).order('ordem')),
     buscarTudo(() => supabase.from('dre_manuais').select('*').eq('mes', mes).order('em')),
-    buscarTudo(() => supabase.from('fechamento_cmv').select('tipo, nome, categoria, cmv_valor, ef_origem').eq('mes', mes)),
+    buscarTudo(() => supabase.from('fechamento_cmv').select('tipo, nome, categoria, cmv_valor, ef_origem, ei_valor, compras_valor, atrasadas_valor, ef_valor').eq('mes', mes)),
     buscarTudo(() => supabase.from('dre_saldos').select('*').in('mes', [ant, mes])),
     buscarTudo(() => supabase.from('dre_mes').select('*').eq('mes', mes)),
     supabase.from('configuracoes').select('valor').eq('chave', 'dre_embalagem_envio').maybeSingle(),
   ])
-  let rateios = []
+  let rateios = [], fretes = []
   try { rateios = await buscarTudo(() => supabase.from('dre_rateios').select('*').order('mes_inicio')) } catch { /* dre_laricas_2.sql não aplicado */ }
+  try { fretes = await buscarTudo(() => supabase.from('dre_fretes').select('origem, data, valor, documento').eq('mes', mes).order('data')) } catch { /* dre_laricas_3.sql não aplicado */ }
   // CMV: fechado (congelado) ou, no mês aberto, o provisório calculado agora
   let cmv = fech, cmvProvisorio = false
   if (!cmv.length) {
@@ -77,7 +78,7 @@ export async function carregarMes(mes) {
   }
   const visao = v => dreMes.find(r => r.visao === v) || null
   return {
-    mes, plano, regras, classif, pagar, caixa, receitas, manuais, cmv, cmvProvisorio, rateios,
+    mes, plano, regras, classif, pagar, caixa, receitas, manuais, cmv, cmvProvisorio, rateios, fretes,
     saldos: saldos.filter(s => s.mes === mes), saldosAnt: saldos.filter(s => s.mes === ant),
     comp: visao('competencia'), cx: visao('caixa'),
     envioPorPedido: parseFloat(cfg?.data?.valor) || 1.75,
@@ -119,24 +120,30 @@ export const parcelaDoMes = (r, mes) => {
 // Produto que saiu sem venda: sai do CMV (pelo custo da ficha) e entra no marketing
 export const TIPOS_MKT = {
   degustacao: ['Ativação - Degustação', 'vm.ativ'], premiacao: ['Ativação - Premiação', 'vm.ativ'],
-  marketing: ['Marketing', 'vm.influ'], voucher: ['Shopify com voucher 100%', 'vm.influ'], bonificacao: ['Bonificação', 'vm.bonif'],
+  marketing: ['Marketing', 'vm.influ'], voucher: ['Shopify com voucher', 'vm.influ'], bonificacao: ['Bonificação', 'vm.bonif'],
 }
 
-// pedidos: [{ id, numero, tipo, loja, itens: [{ codigo, descricao, quantidade }] }] → grupos para dre_mes.extras.cmv_marketing
+// Voucher: parte dos produtos paga pelo desconto (o resto o cliente pagou e continua custo da venda)
+export const parteVoucher = p => p.totalProdutos > 0
+  ? Math.min(1, Math.max(0, (p.totalProdutos + (p.frete || 0) - p.total) / p.totalProdutos)) : 1
+
+// pedidos: [{ id, numero, tipo, loja, itens: [{ codigo, descricao, quantidade }], totalProdutos, total, frete }]
+// → grupos para dre_mes.extras.cmv_marketing
 export async function custoMarketing(pedidos) {
   const custo = await custoPorSku()
   const grupos = {}
   for (const p of pedidos) {
     const [nome, conta] = TIPOS_MKT[p.tipo] || [p.tipo, 'vm.outros']
     const g = grupos[p.tipo] ||= { tipo: p.tipo, nome, conta, pedidos: 0, mp: 0, emb: 0, itens: {}, semFicha: {} }
+    const f = p.tipo === 'voucher' ? parteVoucher(p) : 1
     g.pedidos++
     for (const it of p.itens || []) {
-      const c = custo(it.codigo)
+      const c = custo(it.codigo), q = it.quantidade * f
       const chave = it.codigo || it.descricao
-      if (!c) { g.semFicha[chave] = (g.semFicha[chave] || 0) + it.quantidade; continue }
+      if (!c) { g.semFicha[chave] = (g.semFicha[chave] || 0) + q; continue }
       const x = g.itens[it.codigo] ||= { codigo: it.codigo, descricao: it.descricao, qtd: 0, mpUnit: c.mpUnit, embUnit: c.embUnit }
-      x.qtd += it.quantidade
-      g.mp += c.mpUnit * it.quantidade; g.emb += c.embUnit * it.quantidade
+      x.qtd += q
+      g.mp += c.mpUnit * q; g.emb += c.embUnit * q
     }
   }
   return Object.values(grupos).map(g => ({ ...g, mp: Math.round(g.mp * 100) / 100, emb: Math.round(g.emb * 100) / 100,
@@ -157,6 +164,10 @@ export function montar(d, visao) {
     const ped = totalPedidos(d)
     if (ped) add('cmv.envio', ped * d.envioPorPedido, { tipo: 'envio', pedidos: ped })
     for (const m of d.manuais) if (+m.valor) add(m.conta, +m.valor, { tipo: 'manual', m })
+    // fretes dos relatórios das transportadoras, pela data do envio (um item por transportadora)
+    const porOrigem = {}
+    for (const f of d.fretes || []) { const o = porOrigem[f.origem] ||= { origem: f.origem, envios: 0, valor: 0, docs: new Set() }; o.envios++; o.valor += +f.valor; o.docs.add(f.documento) }
+    for (const o of Object.values(porOrigem)) add('vc.frete', Math.round(o.valor * 100) / 100, { tipo: 'frete', f: { ...o, docs: [...o.docs] } })
     for (const r of d.rateios || []) { const p = parcelaDoMes(r, d.mes); if (p) add(r.conta, p.valor, { tipo: 'rateio', r, parcela: p.n }) }
     for (const g of d.comp?.extras?.cmv_marketing || []) {
       const conta = planoDe[g.conta] ? g.conta : 'vm.outros'
@@ -258,4 +269,32 @@ export function ponte(d) {
     return { banco: b, mov, ini: ini ? +ini.saldo : null, fim: fim ? +fim.saldo : null, varBanco: ini && fim ? +fim.saldo - +ini.saldo : null }
   })
   return { linhas, ll, resCx, porBanco }
+}
+
+// ── CMV: do caixa ao consumo ─────────────────────────────────────────────────
+// CMV por estoque = estoque inicial + compras recebidas no mês − estoque final (PEPS, fechamento_cmv).
+// O caixa só mostra as compras pagas; a diferença para as recebidas é o que ficou a pagar (ou foi pago de
+// meses anteriores), e a diferença entre recebidas e consumo é o que ficou (ou saiu) do estoque.
+export function conciliacaoCMV(d) {
+  const vc = montar(d, 'competencia'), vx = montar(d, 'caixa')
+  const soma = (xs, k) => xs.reduce((t, x) => t + (+x[k] || 0), 0)
+  const porTipo = tipo => {
+    const est = d.cmv.filter(c => c.tipo === tipo && c.ei_valor != null && c.ef_valor != null)
+    const prod = d.cmv.filter(c => c.tipo === tipo && (c.ei_valor == null || c.ef_valor == null))
+    return { ei: soma(est, 'ei_valor'), compras: soma(est, 'compras_valor') + soma(est, 'atrasadas_valor'), ef: soma(est, 'ef_valor'),
+      cmvEstoque: soma(est, 'cmv_valor'), pelaProducao: soma(prod, 'cmv_valor') }
+  }
+  const contasCmv = d.plano.filter(p => p.grupo === 'cmv').map(p => p.id)
+  const itensCx = contasCmv.flatMap(k => vx[k]?.itens || [])
+  const pago = k => (vx[k]?.valor || 0)
+  const mkt = (d.comp?.extras?.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0)
+  return {
+    mp: porTipo('mp'), emb: porTipo('emb'),
+    envio: vc['cmv.envio']?.itens.filter(x => x.tipo === 'envio').reduce((t, x) => t + x.valor, 0) || 0,
+    insumos: vc['cmv.insumos']?.valor || 0, marketing: mkt,
+    manuais: contasCmv.flatMap(k => vc[k]?.itens || []).filter(x => x.tipo === 'manual').reduce((t, x) => t + x.valor, 0),
+    cmvDRE: calcular(vc, d.plano).cmv,
+    pagoMP: pago('cmv.mp'), pagoEmb: pago('cmv.emb'), pagoEnvio: pago('cmv.envio'), pagoInsumos: pago('cmv.insumos'),
+    pagoTotal: itensCx.reduce((t, x) => t + x.valor, 0),
+  }
 }
