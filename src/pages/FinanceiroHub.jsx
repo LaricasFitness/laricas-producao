@@ -322,7 +322,7 @@ function AtualizarBling({ onImportou }) {
       const { data: fech } = await supabase.from('dre_mes').select('mes, visao').not('fechado_em', 'is', null).in('mes', meses)
       setRes({ fontes, fechados: new Set((fech || []).map(r => `${r.mes}|${r.visao}`)) })
     } catch (e) {
-      setMsg({ tipo: 'danger', txt: e.reconectar ? `${e.message} Reconecte em Expedição › Conectar o Bling.` : 'Erro ao buscar no Bling: ' + e.message })
+      setMsg({ tipo: 'danger', txt: e.reconectar ? e.message : 'Erro ao buscar no Bling: ' + e.message, reconectar: !!e.reconectar })
     }
     setProg(''); setOcupado(false)
   }
@@ -418,7 +418,7 @@ function AtualizarBling({ onImportou }) {
           <span style={{ fontSize: 12, color: 'var(--gray-500)', marginLeft: 10 }}>Transferências entre contas entram no caixa, mas ficam fora da DRE (como no arquivo).</span>
         </div>
       )}
-      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}</div>}
+      {msg && <div className={`alert-banner ${msg.tipo}`} style={{ marginTop: 10 }}>{msg.txt}{msg.reconectar && <> <a className="btn btn-primary btn-sm" style={{ marginLeft: 8 }} href="/api/expedicao?acao=conectar">Reconectar o Bling</a></>}</div>}
     </div>
   )
 }
