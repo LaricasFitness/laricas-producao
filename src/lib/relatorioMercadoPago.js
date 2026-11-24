@@ -21,7 +21,7 @@ export function lerRelatorioMercadoPago(texto) {
   const col = k => cab.indexOf(k)
   const ix = { data: col('date_created'), status: col('status'), valor: col('transaction_amount'), tarifa: col('mercadopago_fee'),
     plataforma: col('marketplace_fee'), cupom: col('coupon_fee'), liquido: col('net_received_amount'), devolvido: col('amount_refunded'),
-    parcelamento: col('financing_fee'), loja: col('description'), pagamento: col('payment_type'), motivo: col('reason') }
+    parcelamento: col('financing_fee'), marketplace: col('marketplace'), loja: col('description'), pagamento: col('payment_type'), motivo: col('reason') }
   if (ix.data < 0 || ix.valor < 0 || ix.loja < 0) {
     throw new Error('Não reconheci o arquivo: esperava o relatório de Vendas do Mercado Pago (.csv), com a coluna "Nome da loja".')
   }
@@ -40,6 +40,10 @@ export function lerRelatorioMercadoPago(texto) {
     // tarifas e descontos vêm com sinal negativo no relatório: no lançamento ficam positivos
     const pos = i => i >= 0 ? Math.abs(num(r[i])) : 0
     if (!canal) {
+      // vendas do Mercado Livre também aparecem aqui (com a tarifa do ML em marketplace_fee): receita e tarifas
+      // já vêm da planilha do Mercado Livre, então ficam de fora inteiras
+      const ehML = pos(ix.plataforma) > 0 || (ix.marketplace >= 0 && /MELI|mercado ?livre/i.test(r[ix.marketplace] || ''))
+      if (ehML) { fora['Mercado Livre (já vem da planilha do ML)'] = (fora['Mercado Livre (já vem da planilha do ML)'] || 0) + valor; continue }
       const k = /^loja$/i.test(loja) ? 'Loja antes de jul/26 (já em Venda Direta)' : loja ? `Loja ${loja}` : 'Sem loja (Pix do site, links de pagamento)'
       fora[k] = (fora[k] || 0) + valor
       // taxas dessas vendas não entram na receita de nenhum canal: vão em Manuais (Mercado Pago: taxas)
