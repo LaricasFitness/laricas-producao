@@ -296,7 +296,8 @@ async function shopifyDosPedidos(numerosLoja) {
 function regraNatureza(loja, numeroLoja, shp) {
   const L = semAcento(loja)
   const fixa = (nat, motivo) => ({ esperada: nat, aceita: n => semAcento(n) === nat, motivo, manual: false })
-  if (/SHOPIFY/.test(L) || /^\d{10,}$/.test(numeroLoja || '')) {
+  // nº longo na loja só indica Shopify quando o nome da loja não veio (o Mercado Livre também tem nº longo)
+  if (/SHOPIFY/.test(L) || (!L && /^\d{10,}$/.test(numeroLoja || ''))) {
     if (!shp) return { ...fixa(NAT.consumidor, 'Shopify: não achei o pedido na Shopify para conferir o pagamento'), manual: true }
     const vouchers = shp.cupons.filter(c => /^voucher/i.test(c))
     if (shp.total <= 0.009 && vouchers.length) return fixa(NAT.bonificacao, `Shopify: ${vouchers.join(', ')} cobre 100% (nada pago)`)
