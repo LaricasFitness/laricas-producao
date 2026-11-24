@@ -33,7 +33,7 @@ export default function Conexoes() {
         return <div key={c.id} className="conexao-linha" title={ok ? 'Conectado' : c.dica || 'Desconectado'}>
           <span className="conexao-ponto" style={{ background: ok ? '#4caf7a' : '#e05a5a' }} />
           <span style={{ flex: 1 }}>{c.nome}</span>
-          {c.conectar && <a className="conexao-btn" href={c.conectar}>{ok ? 'reconectar' : 'conectar'}</a>}
+          {c.conectar && !ok && <a className="conexao-btn" href={c.conectar}>conectar</a>}
           {!c.conectar && !ok && <span className="conexao-falta">sem chave</span>}
         </div>
       })}
