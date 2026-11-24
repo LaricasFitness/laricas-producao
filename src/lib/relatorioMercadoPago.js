@@ -25,7 +25,7 @@ export function lerRelatorioMercadoPago(texto) {
   if (ix.data < 0 || ix.valor < 0 || ix.loja < 0) {
     throw new Error('Não reconheci o arquivo: esperava o relatório de Vendas do Mercado Pago (.csv), com a coluna "Nome da loja".')
   }
-  const grupos = {}, fora = {}
+  const grupos = {}, fora = {}, taxasFora = {}
   for (const r of linhas) {
     const mes = mesDe(r[ix.data])
     if (!mes) continue
@@ -37,16 +37,18 @@ export function lerRelatorioMercadoPago(texto) {
     if (/^ativa[cç][aã]o$/i.test(loja) || (/^loja$/i.test(loja) && ATIVACAO_NA_LOJA.includes(dia))) canal = 'Ativação'
     else if (/^loja$/i.test(loja) && mes >= BALCAO_DESDE) canal = 'Balcão'
     const valor = num(r[ix.valor])
+    // tarifas e descontos vêm com sinal negativo no relatório: no lançamento ficam positivos
+    const pos = i => i >= 0 ? Math.abs(num(r[i])) : 0
     if (!canal) {
       const k = /^loja$/i.test(loja) ? 'Loja antes de jul/26 (já em Venda Direta)' : loja ? `Loja ${loja}` : 'Sem loja (Pix do site, links de pagamento)'
       fora[k] = (fora[k] || 0) + valor
+      // taxas dessas vendas não entram na receita de nenhum canal: vão em Manuais (Mercado Pago: taxas)
+      taxasFora[mes] = (taxasFora[mes] || 0) + pos(ix.tarifa) + pos(ix.parcelamento) + pos(ix.plataforma)
       continue
     }
     const g = grupos[`${canal}|${mes}`] || (grupos[`${canal}|${mes}`] = { canal, mes, vendas: 0, n: 0, tarifa: 0, parcelamento: 0, plataforma: 0, cupom: 0, devolvido: 0, liquido: 0 })
     g.n++
     g.vendas += valor
-    // tarifas e descontos vêm com sinal negativo no relatório: no lançamento ficam positivos
-    const pos = i => i >= 0 ? Math.abs(num(r[i])) : 0
     g.tarifa += pos(ix.tarifa); g.parcelamento += pos(ix.parcelamento)
     g.plataforma += pos(ix.plataforma); g.cupom += pos(ix.cupom)
     g.devolvido += pos(ix.devolvido)
@@ -67,5 +69,6 @@ export function lerRelatorioMercadoPago(texto) {
       ].filter(d => Math.abs(d.valor) >= 0.005),
     }
   })
-  return { meses, fora: Object.fromEntries(Object.entries(fora).map(([k, v]) => [k, r2(v)])) }
+  return { meses, fora: Object.fromEntries(Object.entries(fora).map(([k, v]) => [k, r2(v)])),
+    taxasFora: Object.fromEntries(Object.entries(taxasFora).map(([k, v]) => [k, r2(v)])) }
 }

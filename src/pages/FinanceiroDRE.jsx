@@ -69,6 +69,7 @@ function DescItem({ x, visao }) {
   if (x.tipo === 'receitaLiq') return <>{x.r.canal}: bruto {brl(+x.r.bruto)} − descontos {brl(+x.r.descontos)} − comissão {brl(+x.r.comissao)}</>
   if (x.tipo === 'cmv') return <>Fechamento de estoque: {x.c.nome} {x.c.ef_origem === 'calculado' && <span className="pill warning">estoque final calculado</span>}{x.c.ef_origem === 'producao' && <span className="pill warning">pela produção</span>}</>
   if (x.tipo === 'envio') return <>{fmt(x.pedidos, 0)} pedidos × R$ {fmt(x.valor / x.pedidos)} por pedido</>
+  if (x.tipo === 'sacola') return <>Ativação: {fmt(x.pedidos, 0)} vendas × 1 sacola de R$ {fmt(x.unit)}</>
   if (x.tipo === 'manual') return <>Manual: {x.m.descricao}</>
   if (x.tipo === 'frete') return <>Fretes {ORIGENS_FRETE[x.f.origem]}: {x.f.envios} lançamento(s) pela data do envio <span style={{ color: 'var(--gray-500)' }}>({x.f.docs.join(', ')})</span></>
   if (x.tipo === 'rateio') return <>Rateio: {x.r.descricao} <span className="pill neutral">parcela {x.parcela}/{x.r.parcelas}</span></>
@@ -352,17 +353,19 @@ function TelaReceitas({ d, fechado, onSalvo }) {
   const [pedBling, setPedBling] = useState(d.comp?.extras?.pedidos_bling ?? '')
   const [porLoja, setPorLoja] = useState(d.comp?.extras?.pedidos_bling_lojas || [])
   const [envio, setEnvio] = useState(String(d.envioPorPedido).replace('.', ','))
+  const [sacola, setSacola] = useState(d.sacolaAtivacao ? String(d.sacolaAtivacao).replace('.', ',') : '')
   const [msg, setMsg] = useState(null)
   const [ocupado, setOcupado] = useState(false)
   const set = (i, k, v) => setLinhas(ls => ls.map((r, j) => j === i ? { ...r, [k]: v } : r))
   const tot = k => linhas.reduce((t, r) => t + num(r[k]), 0)
-  const pedTotal = tot('pedidos') + num(pedBling)
+  const pedAtiv = linhas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + num(r.pedidos), 0)
+  const pedTotal = tot('pedidos') - pedAtiv + num(pedBling)
 
   // Preenche o que estiver vazio com o que o sistema já tem: plataformas (Importar e classificar) e vendas do Bling
   async function preencher() {
     setOcupado(true); setMsg(null)
     try {
-      const { data: canais, error } = await supabase.from('dre_canal_competencia').select('canal, unidade, vendas, promocoes, taxas, servicos, ajustes').eq('mes', d.mes)
+      const { data: canais, error } = await supabase.from('dre_canal_competencia').select('canal, unidade, vendas, promocoes, taxas, servicos, ajustes, detalhes').eq('mes', d.mes)
       if (error) throw error
       const r = await fetch('/api/financeiro', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ acao: 'pedidos', mes: d.mes }) })
       const bl = await r.json().catch(() => ({}))
@@ -371,8 +374,10 @@ function TelaReceitas({ d, fechado, onSalvo }) {
       setLinhas(ls => ls.map(row => {
         const c = (canais || []).find(x => nomeCanal(x) === row.canal)
         const loja = (bl.lojas || []).find(l => new RegExp(`^${row.canal === 'Venda direta' ? 'venda direta' : row.canal}`, 'i').test(l.nome))
-        if (num(row.bruto)) return row
-        if (c) { n++; return { ...row, bruto: +c.vendas || '', descontos: +c.promocoes || '', comissao: ((+c.taxas || 0) + (+c.servicos || 0) - (+c.ajustes || 0)) || '' } }
+        // nº de vendas do relatório ("Vendas (133)"), para a sacola da ativação e os pedidos dos deliverys
+        const nVendas = +(String((c?.detalhes || []).find(x => x.grupo === 'vendas')?.descricao || '').match(/\((\d+)/) || [])[1] || 0
+        if (num(row.bruto)) return nVendas && !num(row.pedidos) ? { ...row, pedidos: nVendas } : row
+        if (c) { n++; return { ...row, pedidos: num(row.pedidos) || nVendas || '', bruto: +c.vendas || '', descontos: +c.promocoes || '', comissao: ((+c.taxas || 0) + (+c.servicos || 0) - (+c.ajustes || 0)) || '' } }
         if (loja && ['Revenda', 'Venda direta'].includes(row.canal)) { n++; return { ...row, bruto: loja.totalProdutos || loja.total, descontos: Math.max(0, Math.round(((loja.totalProdutos || 0) - (loja.total || 0)) * 100) / 100) || '' } }
         return row
       }))
@@ -391,6 +396,7 @@ function TelaReceitas({ d, fechado, onSalvo }) {
       const { error: e2 } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao: 'competencia', extras: { ...(d.comp?.extras || {}), pedidos_bling: Math.round(num(pedBling)), pedidos_bling_lojas: porLoja }, atualizado_em: agora }, { onConflict: 'mes,visao' })
       if (e2) throw e2
       if (num(envio) && num(envio) !== d.envioPorPedido) { const { error: e3 } = await supabase.from('configuracoes').update({ valor: String(num(envio)) }).eq('chave', 'dre_embalagem_envio'); if (e3) throw e3 }
+      if (num(sacola) !== d.sacolaAtivacao) { const { error: e4 } = await supabase.from('configuracoes').upsert({ chave: 'dre_sacola_ativacao', valor: String(num(sacola)), descricao: 'DRE: custo da sacola por venda de ativação' }, { onConflict: 'chave' }); if (e4) throw e4 }
       onSalvo()
     } catch (e) { setMsg({ tipo: 'danger', txt: erroMsg(e) }) }
     setOcupado(false)
@@ -410,7 +416,7 @@ function TelaReceitas({ d, fechado, onSalvo }) {
           {linhas.map((r, i) => <tr key={r.canal}>
             <td style={{ fontWeight: 600 }}>{r.canal}</td><td style={{ fontSize: 12, color: 'var(--gray-500)' }}>{d.plano.find(p => p.id === r.conta)?.nome}</td>
             <td style={{ textAlign: 'right' }}>{inp(i, 'bruto')}</td><td style={{ textAlign: 'right' }}>{inp(i, 'descontos')}</td><td style={{ textAlign: 'right' }}>{inp(i, 'comissao')}</td>
-            <td style={{ textAlign: 'right' }}>{r.conta === 'rec.delivery' ? inp(i, 'pedidos', 80) : <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>no Bling</span>}</td>
+            <td style={{ textAlign: 'right' }}>{['rec.delivery', 'rec.ativ'].includes(r.conta) ? inp(i, 'pedidos', 80) : <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>no Bling</span>}</td>
           </tr>)}
           <tr style={{ fontWeight: 700, background: 'var(--gray-50)' }}><td>Total</td><td /><td style={{ textAlign: 'right' }}>{brl(tot('bruto'))}</td><td style={{ textAlign: 'right' }}>{brl(tot('descontos'))}</td><td style={{ textAlign: 'right' }}>{brl(tot('comissao'))}</td><td style={{ textAlign: 'right' }}>{fmt(tot('pedidos'), 0)}</td></tr>
         </tbody>
@@ -419,6 +425,8 @@ function TelaReceitas({ d, fechado, onSalvo }) {
         <label>Pedidos do Bling (atendidos + em aberto, sem a loja "nenhuma") <input className="form-input" style={{ width: 90, textAlign: 'right' }} disabled={fechado} value={pedBling} onChange={e => setPedBling(e.target.value)} /></label>
         <label>R$ por pedido <input className="form-input" style={{ width: 70, textAlign: 'right' }} disabled={fechado} value={envio} onChange={e => setEnvio(e.target.value)} /></label>
         <span><b>{fmt(pedTotal, 0)}</b> pedidos × R$ {envio} = <b>{brl(pedTotal * num(envio))}</b> de embalagem de envio</span>
+        <label>Sacola por venda de ativação R$ <input className="form-input" style={{ width: 70, textAlign: 'right' }} disabled={fechado} placeholder="0,00" value={sacola} onChange={e => setSacola(e.target.value)} /></label>
+        <span>{pedAtiv ? <><b>{fmt(pedAtiv, 0)}</b> vendas de ativação × R$ {sacola || '0'} = <b>{brl(pedAtiv * num(sacola))}</b></> : <span style={{ color: 'var(--gray-500)' }}>informe o nº de vendas na linha Ativação</span>}{pedAtiv > 0 && !num(sacola) && <span className="pill warning" style={{ marginLeft: 4 }}>falta o custo da sacola</span>}</span>
         {porLoja.length > 0 && <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>{porLoja.map(l => `${l.nome}: ${l.pedidos}`).join(' · ')}</span>}
       </div>
       {msg && <div className={`alert-banner ${msg.tipo}`}>{msg.txt}</div>}
@@ -598,6 +606,8 @@ function Rateios({ d, fechado, onSalvo }) {
   const [novo, setNovo] = useState({ descricao: '', conta: 'vo.equip', valor_total: '', parcelas: '12', mes_inicio: d.mes })
   const ativos = (d.rateios || []).map(r => ({ r, p: parcelaDoMes(r, d.mes) })).filter(x => x.p)
   const futuros = (d.rateios || []).filter(r => r.mes_inicio > d.mes)
+  const vMes = montar(d, 'competencia')
+  const doBling = ['vo.equip', 'vo.manut'].flatMap(k => (vMes[k]?.itens || []).filter(x => x.tipo === 'pagar').map(x => ({ ...x, conta: k }))).sort((a, b) => b.valor - a.valor)
   async function adicionar() {
     if (!novo.descricao || !num(novo.valor_total) || !(+novo.parcelas >= 2)) return alert('Preencha descrição, valor total e parcelas (2 ou mais).')
     const { error } = await supabase.from('dre_rateios').insert({ ...novo, valor_total: num(novo.valor_total), parcelas: +novo.parcelas, por: usuario().nome || null })
@@ -637,6 +647,11 @@ function Rateios({ d, fechado, onSalvo }) {
         </tbody>
       </table></div>
       {futuros.length > 0 && <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--gray-500)' }}>{futuros.length} rateio(s) começam depois deste mês.</div>}
+      {doBling.length > 0 && <details style={{ padding: '6px 14px 10px', fontSize: 12 }}>
+        <summary style={{ cursor: 'pointer' }}>Equipamentos e manutenção que vêm do Bling neste mês: {doBling.length} lançamento(s) · <b>{brl(doBling.reduce((t, x) => t + x.valor, 0))}</b>
+          <span style={{ color: 'var(--gray-500)' }}> (compras parceladas no cartão já estão no Bling uma parcela por mês; por isso não aparecem como rateio)</span></summary>
+        {doBling.map((x, i) => <div key={i} style={{ padding: '2px 0' }}>{x.l.nome}: {x.l.observacoes || x.l.categoria} · <b>{brl(x.valor)}</b> <span style={{ color: 'var(--gray-500)' }}>({d.plano.find(p => p.id === x.conta)?.nome})</span></div>)}
+      </details>}
     </div>
   )
 }

@@ -66,7 +66,7 @@ export async function carregarMes(mes) {
     buscarTudo(() => supabase.from('fechamento_cmv').select('tipo, nome, categoria, cmv_valor, ef_origem, ei_valor, compras_valor, atrasadas_valor, ef_valor').eq('mes', mes)),
     buscarTudo(() => supabase.from('dre_saldos').select('*').in('mes', [ant, mes])),
     buscarTudo(() => supabase.from('dre_mes').select('*').eq('mes', mes)),
-    supabase.from('configuracoes').select('valor').eq('chave', 'dre_embalagem_envio').maybeSingle(),
+    supabase.from('configuracoes').select('chave, valor').in('chave', ['dre_embalagem_envio', 'dre_sacola_ativacao']),
   ])
   let rateios = [], fretes = []
   try { rateios = await buscarTudo(() => supabase.from('dre_rateios').select('*').order('mes_inicio')) } catch { /* dre_laricas_2.sql não aplicado */ }
@@ -81,7 +81,8 @@ export async function carregarMes(mes) {
     mes, plano, regras, classif, pagar, caixa, receitas, manuais, cmv, cmvProvisorio, rateios, fretes,
     saldos: saldos.filter(s => s.mes === mes), saldosAnt: saldos.filter(s => s.mes === ant),
     comp: visao('competencia'), cx: visao('caixa'),
-    envioPorPedido: parseFloat(cfg?.data?.valor) || 1.75,
+    envioPorPedido: parseFloat(cfg?.data?.find(x => x.chave === 'dre_embalagem_envio')?.valor) || 1.75,
+    sacolaAtivacao: parseFloat(cfg?.data?.find(x => x.chave === 'dre_sacola_ativacao')?.valor) || 0,
   }
 }
 
@@ -150,7 +151,9 @@ export async function custoMarketing(pedidos) {
     itens: Object.values(g.itens).sort((a, b) => b.qtd - a.qtd), semFicha: Object.entries(g.semFicha).map(([codigo, qtd]) => ({ codigo, qtd })) }))
 }
 
-export const totalPedidos = d => d.receitas.reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
+// Pedidos que levam embalagem de envio (deliverys + Bling); as vendas de ativação levam só uma sacola cada
+export const totalPedidos = d => d.receitas.filter(r => r.conta !== 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
+export const pedidosAtivacao = d => d.receitas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0)
 export function montar(d, visao) {
   const planoDe = Object.fromEntries(d.plano.map(p => [p.id, p]))
   const v = {}, add = (k, valor, item) => { (v[k] ||= { valor: 0, itens: [] }); v[k].valor += valor; v[k].itens.push({ ...item, valor }) }
@@ -163,6 +166,8 @@ export function montar(d, visao) {
     for (const c of d.cmv) if (+c.cmv_valor) add(c.tipo === 'mp' ? 'cmv.mp' : 'cmv.emb', +c.cmv_valor, { tipo: 'cmv', c })
     const ped = totalPedidos(d)
     if (ped) add('cmv.envio', ped * d.envioPorPedido, { tipo: 'envio', pedidos: ped })
+    const ativ = pedidosAtivacao(d)
+    if (ativ && d.sacolaAtivacao) add('cmv.envio', ativ * d.sacolaAtivacao, { tipo: 'sacola', pedidos: ativ, unit: d.sacolaAtivacao })
     for (const m of d.manuais) if (+m.valor) add(m.conta, +m.valor, { tipo: 'manual', m })
     // fretes dos relatórios das transportadoras, pela data do envio (um item por transportadora)
     const porOrigem = {}
@@ -290,7 +295,7 @@ export function conciliacaoCMV(d) {
   const mkt = (d.comp?.extras?.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0)
   return {
     mp: porTipo('mp'), emb: porTipo('emb'),
-    envio: vc['cmv.envio']?.itens.filter(x => x.tipo === 'envio').reduce((t, x) => t + x.valor, 0) || 0,
+    envio: vc['cmv.envio']?.itens.filter(x => x.tipo === 'envio' || x.tipo === 'sacola').reduce((t, x) => t + x.valor, 0) || 0,
     insumos: vc['cmv.insumos']?.valor || 0, marketing: mkt,
     manuais: contasCmv.flatMap(k => vc[k]?.itens || []).filter(x => x.tipo === 'manual').reduce((t, x) => t + x.valor, 0),
     cmvDRE: calcular(vc, d.plano).cmv,

@@ -727,12 +727,14 @@ function FaturamentoPlataformas({ onMudou }) {
       try {
         if (ehCsv(file)) {
           // Mercado Pago (relatório de Vendas): Ativação e Balcão por mês da compra
-          const { meses, fora } = lerRelatorioMercadoPago(await file.text())
+          const { meses, fora, taxasFora } = lerRelatorioMercadoPago(await file.text())
           if (!meses.length) throw new Error('Nenhuma venda das lojas Ativação ou Loja no arquivo.')
           const txtFora = Object.entries(fora).map(([k, v]) => `${k}: R$ ${fmt(v)}`).join('; ')
           setFila(q => [...q, ...meses.map(e => naFila({
             ...paraForm(e), origem: 'planilha', arquivo: file.name,
-            aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago.${txtFora ? ` Fora da DRE neste arquivo (já vêm de outras fontes): ${txtFora}.` : ''}`,
+            aviso: `${e.pedidos} venda(s) de ${rotuloMes(e.mes)} no Mercado Pago (as taxas delas já entram na comissão deste canal).`
+              + (txtFora ? ` Fora da DRE neste arquivo (já vêm de outras fontes): ${txtFora}.` : '')
+              + (taxasFora[e.mes] ? ` Taxas do Mercado Pago dessas outras vendas em ${rotuloMes(e.mes)}: R$ ${fmt(taxasFora[e.mes])} → lance em DRE › Manuais › "Mercado Pago: taxas descontadas na venda".` : ''),
           }))])
           setLendo(n => n - 1)
           continue
