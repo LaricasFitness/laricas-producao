@@ -94,7 +94,8 @@ Uma tela por mês, abas na ordem do fechamento:
 - **Auditoria**: ponte competência → caixa por linha (receitas por recebedor, porque Pagar.me e Mercado Pago misturam
   canais); a soma das diferenças fecha exatamente. Saldos de cada banco (`dre_saldos`) conferidos com o movimento do
   Bling; ajustes de saldo do Bling destacados.
-- **Fechamento**: checklist e cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
+- **Passo a passo** (primeira aba): os passos do mês na ordem, com ✓ automática quando o sistema encontra o que foi
+  feito e ✓ à mão nos de conferência (`dre_mes.extras.passos`); no fim, o cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
   receitas, manuais, saldos e lançamentos do mês. Só admin reabre.
 
 ---
@@ -224,7 +225,9 @@ contam os dias trabalhados (mesma regra da conferência: seg a sex, menos feriad
 | Logística | Baixa dos pedidos enviados | houve baixa hoje ("X de Y" do picking anterior é informação: Revenda e Venda Direta não passam pela baixa) |
 | Estoque | Contagem semanal de MP e de embalagens (⭐) | todos os ⭐ contados desde a segunda; aparece no último dia trabalhado da semana e, se ficar pendente, como atrasada na semana seguinte |
 | Estoque | Contagem completa do mês | todos os itens ativos contados nos últimos 3 dias do mês; atrasada até o dia 5 |
-| Financeiro | Fechar a DRE do mês anterior | competência e caixa com cadeado (a partir do dia 5) |
+| Financeiro | Importar os relatórios da Lalamove e do Melhor Envio do mês anterior | dia 1 a 5 (`dre_fretes`) |
+| Financeiro | Importar a fatura dos Correios (extrato analítico) | dia 16 (a fatura fecha dia 15) |
+| Financeiro | Fechar a DRE do mês anterior | passo a passo e cadeado, a partir do dia 16 |
 
 **Admin › Acompanhamento de tarefas** (`src/pages/AcompanhamentoTarefas.jsx`, primeira aba do Admin): as mesmas
 tarefas de todas as áreas nos últimos 5–15 dias trabalhados, numa grade tarefa × dia — feita (sozinha ou à mão),

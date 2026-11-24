@@ -91,3 +91,16 @@ export async function lerArquivoFrete(arquivo) {
   if (/Relatório de envios/i.test(ls[0]?.[0] || '') || ls.some(l => l[0] === 'Código de envio')) return lerMelhorEnvio(ls)
   throw new Error(`${arquivo.name}: planilha não reconhecida (Lalamove Order Report ou Melhor Envio Relatório de envios).`)
 }
+
+// O mês está completo? Correios: a fatura fecha dia 15, então o mês precisa de duas faturas (envios até o dia 15
+// e depois do dia 16). Lalamove e Melhor Envio: o relatório do mês. linhas: [{ origem, data }] do mês.
+export function situacaoFretes(linhas, mes) {
+  const de = o => linhas.filter(l => l.origem === o)
+  const c = de('correios')
+  const ini = c.some(l => String(l.data) <= `${mes}-15`), fim = c.some(l => String(l.data) >= `${mes}-16`)
+  return {
+    correios: { ok: ini && fim, detalhe: ini && fim ? `${c.length} lançamento(s)` : !c.length ? 'nenhuma fatura' : !ini ? 'falta a fatura que fecha dia 15 deste mês' : 'falta a fatura que fecha dia 15 do mês seguinte' },
+    lalamove: { ok: de('lalamove').length > 0, detalhe: de('lalamove').length ? `${de('lalamove').length} corrida(s)` : 'sem relatório' },
+    melhorenvio: { ok: de('melhorenvio').length > 0, detalhe: de('melhorenvio').length ? `${de('melhorenvio').length} etiqueta(s)` : 'sem relatório' },
+  }
+}

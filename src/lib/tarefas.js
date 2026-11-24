@@ -1,6 +1,7 @@
 import { supabase } from '../supabase'
 import { iso, hojeISO, motivoFolga, carregarDiasSemProducao } from './diasProducao'
 import { semOcultos } from './sazonal'
+import { situacaoFretes } from './fretes'
 
 // Tarefas do dia (página Hoje). Cada tarefa é de uma área do menu: o usuário vê só as das áreas que acessa
 // (admin vê todas). A ✓ vem sozinha quando o sistema encontra o registro da tarefa, ou alguém marca à mão
@@ -174,12 +175,43 @@ export const TAREFAS = [
     },
   },
   {
-    id: 'financeiro_dre', area: 'financeiro', titulo: 'Fechar a DRE do mês anterior (cadeado)', quando: 'A partir do dia 5',
+    id: 'financeiro_fretes', area: 'financeiro', titulo: 'Importar os relatórios do mês anterior da Lalamove e do Melhor Envio', quando: 'Dia 1 a 5',
     ir: ['financeiro', 'dre'],
     instancias: c => {
-      if (+c.hoje.slice(8, 10) < 5) return []
       const ant = somar(c.hoje.slice(0, 7) + '-01', -1).slice(0, 7)
-      return [{ ref: ant, prazo: `${c.hoje.slice(0, 7)}-05`, soSePendente: c.hoje.slice(8, 10) > '10' }]
+      return [{ ref: ant, prazo: `${c.hoje.slice(0, 7)}-05`, soSePendente: c.hoje.slice(8, 10) > '05' }]
+    },
+    async verificar(ref) {
+      const { data, error } = await supabase.from('dre_fretes').select('origem, data, por, em').eq('mes', ref).in('origem', ['lalamove', 'melhorenvio'])
+      if (error) return { feito: false, detalhe: 'Aplique o dre_laricas_3.sql no Supabase.' }
+      const s = situacaoFretes(data || [], ref)
+      return { feito: s.lalamove.ok && s.melhorenvio.ok, detalhe: `Lalamove: ${s.lalamove.detalhe} · Melhor Envio: ${s.melhorenvio.detalhe} (mês sem envio: marque à mão)`,
+        ...quemQuando(data, 'por', 'em', true) }
+    },
+  },
+  {
+    id: 'financeiro_correios', area: 'financeiro', titulo: 'Importar a fatura dos Correios (extrato analítico .csv)', quando: 'Dia 16 (a fatura fecha dia 15)',
+    ir: ['financeiro', 'dre'],
+    instancias: c => {
+      if (+c.hoje.slice(8, 10) < 16) return []
+      // a fatura que fecha dia 15 completa o mês anterior (envios do dia 16 ao fim)
+      const ant = somar(c.hoje.slice(0, 7) + '-01', -1).slice(0, 7)
+      return [{ ref: ant, prazo: `${c.hoje.slice(0, 7)}-16`, soSePendente: c.hoje.slice(8, 10) > '20' }]
+    },
+    async verificar(ref) {
+      const { data, error } = await supabase.from('dre_fretes').select('origem, data, por, em').eq('mes', ref).eq('origem', 'correios')
+      if (error) return { feito: false, detalhe: 'Aplique o dre_laricas_3.sql no Supabase.' }
+      const s = situacaoFretes(data || [], ref)
+      return { feito: s.correios.ok, detalhe: `Correios de ${ref.slice(5, 7)}/${ref.slice(0, 4)}: ${s.correios.detalhe}`, ...quemQuando(data, 'por', 'em', true) }
+    },
+  },
+  {
+    id: 'financeiro_dre', area: 'financeiro', titulo: 'Fechar a DRE do mês anterior (passo a passo e cadeado)', quando: 'A partir do dia 16 (depois da fatura dos Correios)',
+    ir: ['financeiro', 'dre'],
+    instancias: c => {
+      if (+c.hoje.slice(8, 10) < 16) return []
+      const ant = somar(c.hoje.slice(0, 7) + '-01', -1).slice(0, 7)
+      return [{ ref: ant, prazo: `${c.hoje.slice(0, 7)}-20`, soSePendente: c.hoje.slice(8, 10) > '25' }]
     },
     async verificar(ref) {
       const { data } = await supabase.from('dre_mes').select('visao, fechado_em, fechado_por').eq('mes', ref)

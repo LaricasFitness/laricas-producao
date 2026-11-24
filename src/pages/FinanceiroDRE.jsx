@@ -3,10 +3,10 @@ import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
-  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV,
+  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
-import { lerArquivoFrete, ORIGENS_FRETE } from '../lib/fretes'
+import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
 
 // Financeiro › DRE: regras em src/lib/dreLaricas.js. Abas na ordem do fechamento do mês.
 
@@ -22,11 +22,11 @@ const ehAdmin = () => usuario().perfil === 'admin'
 const COMO = { manual: ['à mão', 'warning'], fornecedor: ['regra do fornecedor', 'purple'], categoria: ['regra da categoria', 'neutral'] }
 const erroMsg = e => /does not exist|schema cache|42P01/i.test(e?.message || '') ? 'Aplique o dre_laricas.sql no Supabase.' : (e?.message || String(e))
 
-const ABAS = [['dre', '📋 DRE'], ['auditoria', '🔎 Auditoria'], ['lanc', '🧾 Lançamentos'], ['receitas', '💰 Receitas'], ['manuais', '✍️ Manuais'], ['plano', '🗂️ Plano e regras'], ['fechamento', '🔒 Fechamento']]
+const ABAS = [['passos', '✅ Passo a passo'], ['dre', '📋 DRE'], ['auditoria', '🔎 Auditoria'], ['lanc', '🧾 Lançamentos'], ['receitas', '💰 Receitas'], ['manuais', '✍️ Manuais'], ['plano', '🗂️ Plano e regras']]
 
 export default function FinanceiroDRE() {
   const [mes, setMes] = useState(mesAnterior(new Date().toISOString().slice(0, 7)))
-  const [aba, setAba] = useState('dre')
+  const [aba, setAba] = useState('passos')
   const [d, setD] = useState(null)
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
@@ -57,7 +57,7 @@ export default function FinanceiroDRE() {
         {aba === 'receitas' && <TelaReceitas d={d} fechado={fechado} onSalvo={load} />}
         {aba === 'manuais' && <TelaManuais d={d} fechado={fechado} onSalvo={load} />}
         {aba === 'plano' && <TelaPlano d={d} onSalvo={load} />}
-        {aba === 'fechamento' && <TelaFechamento d={d} onSalvo={load} irPara={setAba} />}
+        {aba === 'passos' && <TelaPassos d={d} onSalvo={load} irPara={setAba} />}
       </>}
     </div>
   )
@@ -705,34 +705,79 @@ function TelaPlano({ d, onSalvo }) {
   )
 }
 
-// ── Fechamento do mês ─────────────────────────────────────────────────────────
-function TelaFechamento({ d, onSalvo, irPara }) {
+// ── Passo a passo do mês (e o cadeado no fim) ────────────────────────────────
+// Cada passo tem ✓ automática quando o sistema encontra o que foi feito; os que dependem de conferência (ou que
+// não se aplicam no mês) são marcados à mão e ficam em dre_mes.extras.passos.
+function TelaPassos({ d, onSalvo, irPara }) {
   const vc = montar(d, 'competencia'), vx = montar(d, 'caixa'), c = calcular(vc, d.plano), p = ponte(d)
+  const fechado = !!d.comp?.fechado_em
+  const marcados = d.comp?.extras?.passos || {}
   const semComp = vc._sem?.itens.length || 0, semCx = (vx._sem?.itens.length || 0) + (vx._semrec?.itens.length || 0)
   const ultimaSync = [...d.pagar, ...d.caixa].map(l => l.importado_em).filter(Boolean).sort().pop()
-  const recVazias = CANAIS.filter(([canal]) => !d.receitas.some(r => r.canal === canal && (+r.bruto || +r.descontos))).map(([c]) => c)
+  const syncOk = !!ultimaSync && ultimaSync.slice(0, 10) > ultimoDia(d.mes)
+  const temRec = canais => canais.filter(canal => !d.receitas.some(r => r.canal === canal && (+r.bruto || +r.descontos)))
+  const nomes = conta => CANAIS.filter(([, k]) => k === conta).map(([n]) => n)
+  const faltaDelivery = temRec([...nomes('rec.delivery'), ...nomes('rec.mkt')])
+  const faltaSite = temRec(['Site', 'Clube de assinatura', 'Balcão'])
+  const faltaB2b = temRec(['Revenda', 'Venda direta'])
+  const fr = situacaoFretes(d.fretes || [], d.mes)
+  const manuaisDe = re => d.manuais.filter(m => re.test(m.conta))
   const bancosOk = p.porBanco.length > 0 && p.porBanco.every(b => b.varBanco != null && Math.abs(b.varBanco - b.mov) < 1)
-  const fechado = !!d.comp?.fechado_em
-  const itens = [
-    ['Bling atualizado', !!ultimaSync, ultimaSync ? `última gravação: ${new Date(ultimaSync).toLocaleString('pt-BR')}` : 'rode "Atualizar do Bling" em Importar e classificar', null],
-    ['Todos os lançamentos classificados', !semComp && !semCx, semComp || semCx ? `${semComp} na competência e ${semCx} no caixa sem conta` : 'nenhum sem conta', 'lanc'],
-    ['Receitas lançadas', recVazias.length <= 2, recVazias.length ? `sem valor: ${recVazias.join(', ')}` : 'todos os canais com valor', 'receitas'],
-    ['Pedidos do mês (embalagem de envio)', totalPedidos(d) > 0, `${fmt(totalPedidos(d), 0)} pedidos`, 'receitas'],
-    ['CMV fechado (estoque)', !d.cmvProvisorio && d.cmv.length > 0, d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`, null],
-    ['Fretes dos Correios, Lalamove e Melhor Envio importados', ['correios', 'lalamove', 'melhorenvio'].every(o => (d.fretes || []).some(f => f.origem === o)),
-      `${(d.fretes || []).length} envio(s) do mês; faltando: ${['correios', 'lalamove', 'melhorenvio'].filter(o => !(d.fretes || []).some(f => f.origem === o)).map(o => ORIGENS_FRETE[o]).join(', ') || 'nenhum'}`, 'manuais'],
-    ['Produtos sem venda (marketing) lidos do Bling', !!d.comp?.extras?.cmv_marketing_em,
-      d.comp?.extras?.cmv_marketing_em ? `${brl((d.comp.extras.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'em Manuais › Produtos que saíram sem venda › Buscar no Bling', 'manuais'],
-    ['Lançamentos manuais revisados', d.manuais.length > 0, `${d.manuais.length} lançamento(s): taxas, mídia, influenciadores, anuidades`, 'manuais'],
-    ['Saldos dos bancos batem com o Bling', bancosOk, bancosOk ? 'todas as contas conferem' : 'lance os saldos e confira na Auditoria', 'auditoria'],
+  const mkt = d.comp?.extras?.cmv_marketing
+  const PASSOS = [
+    { grupo: '1. Bling' },
+    { id: 'bling', t: 'Atualizar do Bling depois do fim do mês', auto: syncOk, det: ultimaSync ? `última gravação: ${new Date(ultimaSync).toLocaleString('pt-BR')}` : 'nunca atualizado',
+      como: 'Financeiro › Importar e classificar › Atualizar do Bling › Gravar as três fontes. Repita se mudar algo no Bling.' },
+    { id: 'classificar', t: 'Classificar os lançamentos sem conta', auto: !semComp && !semCx, aba: 'lanc', det: semComp || semCx ? `${semComp} na competência e ${semCx} no caixa sem conta` : 'nenhum sem conta',
+      como: 'Lançamentos › filtro "⚠ Sem classificação", nas contas a pagar e no extrato. Se uma categoria inteira está errada, corrija em Plano e regras.' },
+    { id: 'rateios', t: 'Ratear compras grandes do mês (equipamento, obra) e conferir os rateios', aba: 'lanc', det: `${(d.rateios || []).filter(r => parcelaDoMes(r, d.mes)).length} rateio(s) correndo neste mês`,
+      como: 'Lançamentos › botão "Ratear" na conta do Bling. Os rateios do mês aparecem no fim da aba Manuais.' },
+    { grupo: '2. Receitas' },
+    { id: 'rec_delivery', t: 'Deliverys e marketplace: bruto, promoções, comissão e pedidos', auto: !faltaDelivery.length, aba: 'receitas', det: faltaDelivery.length ? `sem valor: ${faltaDelivery.join(', ')}` : 'todos com valor',
+      como: 'Lance o faturamento das plataformas (Importar e classificar › Faturamento das plataformas) e use "Preencher" na aba Receitas. Keeta pelo bruto. Canal sem venda no mês: marque à mão.' },
+    { id: 'rec_site', t: 'Site, clube e balcão', auto: !faltaSite.length, aba: 'receitas', det: faltaSite.length ? `sem valor: ${faltaSite.join(', ')}` : 'todos com valor',
+      como: 'Site: bruto com o cupom em descontos. Balcão: Mercado Pago + PIX direto. Ativação e licenciamento, se houver.' },
+    { id: 'rec_b2b', t: 'Revenda e venda direta, e os pedidos do Bling', auto: !faltaB2b.length && totalPedidos(d) > 0, aba: 'receitas',
+      det: `${faltaB2b.length ? `sem valor: ${faltaB2b.join(', ')} · ` : ''}${fmt(totalPedidos(d), 0)} pedidos no mês`,
+      como: 'Receitas › "Preencher o que está vazio": traz as vendas de Revenda e Venda direta e o nº de pedidos do Bling. Confira e salve.' },
+    { grupo: '3. Planilhas' },
+    { id: 'frete_correios', t: 'Correios: as duas faturas que cobrem o mês', auto: fr.correios.ok, aba: 'manuais', det: fr.correios.detalhe,
+      como: 'Correios Empresas › Faturas › extrato analítico (.csv) da fatura que fecha dia 15 deste mês e da que fecha dia 15 do mês seguinte. Manuais › Fretes pela data do envio.' },
+    { id: 'frete_lalamove', t: 'Lalamove: Order Report do mês', auto: fr.lalamove.ok, aba: 'manuais', det: fr.lalamove.detalhe,
+      como: 'Portal da Lalamove › Relatórios › Order Report do dia 1 ao último dia do mês (.xlsx). Manuais › Fretes pela data do envio.' },
+    { id: 'frete_melhorenvio', t: 'Melhor Envio: relatório de envios do mês', auto: fr.melhorenvio.ok, aba: 'manuais', det: fr.melhorenvio.detalhe,
+      como: 'Melhor Envio › Relatórios › Relatório de envios do mês (.xlsx). Manuais › Fretes pela data do envio. Mês sem envio: marque à mão.' },
+    { id: 'midia', t: 'Meta e Google pela planilha da agência', auto: manuaisDe(/^vm\.midia$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vm\.midia$/).length} lançamento(s) de mídia`,
+      como: 'Manuais › "+ Meta (planilha da agência)" e "+ Google (planilha da agência)" com o investimento do mês.' },
+    { id: 'taxas', t: 'Taxas descontadas na venda (Pagar.me, Mercado Pago, Shopify, checkout)', auto: manuaisDe(/^vc\.cartao$/).length > 0, aba: 'manuais', det: `${manuaisDe(/^vc\.cartao$/).length} lançamento(s) de taxas`,
+      como: 'Manuais › um lançamento para cada (relatório de cada plataforma).' },
+    { id: 'anuidades', t: 'Anuidades ÷ 12 e acertos sem caixa', aba: 'manuais', det: `${d.manuais.length} lançamento(s) manuais no mês`,
+      como: 'Manuais › Fidelimax (4.190 ÷ 12) e acertos como o da Dark Store. Marque quando conferir.' },
+    { grupo: '4. CMV' },
+    { id: 'cmv', t: 'CMV fechado pelo estoque', auto: !d.cmvProvisorio && d.cmv.length > 0, aba: 'auditoria', det: d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`,
+      como: 'Depende da contagem do fim do mês (Estoque › Conferência). Confira em Auditoria › CMV do caixa ao consumo.' },
+    { id: 'mkt', t: 'Produtos que saíram sem venda (degustação, premiação, bonificação, marketing, vouchers)', auto: !!d.comp?.extras?.cmv_marketing_em, aba: 'manuais',
+      det: mkt ? `${brl(mkt.reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'não buscado',
+      como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },
+    { grupo: '5. Conferência' },
+    { id: 'saldos', t: 'Saldos dos bancos batem com o Bling', auto: bancosOk, aba: 'auditoria', det: bancosOk ? 'todas as contas conferem' : 'lance os saldos do fim do mês e do anterior',
+      como: 'Auditoria › saldo de cada conta no último dia (do extrato do banco). Diferença = lançamento faltando no Bling.' },
+    { id: 'ponte', t: 'Revisar a ponte competência → caixa e a DRE', aba: 'auditoria', det: `lucro por competência ${brl(c.ll)} · resultado de caixa ${brl(p.resCx)}`,
+      como: 'Auditoria › abra as linhas com diferença grande e veja se o motivo faz sentido. Depois olhe a DRE linha a linha. Marque quando estiver ok.' },
   ]
-  const prontos = itens.filter(i => i[1]).length
+  const passos = PASSOS.filter(x => x.id).map(x => ({ ...x, manual: marcados[x.id] || null, ok: !!x.auto || !!marcados[x.id] }))
+  const prontos = passos.filter(x => x.ok).length
+  async function marcar(id, valor) {
+    const extras = { ...(d.comp?.extras || {}), passos: { ...marcados } }
+    if (valor) extras.passos[id] = { por: usuario().nome || null, em: new Date().toISOString() }; else delete extras.passos[id]
+    const { error } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao: 'competencia', extras, atualizado_em: new Date().toISOString() }, { onConflict: 'mes,visao' })
+    if (error) alert(erroMsg(error)); else onSalvo()
+  }
   async function fechar() {
-    if (!window.confirm(`Fechar ${rotuloMes(d.mes)}?\n\nReceitas, manuais, saldos e os lançamentos do Bling deste mês ficam travados. Só um administrador reabre.${prontos < itens.length ? `\n\nAtenção: ${itens.length - prontos} item(ns) da lista ainda não conferem.` : ''}`)) return
+    if (!window.confirm(`Fechar ${rotuloMes(d.mes)}?\n\nReceitas, manuais, saldos, fretes e os lançamentos do Bling deste mês ficam travados. Só um administrador reabre.${prontos < passos.length ? `\n\nAtenção: ${passos.length - prontos} passo(s) ainda sem ✓.` : ''}`)) return
     const agora = new Date().toISOString(), quem = usuario().nome || null
-    const valores = { ...c, gravado_em: agora }
     for (const visao of ['competencia', 'caixa']) {
-      const { error } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao, fechado_em: agora, fechado_por: quem, valores: visao === 'competencia' ? valores : calcular(vx, d.plano), atualizado_em: agora }, { onConflict: 'mes,visao' })
+      const { error } = await supabase.from('dre_mes').upsert({ mes: d.mes, visao, fechado_em: agora, fechado_por: quem, valores: visao === 'competencia' ? { ...c, gravado_em: agora } : calcular(vx, d.plano), atualizado_em: agora }, { onConflict: 'mes,visao' })
       if (error) { alert(erroMsg(error)); return }
     }
     onSalvo()
@@ -745,17 +790,36 @@ function TelaFechamento({ d, onSalvo, irPara }) {
     }
     onSalvo()
   }
+  const [aberto, setAberto] = useState(null)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 820 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 900 }}>
+      <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 800 }}>{prontos} de {passos.length} passos com ✓</div>
+          <div style={{ height: 6, background: 'var(--gray-100)', borderRadius: 3, marginTop: 6 }}><div style={{ height: 6, width: `${prontos / passos.length * 100}%`, background: 'var(--ok)', borderRadius: 3 }} /></div>
+        </div>
+        <div style={{ fontSize: 13 }}>lucro líquido <b>{brl(c.ll)}</b> · EBITDA <b>{brl(c.ebitda)}</b></div>
+      </div>
       <div className="card">
-        {itens.map(([t, ok, det, aba]) => <div key={t} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px', borderTop: '1px solid var(--gray-100)' }}>
-          <span style={{ fontSize: 18, color: ok ? 'var(--ok)' : 'var(--warning)' }}>{ok ? '✓' : '○'}</span>
-          <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 13 }}>{t}</div><div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{det}</div></div>
-          {aba && <button className="btn btn-ghost btn-sm" onClick={() => irPara(aba)}>Abrir</button>}
-        </div>)}
+        {PASSOS.map(x => {
+          if (x.grupo) return <div key={x.grupo} style={{ padding: '8px 14px', fontWeight: 800, fontSize: 12, background: 'var(--gray-50)', borderTop: '1px solid var(--gray-100)' }}>{x.grupo}</div>
+          const s = passos.find(y => y.id === x.id)
+          return <div key={x.id} style={{ borderTop: '1px solid var(--gray-100)' }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
+              <span style={{ fontSize: 18, width: 18, color: s.ok ? 'var(--ok)' : 'var(--warning)' }}>{s.ok ? '✓' : '○'}</span>
+              <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setAberto(a => a === x.id ? null : x.id)}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{x.t} <span style={{ fontWeight: 400, color: 'var(--gray-400)', fontSize: 11 }}>{aberto === x.id ? '▾ como fazer' : '▸ como fazer'}</span></div>
+                <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>{x.det}{!x.auto && s.manual ? ` · marcado por ${s.manual.por || '—'} em ${new Date(s.manual.em).toLocaleDateString('pt-BR')}` : ''}</div>
+              </div>
+              {x.aba && <button className="btn btn-ghost btn-sm" onClick={() => irPara(x.aba)}>Abrir</button>}
+              {!fechado && !x.auto && <label style={{ fontSize: 12, whiteSpace: 'nowrap' }}><input type="checkbox" checked={!!s.manual} onChange={e => marcar(x.id, e.target.checked)} /> feito</label>}
+            </div>
+            {aberto === x.id && <div style={{ padding: '0 14px 10px 42px', fontSize: 12, color: 'var(--gray-600)' }}>{x.como}</div>}
+          </div>
+        })}
       </div>
       <div className="card card-pad" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, fontSize: 13 }}>{prontos} de {itens.length} itens conferidos · lucro líquido por competência <b>{brl(c.ll)}</b> · EBITDA <b>{brl(c.ebitda)}</b></div>
+        <div style={{ flex: 1, fontSize: 13 }}><b>6. Fechar o mês.</b> O cadeado trava competência e caixa e guarda os totais.</div>
         {ehAdmin() && (fechado
           ? <button className="btn btn-ghost" style={{ color: 'var(--danger)' }} onClick={reabrir}><LockOpen size={14} /> Reabrir mês</button>
           : <button className="btn btn-primary" onClick={fechar}><Lock size={14} /> Fechar {rotuloMes(d.mes)}</button>)}
