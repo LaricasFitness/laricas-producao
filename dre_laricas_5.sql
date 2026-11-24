@@ -24,3 +24,9 @@ CREATE TRIGGER trava_mes BEFORE INSERT OR UPDATE OR DELETE ON dre_balanco FOR EA
 
 -- Correios: vencimento da fatura de cada envio (para saber o que estava a pagar no fim do mês)
 ALTER TABLE dre_fretes ADD COLUMN IF NOT EXISTS vencimento date;
+
+-- Categorias do Bling sem regra (agosto): luvas, etiquetas, fita = insumos auxiliares do CMV
+INSERT INTO dre_regras (categoria, fornecedor, conta, so_caixa) VALUES
+  ('Consumiveis e Descartáveis', NULL, 'cmv.insumos', false),
+  ('Insumos', NULL, 'cmv.insumos', false)
+ON CONFLICT DO NOTHING;
