@@ -55,9 +55,13 @@ export async function tokenBling(db) {
     await salvarTokens(db, j)
     return j.access_token
   } catch (e) {
-    // outra chamada pode ter renovado ao mesmo tempo: usa o token novo, se houver
-    const { data: d2 } = await db.from('integracao_tokens').select('*').eq('servico', 'bling').maybeSingle()
-    if (d2 && d2.refresh_token !== data.refresh_token && new Date(d2.expira_em) > new Date()) return d2.access_token
+    // outra chamada pode ter renovado ao mesmo tempo (o Bling invalida o refresh token usado): espera ela
+    // gravar o token novo antes de desistir
+    for (let i = 0; i < 4; i++) {
+      const { data: d2 } = await db.from('integracao_tokens').select('*').eq('servico', 'bling').maybeSingle()
+      if (d2 && d2.refresh_token !== data.refresh_token && new Date(d2.expira_em) > new Date()) return d2.access_token
+      await new Promise(ok => setTimeout(ok, 1500))
+    }
     throw new ErroConexao('O acesso ao Bling expirou. Conecte o Bling de novo.')
   }
 }
