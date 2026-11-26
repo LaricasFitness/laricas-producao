@@ -54,7 +54,7 @@ async function buscarTudo(montar) {
 }
 
 // Tudo o que a DRE de um mês precisa
-export async function carregarMes(mes) {
+export async function carregarMes(mes, { semProvisorio = false } = {}) {
   const ini = mes + '-01', fim = ultimoDia(mes), ant = mesAnterior(mes)
   const [plano, regras, classif, pagar, caixa, receitas, manuais, fech, saldos, dreMes, cfg] = await Promise.all([
     buscarTudo(() => supabase.from('dre_plano').select('*').order('grupo').order('ordem')),
@@ -74,7 +74,8 @@ export async function carregarMes(mes) {
   try { fretes = await buscarTudo(() => supabase.from('dre_fretes').select('origem, data, valor, documento').eq('mes', mes).order('data')) } catch { /* dre_laricas_3.sql não aplicado */ }
   // CMV: fechado (congelado) ou, no mês aberto, o provisório calculado agora
   let cmv = fech, cmvProvisorio = false
-  if (!cmv.length) {
+  if (!cmv.length && semProvisorio) cmvProvisorio = true
+  else if (!cmv.length) {
     try { cmv = (await calcularCMVMes(mes)).linhas || []; cmvProvisorio = true } catch { cmv = [] }
   }
   const visao = v => dreMes.find(r => r.visao === v) || null
@@ -155,7 +156,8 @@ export async function custoMarketing(pedidos) {
 }
 
 // Pedidos que levam embalagem de envio (deliverys + Bling); as vendas de ativação levam só uma sacola cada
-export const totalPedidos = d => d.receitas.filter(r => r.conta !== 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
+// Só os deliverys vêm da aba Receitas: site, clube, Mercado Livre, revenda e balcão já estão nos pedidos do Bling
+export const totalPedidos = d => d.receitas.filter(r => r.conta === 'rec.delivery').reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
 export const pedidosAtivacao = d => d.receitas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0)
 export function montar(d, visao) {
   const planoDe = Object.fromEntries(d.plano.map(p => [p.id, p]))

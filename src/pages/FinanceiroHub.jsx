@@ -289,7 +289,10 @@ function AtualizarBling({ onImportou }) {
   const [msg, setMsg] = useState(null)
 
   const hoje = hojeSP(), mesAtual = hoje.slice(0, 7)
-  const meses = [somaMes(mesAtual, -2), somaMes(mesAtual, -1), mesAtual]
+  // padrão: mês atual e os 2 anteriores; dá para começar antes (conferir/corrigir meses antigos)
+  const [inicio, setInicio] = useState(somaMes(mesAtual, -2))
+  const meses = []
+  for (let m = inicio < mesAtual ? inicio : mesAtual; m <= mesAtual && meses.length < 24; m = somaMes(m, 1)) meses.push(m)
   const de = `${meses[0]}-01`
   // caixa até hoje; contas até o fim do mês (competência futura do mês atual)
   const ateDe = fonte => fonte === 'caixa' ? hoje : fimMes(mesAtual)
@@ -356,7 +359,7 @@ function AtualizarBling({ onImportou }) {
         }
         n += novas.length
       }
-      setMsg({ tipo: 'ok', txt: `${n} lançamentos gravados (${rotuloMes(meses[0])} a ${rotuloMes(meses[2])}).`
+      setMsg({ tipo: 'ok', txt: `${n} lançamentos gravados (${rotuloMes(meses[0])} a ${rotuloMes(meses[meses.length - 1])}).`
         + (pulados.length ? ` Meses fechados não foram alterados: ${pulados.join(', ')}.` : '') })
       setRes(null); onImportou()
     } catch (e) { setMsg({ tipo: 'danger', txt: 'Erro ao gravar: ' + (e.message || e) + ' Os meses podem ter ficado incompletos: atualize de novo.' }) }
@@ -369,11 +372,14 @@ function AtualizarBling({ onImportou }) {
     <div className="card card-pad">
       <div style={{ fontWeight: 800, fontSize: 14 }}>Atualizar do Bling</div>
       <div style={{ fontSize: 12, color: 'var(--gray-500)', margin: '4px 0 10px', lineHeight: 1.5 }}>
-        Lê no Bling o caixa (Caixas e Bancos), as contas a pagar e as a receber de <b>{rotuloMes(meses[0])} a {rotuloMes(meses[2])}</b>.
+        Lê no Bling o caixa (Caixas e Bancos), as contas a pagar e as a receber de <b>{rotuloMes(meses[0])} a {rotuloMes(meses[meses.length - 1])}</b>.
         Nada é alterado no Bling. Antes de gravar, mostra a comparação com o que já está no sistema; gravar substitui esses meses
         (menos os fechados no cadeado).
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 12, color: 'var(--gray-600)', display: 'flex', gap: 6, alignItems: 'center' }} title="Para conferir ou corrigir meses antigos. Quanto mais meses, mais demora.">
+          a partir de <input type="month" className="form-input" style={{ width: 150, fontSize: 12 }} value={inicio} max={mesAtual} disabled={ocupado} onChange={e => { if (e.target.value) { setInicio(e.target.value); setRes(null) } }} />
+        </label>
         <button className="btn btn-primary btn-sm" onClick={buscar} disabled={ocupado}>
           {ocupado && !res ? <RefreshCw size={13} className="spin" /> : <RefreshCw size={13} />} Buscar no Bling
         </button>

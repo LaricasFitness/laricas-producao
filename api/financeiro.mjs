@@ -22,6 +22,7 @@
 //   e da receita de Revenda e Venda direta pelas vendas do Bling. Também lista os pedidos de produto para
 //   marketing (lojas Bonificação, Ativação - Premiação, Ativação - Degustação, Marketing e Shopify com voucher de metade ou mais).
 // POST {acao:'itens', ids:[...]}  itens (código, quantidade) de até 40 pedidos; `faltam` se o Bling pediu pausa.
+// POST {acao:'resumoCaixa', mes}  extrato do Bling do mês (id, data, valor, conta) para conferir o caixa do sistema.
 // POST {acao:'pagas', tipo:'pagar'|'receber', de, ate}  contas pagas no período (prova da competência).
 // POST {acao:'mercadopago', mes}  vendas do mês no Mercado Pago (API, MP_ACCESS_TOKEN), no formato do relatório .csv.
 // POST {acao:'melhorenvio', mes}  etiquetas do mês no Melhor Envio (API, MELHORENVIO_TOKEN).
@@ -362,6 +363,25 @@ export default async function handler(req, res) {
       const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(String).filter(x => /^\d+$/.test(x)).slice(0, 40)
       const db = banco(), tk = await tokenBling(db)
       return res.status(200).json(await itensDosPedidos(tk, ids))
+    }
+    if (acao === 'resumoCaixa') {
+      // extrato do Bling de um mês (só a lista: id, data, valor, entrada/saída, conta) para conferir com o sistema
+      const mes = String(req.body.mes || '')
+      if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido' })
+      const db = banco(), tk = await tokenBling(db)
+      const de = `${mes}-01`, ate = ultimoDia(mes), itens = {}
+      try {
+        for (let pg = 1; pg <= 60; pg++) {
+          const d = (await bling(tk, `/caixas?${qs({ pagina: pg, dataInicial: de, dataFinal: ate, situacao: 'R' })}`))?.data || []
+          const novos = d.filter(l => !itens[l.id])
+          for (const l of novos) if (l.data >= de && l.data <= ate) { const b = baseCaixa(l); itens[b.id_bling] = { id: b.id_bling, data: b.data, valor: b.valor, credito: b.credito, banco: b.banco, nome: b.nome } }
+          if (!novos.length) break
+        }
+      } catch (e) {
+        if (e instanceof ErroLimite) return res.status(200).json({ mes, pausa: true })
+        throw e
+      }
+      return res.status(200).json({ mes, lancamentos: Object.values(itens) })
     }
     if (acao === 'mercadopago') {
       const mes = String(req.body.mes || '')

@@ -7,6 +7,7 @@ import {
   PROVA_DESDE, ITENS_PROVA, prova, abertoEm, correiosAPagarEm,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
+import FinanceiroAno from './FinanceiroAno'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
 
 // Financeiro › DRE: regras em src/lib/dreLaricas.js. Abas na ordem do fechamento do mês.
@@ -23,7 +24,7 @@ const ehAdmin = () => usuario().perfil === 'admin'
 const COMO = { manual: ['à mão', 'warning'], fornecedor: ['regra do fornecedor', 'purple'], categoria: ['regra da categoria', 'neutral'] }
 const erroMsg = e => /does not exist|schema cache|42P01/i.test(e?.message || '') ? 'Aplique o dre_laricas.sql no Supabase.' : (e?.message || String(e))
 
-const ABAS = [['passos', '✅ Passo a passo'], ['dre', '📋 DRE'], ['auditoria', '🔎 Auditoria'], ['lanc', '🧾 Lançamentos'], ['receitas', '💰 Receitas'], ['manuais', '✍️ Manuais'], ['plano', '🗂️ Plano e regras']]
+const ABAS = [['passos', '✅ Passo a passo'], ['dre', '📋 DRE'], ['ano', '📅 Ano'], ['auditoria', '🔎 Auditoria'], ['lanc', '🧾 Lançamentos'], ['receitas', '💰 Receitas'], ['manuais', '✍️ Manuais'], ['plano', '🗂️ Plano e regras']]
 
 export default function FinanceiroDRE() {
   const [mes, setMes] = useState(mesAnterior(new Date().toISOString().slice(0, 7)))
@@ -64,6 +65,7 @@ export default function FinanceiroDRE() {
         {aba === 'plano' && <TelaPlano d={d} onSalvo={load} />}
         {aba === 'passos' && <TelaPassos d={d} onSalvo={load} irPara={setAba} />}
       </Fragment>}
+      {aba === 'ano' && <FinanceiroAno key={mes.slice(0, 4)} ano={mes.slice(0, 4)} />}
     </div>
   )
 }
@@ -474,7 +476,7 @@ function TelaReceitas({ d, fechado, onSalvo }) {
   const set = (i, k, v) => setLinhas(ls => ls.map((r, j) => j === i ? { ...r, [k]: v } : r))
   const tot = k => linhas.reduce((t, r) => t + num(r[k]), 0)
   const pedAtiv = linhas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + num(r.pedidos), 0)
-  const pedTotal = tot('pedidos') - pedAtiv + num(pedBling)
+  const pedTotal = linhas.filter(r => r.conta === 'rec.delivery').reduce((t, r) => t + num(r.pedidos), 0) + num(pedBling)
 
   // Preenche o que estiver vazio com o que o sistema já tem: plataformas (Importar e classificar) e vendas do Bling
   async function preencher() {
