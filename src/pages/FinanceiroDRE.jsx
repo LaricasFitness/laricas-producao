@@ -8,6 +8,7 @@ import {
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 import FinanceiroAno from './FinanceiroAno'
+import ExtratosBanco from './FinanceiroExtratos'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
 
 // Financeiro › DRE: regras em src/lib/dreLaricas.js. Abas na ordem do fechamento do mês.
@@ -314,6 +315,8 @@ function TelaAuditoria({ d, fechado, onSalvo }) {
   const [abertos, setAbertos] = useState(new Set())
   const [saldos, setSaldos] = useState(() => Object.fromEntries(p.porBanco.map(b => [b.banco, b.fim ?? ''])))
   const [salvando, setSalvando] = useState(false)
+  // saldos gravados por fora (importação do extrato) entram nos campos quando o mês recarrega
+  useEffect(() => { setSaldos(Object.fromEntries(p.porBanco.map(b => [b.banco, b.fim ?? '']))) }, [p])
   const dif = p.linhas.reduce((t, l) => t + l.ec - l.ex, 0)
   async function salvarSaldos() {
     setSalvando(true)
@@ -353,6 +356,7 @@ function TelaAuditoria({ d, fechado, onSalvo }) {
         </table></div>
         {!fechado && <div style={{ padding: 10 }}><button className="btn btn-primary btn-sm" onClick={salvarSaldos} disabled={salvando}><Save size={13} /> Salvar saldos</button></div>}
       </div>
+      <ExtratosBanco d={d} contas={p.porBanco.map(b => b.banco)} onSalvo={onSalvo} />
       <ProvaCompetencia d={d} fechado={fechado} />
       <ConciliacaoCMV d={d} />
       <div className="card">
@@ -943,7 +947,7 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },
     { grupo: '5. Conferência' },
     { id: 'saldos', t: 'Saldos dos bancos batem com o Bling', auto: bancosOk, aba: 'auditoria', det: bancosOk ? 'todas as contas conferem' : 'lance os saldos do fim do mês e do anterior',
-      como: 'Auditoria › saldo de cada conta no último dia (do extrato do banco). Diferença = lançamento faltando no Bling.' },
+      como: 'Auditoria › Importar extrato do banco (OFX, CSV ou Excel de cada conta, inclusive investimentos): grava o saldo do último dia e mostra linha a linha o que falta no Bling. Sem arquivo, digite o saldo do extrato.' },
     ...(d.mes >= PROVA_DESDE ? [{ id: 'prova', t: 'Prova da competência: "não explicado" = 0', aba: 'auditoria', det: 'saldos a receber e das carteiras no fim do mês + cálculo no Bling',
       como: 'Auditoria › Prova da competência: lance o a receber de cada plataforma e o saldo das carteiras no último dia do mês (o do mês anterior já vem), clique em "Calcular a pagar e a receber no Bling" e salve. Se sobrar diferença, ela aponta um erro na competência: procure na ponte. Marque quando zerar.' }] : []),
     { id: 'ponte', t: 'Revisar a ponte competência → caixa e a DRE', aba: 'auditoria', det: `lucro por competência ${brl(c.ll)} · resultado de caixa ${brl(p.resCx)}`,

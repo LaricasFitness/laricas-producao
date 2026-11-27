@@ -97,6 +97,11 @@ Uma tela por mês, abas na ordem do fechamento:
 - **Auditoria**: ponte competência → caixa por linha (receitas por recebedor, porque Pagar.me e Mercado Pago misturam
   canais); a soma das diferenças fecha exatamente. Saldos de cada banco (`dre_saldos`) conferidos com o movimento do
   Bling; ajustes de saldo do Bling destacados.
+- **Extratos dos bancos** (Auditoria, `dre_extratos.sql`): importa o extrato de cada conta (OFX, CSV ou .xlsx: C6,
+  Inter...; `src/lib/extratoBanco.js`). As linhas ficam em `dre_extrato_banco` e o saldo de cada fim de mês coberto vai
+  para `dre_saldos` (mês fechado não muda). Cada linha do banco é casada com o caixa do Bling da mesma conta: mesmo valor
+  até 4 dias, depois em grupo pela soma do dia (repasses do iFood). Sobra = lançamento faltando; a diferença líquida é o
+  que falta de fato. Nº da conta do extrato → conta do Bling em `configuracoes.dre_extrato_contas`.
 - **Passo a passo** (primeira aba): os passos do mês na ordem, com ✓ automática quando o sistema encontra o que foi
   feito e ✓ à mão nos de conferência (`dre_mes.extras.passos`); no fim, o cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
   receitas, manuais, saldos e lançamentos do mês. Só admin reabre.
