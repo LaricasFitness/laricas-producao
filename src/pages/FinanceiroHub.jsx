@@ -281,12 +281,36 @@ function resumoMeses(fonte, linhas) {
   return out
 }
 
+// O que mudou entre o sistema e o Bling, lançamento por lançamento (pelo id do Bling), por mês
+const mesDaLinha = (fonte, l) => fonte === 'pagar' ? String(l.competencia || '').slice(0, 7) : l.mes
+function diferencas(fonte, atual, novo) {
+  const out = {}, porId = ls => Object.fromEntries(ls.filter(l => l.id_bling).map(l => [String(l.id_bling), l]))
+  const a = porId(atual), b = porId(novo)
+  const de = m => out[m] || (out[m] = { entrou: [], saiu: [], mudou: [] })
+  for (const [id, l] of Object.entries(b)) {
+    const x = a[id]
+    if (!x) { de(mesDaLinha(fonte, l)).entrou.push(l); continue }
+    const o = []
+    if (Math.abs(+x.valor - +l.valor) >= 0.01) o.push(`valor ${fmt(+x.valor)} → ${fmt(+l.valor)}`)
+    if ((x.categoria || '') !== (l.categoria || '')) o.push(`categoria ${x.categoria || '(sem)'} → ${l.categoria || '(sem)'}`)
+    if (mesDaLinha(fonte, x) !== mesDaLinha(fonte, l)) o.push(`mês ${mesDaLinha(fonte, x)} → ${mesDaLinha(fonte, l)}`)
+    if (fonte !== 'caixa' && (x.situacao || '') !== (l.situacao || '')) o.push(`situação ${x.situacao || '—'} → ${l.situacao || '—'}`)
+    if (o.length) { de(mesDaLinha(fonte, l)).mudou.push({ l, o }); if (mesDaLinha(fonte, x) !== mesDaLinha(fonte, l)) de(mesDaLinha(fonte, x)).mudou.push({ l, o }) }
+  }
+  for (const [id, x] of Object.entries(a)) if (!b[id]) de(mesDaLinha(fonte, x)).saiu.push(x)
+  const semId = atual.filter(l => !l.id_bling)
+  for (const x of semId) de(mesDaLinha(fonte, x)).semId = (out[mesDaLinha(fonte, x)].semId || 0) + 1
+  return out
+}
+const descLinha = l => [(l.data || l.competencia || '').split('-').reverse().slice(0, 2).join('/'), l.nome, l.categoria, fmt(+l.valor)].filter(Boolean).join(' · ')
+
 function AtualizarBling({ onImportou }) {
   const [res, setRes] = useState(null)       // { periodo, fontes: { caixa: { linhas, novo, atual } ... }, fechados }
   const [prog, setProg] = useState('')
   const [ocupado, setOcupado] = useState(false)
   const [completo, setCompleto] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [aberto, setAberto] = useState(null)
 
   const hoje = hojeSP(), mesAtual = hoje.slice(0, 7)
   // padrão: mês atual e os 2 anteriores; dá para começar antes (conferir/corrigir meses antigos)
@@ -299,9 +323,9 @@ function AtualizarBling({ onImportou }) {
 
   async function atuais(fonte) {
     const ate = ateDe(fonte)
-    if (fonte === 'caixa') return buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('mes, tipo, valor').gte('data', de).lte('data', ate))
-    if (fonte === 'pagar') return buscarTudo(() => supabase.from('dre_contas_competencia').select('competencia, valor').gte('competencia', de).lte('competencia', ate))
-    return buscarTudo(() => supabase.from('dre_receber_competencia').select('mes, valor').gte('competencia', de).lte('competencia', ate))
+    if (fonte === 'caixa') return buscarTudo(() => supabase.from('dre_caixa_lancamentos').select('id_bling, mes, data, tipo, valor, categoria, nome').gte('data', de).lte('data', ate))
+    if (fonte === 'pagar') return buscarTudo(() => supabase.from('dre_contas_competencia').select('id_bling, competencia, valor, categoria, nome, situacao').gte('competencia', de).lte('competencia', ate))
+    return buscarTudo(() => supabase.from('dre_receber_competencia').select('id_bling, mes, competencia, valor, categoria, nome, situacao').gte('competencia', de).lte('competencia', ate))
   }
 
   async function buscar() {
@@ -320,7 +344,8 @@ function AtualizarBling({ onImportou }) {
           }
         }
         const linhas = linhasBling(f.id, itens, hoje)
-        fontes[f.id] = { linhas, novo: resumoMeses(f.id, linhas), atual: resumoMeses(f.id, await atuais(f.id)) }
+        const atual = await atuais(f.id)
+        fontes[f.id] = { linhas, novo: resumoMeses(f.id, linhas), atual: resumoMeses(f.id, atual), dif: diferencas(f.id, atual, linhas) }
       }
       const { data: fech } = await supabase.from('dre_mes').select('mes, visao').not('fechado_em', 'is', null).in('mes', meses)
       setRes({ fontes, fechados: new Set((fech || []).map(r => `${r.mes}|${r.visao}`)) })
@@ -403,18 +428,28 @@ function AtualizarBling({ onImportou }) {
               {FONTES_BLING.flatMap(f => meses.map(m => {
                 const a = res.fontes[f.id].atual[m] || {}, b = res.fontes[f.id].novo[m] || {}
                 const tot = r => f.id === 'caixa' ? `+${fmt(r.entradas)} / −${fmt(r.saidas)}` : fmt(f.id === 'pagar' ? r.saidas : r.entradas)
-                const mudou = (a.n || 0) !== (b.n || 0) || dif(a.entradas, b.entradas) || dif(a.saidas, b.saidas)
+                const dl = res.fontes[f.id].dif[m] || { entrou: [], saiu: [], mudou: [] }
+                const mudou = (a.n || 0) !== (b.n || 0) || dif(a.entradas, b.entradas) || dif(a.saidas, b.saidas) || dl.entrou.length + dl.saiu.length + dl.mudou.length > 0
+                const ab = aberto === f.id + m
                 const fechado = res.fechados.has(`${m}|${f.visao}`)
-                return (
-                  <tr key={f.id + m} style={{ borderTop: '1px solid var(--gray-100)' }}>
+                const temDet = dl.entrou.length + dl.saiu.length + dl.mudou.length > 0
+                const lista = (titulo, ls, cor) => ls.length > 0 && <div style={{ color: cor, marginBottom: 4 }}><b>{titulo} ({ls.length}):</b> {ls.slice(0, 40).join(' │ ')}{ls.length > 40 ? ' …' : ''}</div>
+                return [
+                  <tr key={f.id + m} onClick={() => temDet && setAberto(ab ? null : f.id + m)} style={{ borderTop: '1px solid var(--gray-100)', cursor: temDet ? 'pointer' : undefined }}>
                     <td style={{ ...td, textAlign: 'left' }}>{f.nome}</td><td style={{ ...td, textAlign: 'left' }}>{rotuloMes(m)}</td>
                     <td style={td}>{a.n || 0}</td><td style={td}>{b.n || 0}</td>
                     <td style={td}>{tot(a)}</td><td style={{ ...td, fontWeight: mudou ? 800 : 400 }}>{tot(b)}</td>
                     <td style={{ ...td, textAlign: 'left', color: fechado ? 'var(--gray-400)' : mudou ? 'var(--warning)' : 'var(--ok)' }}>
-                      {fechado ? '🔒 fechado, não muda' : mudou ? 'muda' : 'igual'}
+                      {fechado ? '🔒 fechado, não muda' : mudou ? (temDet ? (ab ? '▾ muda' : '▸ muda: ver o quê') : 'muda') : 'igual'}
                     </td>
-                  </tr>
-                )
+                  </tr>,
+                  ab && <tr key={f.id + m + ':d'}><td colSpan={7} style={{ background: 'var(--gray-50)', fontSize: 11, padding: '6px 8px', lineHeight: 1.5 }}>
+                    {lista('Novos no Bling', dl.entrou.map(descLinha), 'var(--ok)')}
+                    {lista('Não estão mais no Bling (apagados, cancelados ou mudaram de mês)', dl.saiu.map(descLinha), 'var(--danger)')}
+                    {lista('Mudaram no Bling', dl.mudou.map(x => `${descLinha(x.l)}: ${x.o.join(', ')}`), 'var(--warning, #b45309)')}
+                    {dl.semId > 0 && <div style={{ color: 'var(--gray-500)' }}>{dl.semId} lançamento(s) no sistema sem id do Bling (importados por arquivo): são trocados pelos do Bling.</div>}
+                  </td></tr>,
+                ]
               }))}
             </tbody>
           </table>

@@ -58,15 +58,28 @@ function qs(o) {
   return p.toString()
 }
 
+// [de, ate] em pedaços de n dias (AAAA-MM-DD)
+function janelas(de, ate, n) {
+  const out = [], dia = 864e5
+  for (let t = Date.parse(de + 'T00:00:00Z'), fim = Date.parse(ate + 'T00:00:00Z'); t <= fim; t += n * dia)
+    out.push([new Date(t).toISOString().slice(0, 10), new Date(Math.min(t + (n - 1) * dia, fim)).toISOString().slice(0, 10)])
+  return out
+}
+
 let CATS = null, CATS_EM = 0
 async function categorias(tk) {
   if (CATS && Date.now() - CATS_EM < 600e3) return CATS
   const lista = []
   for (let pg = 1; pg < 50; pg++) {
     const d = (await bling(tk, `/categorias/receitas-despesas?${qs({ pagina: pg, limite: 100, tipo: 0, situacao: 0 })}`))?.data || []
-    for (const c of d) lista.push({ id: c.id, descricao: (c.descricao || '').trim() })
+    for (const c of d) lista.push({ id: c.id, pai: c.idCategoriaPai || 0, descricao: (c.descricao || '').trim() })
     if (d.length < 100) break
   }
+  // ordem fixa: categoria pai antes das filhas, e por id. Na leitura do caixa por categoria, a última que lista o
+  // lançamento é a que fica: assim vale sempre a mais específica, e o resultado não muda de uma busca para outra.
+  const porId = Object.fromEntries(lista.map(c => [c.id, c]))
+  const nivel = c => { let n = 0; for (let x = c; x?.pai && n < 10; x = porId[x.pai]) n++; return n }
+  lista.sort((a, b) => nivel(a) - nivel(b) || a.id - b.id)
   CATS = lista; CATS_EM = Date.now()
   return lista
 }
@@ -87,13 +100,18 @@ async function passoCaixa(tk, c, de, ate, fim) {
   const base = { pagina: undefined, dataInicial: de, dataFinal: ate, situacao: 'R' }
   while (Date.now() < fim) {
     if (c.fase === 'lista') {
-      const d = (await bling(tk, `/caixas?${qs({ ...base, pagina: c.pg })}`))?.data || []
+      // janelas de 7 dias: o Bling não ordena a lista de forma fixa e um lançamento novo no meio da leitura empurra
+      // os outros de página; com poucas páginas por janela, nada escapa entre uma página e outra
+      c.jan ||= janelas(de, ate, 7); c.j ||= 0
+      const [jDe, jAte] = c.jan[c.j]
+      const d = (await bling(tk, `/caixas?${qs({ ...base, dataInicial: jDe, dataFinal: jAte, pagina: c.pg })}`))?.data || []
       const novos = d.filter(l => !c.itens[l.id])
       for (const l of novos) if (l.data >= de && l.data <= ate) c.itens[l.id] = baseCaixa(l)
       c.tam = Math.max(c.tam, d.length)
-      // página vazia ou repetida (nenhum lançamento novo) = fim da lista
-      if (novos.length) { c.pg++; continue }
-      if (!c.tam) { c.fase = 'fim'; break }
+      // página curta, vazia ou repetida (nenhum lançamento novo) = fim da janela
+      if (novos.length && d.length >= c.tam) { c.pg++; continue }
+      if (++c.j < c.jan.length) { c.pg = 1; continue }
+      if (!Object.keys(c.itens).length) { c.fase = 'fim'; break }
       c.cats = (await categorias(tk)).map(x => [x.id, x.descricao]); c.ci = 0; c.pg = 1; c.fase = 'cats'
     } else if (c.fase === 'cats') {
       if (c.ci >= c.cats.length) { c.resto = Object.keys(c.itens).filter(id => c.itens[id].categoria === null); c.ri = 0; c.fase = 'resto'; continue }
@@ -117,7 +135,7 @@ async function passoCaixa(tk, c, de, ate, fim) {
   }
   const feito = c.fase === 'lista' ? 0 : c.fase === 'cats' ? c.ci : c.fase === 'resto' ? c.ri : 1
   const total = c.fase === 'cats' ? c.cats.length : c.fase === 'resto' ? c.resto.length : 1
-  const texto = c.fase === 'lista' ? `lendo o extrato (página ${c.pg})`
+  const texto = c.fase === 'lista' ? `lendo o extrato (semana ${(c.j || 0) + 1} de ${c.jan?.length || '…'})`
     : c.fase === 'cats' ? `categorias ${c.ci} de ${c.cats.length}`
     : c.fase === 'resto' ? `lançamentos sem categoria ${c.ri} de ${c.resto.length}` : 'pronto'
   return { feito, total, texto }
@@ -141,7 +159,16 @@ async function passoContas(tk, db, fonte, c, de, ate, completo, fim) {
   // Duas listas: por vencimento (1 mês antes a 3 depois) e por emissão (1 mês antes até o fim do período).
   // A de emissão pega as parcelas de vencimento distante (venda parcelada: todas emitidas no mesmo dia).
   const ini = `${addMes(de.slice(0, 7), -1)}-01`
-  const filtros = [[ini, ultimoDia(addMes(ate.slice(0, 7), 3)), 'V'], [ini, ate, 'E']]
+  // cada lista lida mês a mês: poucas páginas por consulta, para nada escapar se o Bling reordenar no meio da leitura
+  const porMes = (a, b, tipo) => {
+    const out = []
+    for (let m = a.slice(0, 7); m <= b.slice(0, 7); m = addMes(m, 1)) {
+      const i = `${m}-01` < a ? a : `${m}-01`, f = ultimoDia(m) > b ? b : ultimoDia(m)
+      out.push([i, f, tipo])
+    }
+    return out
+  }
+  const filtros = [...porMes(ini, ultimoDia(addMes(ate.slice(0, 7), 3)), 'V'), ...porMes(ini, ate, 'E')]
   let novos = []
   const gravar = async () => {
     if (!novos.length) return
@@ -215,7 +242,7 @@ async function passoContas(tk, db, fonte, c, de, ate, completo, fim) {
 
   const total = c.fase === 'detalhe' ? c.pend.length : 1
   const feito = c.fase === 'detalhe' ? c.pi : c.fase === 'fim' ? 1 : 0
-  const texto = c.fase === 'lista' ? `lista de contas (página ${c.pg})`
+  const texto = c.fase === 'lista' ? `lista de contas (${Math.min((c.f || 0) + 1, filtros.length)} de ${filtros.length})`
     : c.fase === 'detalhe' ? `detalhe das contas ${c.pi} de ${c.pend.length}`
     : c.fase === 'contatos' ? 'nomes dos fornecedores' : 'pronto'
   return { feito, total, texto }
@@ -371,8 +398,8 @@ export default async function handler(req, res) {
       const db = banco(), tk = await tokenBling(db)
       const de = `${mes}-01`, ate = ultimoDia(mes), itens = {}
       try {
-        for (let pg = 1; pg <= 60; pg++) {
-          const d = (await bling(tk, `/caixas?${qs({ pagina: pg, dataInicial: de, dataFinal: ate, situacao: 'R' })}`))?.data || []
+        for (const [jDe, jAte] of janelas(de, ate, 7)) for (let pg = 1; pg <= 30; pg++) {
+          const d = (await bling(tk, `/caixas?${qs({ pagina: pg, dataInicial: jDe, dataFinal: jAte, situacao: 'R' })}`))?.data || []
           const novos = d.filter(l => !itens[l.id])
           for (const l of novos) if (l.data >= de && l.data <= ate) { const b = baseCaixa(l); itens[b.id_bling] = { id: b.id_bling, data: b.data, valor: b.valor, credito: b.credito, banco: b.banco, nome: b.nome } }
           if (!novos.length) break

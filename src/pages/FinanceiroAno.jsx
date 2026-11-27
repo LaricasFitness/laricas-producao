@@ -91,6 +91,18 @@ export default function FinanceiroAno({ ano }) {
   const total = k => soma(m => m[chave][k])
   const alternar = g => setAbertos(s => { const n = new Set(s); n.has(g) ? n.delete(g) : n.add(g); return n })
   const valorConta = (m, id, sinal) => (m[vk][id]?.valor || 0) * sinal
+  // Aportes (e venda de ativo, outras entradas fora do resultado) só existem no caixa: entram depois do lucro líquido
+  // nas duas visões, para ver o que o mês gerou ou consumiu de caixa contando com o dinheiro que entrou de fora.
+  const aporte = m => (m.vx['fora.aporte']?.itens || []).reduce((t, x) => t + x.sinal * (+x.l.valor), 0)
+  const comAporte = m => m[chave].ll + aporte(m)
+  // variação real dos saldos dos bancos (Auditoria › saldos): só quando todas as contas têm saldo no início e no fim
+  const varBancos = m => {
+    const contas = [...new Set([...m.d.saldos, ...m.d.saldosAnt].map(x => x.conta))]
+    if (!contas.length) return null
+    let t = 0
+    for (const c of contas) { const i = m.d.saldosAnt.find(x => x.conta === c), f = m.d.saldos.find(x => x.conta === c); if (!i || !f) return null; t += +f.saldo - +i.saldo }
+    return t
+  }
 
   const linhas = []
   for (const e of ESTRUTURA) {
@@ -116,6 +128,10 @@ export default function FinanceiroAno({ ano }) {
         <td style={{ textAlign: 'right', fontSize: 12 }}>{brl(soma(m => valorConta(m, p.id, sinal(p.id))))}</td></tr>)
     }
   }
+  const tdv = v => ({ textAlign: 'right', color: v < 0 ? 'var(--danger)' : undefined })
+  if (meses.some(m => aporte(m))) linhas.push(<tr key='aporte'><td>(+) Aportes, venda de ativo e outras entradas</td>{meses.map(m => <td key={m.mes} style={{ textAlign: 'right' }}>{aporte(m) ? brl(aporte(m)) : '—'}</td>)}<td style={{ textAlign: 'right' }}>{brl(soma(aporte))}</td></tr>)
+  linhas.push(<tr key='comAporte' style={{ fontWeight: 800, background: 'var(--purple-pale)', color: 'var(--purple)' }}><td title={visao === 'caixa' ? 'Caixa gerado (positivo) ou consumido (negativo) no mês, contando os aportes' : 'Lucro por competência mais o dinheiro que entrou de fora (aportes)'}>{visao === 'caixa' ? 'Caixa gerado com aportes' : 'Lucro líquido com aportes'}</td>{meses.map(m => <td key={m.mes} style={tdv(comAporte(m))}>{brl(comAporte(m))}</td>)}<td style={tdv(soma(comAporte))}>{brl(soma(comAporte))}</td></tr>)
+  if (visao === 'caixa' && meses.some(m => varBancos(m) != null)) linhas.push(<tr key='varBancos' style={{ fontSize: 12, color: 'var(--gray-600)' }}><td title='Saldo do fim do mês menos o do mês anterior, somando as contas (Auditoria › saldos). A diferença para a linha de cima são transferências para contas sem saldo, ajustes de saldo e pagamentos que só passam pelo caixa (ex.: empréstimos).'>Variação dos saldos dos bancos (conferência)</td>{meses.map(m => <td key={m.mes} style={{ textAlign: 'right' }}>{varBancos(m) == null ? '—' : brl(varBancos(m))}</td>)}<td style={{ textAlign: 'right' }}>{meses.every(m => varBancos(m) != null) ? brl(soma(varBancos)) : '—'}</td></tr>)
   const totalAno = Object.fromEntries(['liq', 'cmv', 'cmo', 'mc', 'ebitda', 'll'].map(k => [k, total(k)]))
 
   function exportar() {
@@ -129,6 +145,8 @@ export default function FinanceiroAno({ ano }) {
         rows.push({ linha: `${g.nome} › ${p.nome}`, ...Object.fromEntries(meses.map(m => [m.mes, valorConta(m, p.id, s)])), ano: soma(m => valorConta(m, p.id, s)) })
       }
     }
+    rows.push({ linha: '(+) Aportes, venda de ativo e outras entradas', ...Object.fromEntries(meses.map(m => [m.mes, aporte(m)])), ano: soma(aporte) })
+    rows.push({ linha: visao === 'caixa' ? 'Caixa gerado com aportes' : 'Lucro líquido com aportes', ...Object.fromEntries(meses.map(m => [m.mes, comAporte(m)])), ano: soma(comAporte) })
     baixarXlsx({ nomeArquivo: `DRE_${visao}_${ano}`, aba: String(ano), linhas: rows, colunas: [
       { header: 'Linha', key: 'linha', tipo: 'texto', largura: 50 },
       ...meses.map(m => ({ header: `${MESES[+m.mes.slice(5) - 1]}/${ano}`, key: m.mes, tipo: 'moeda', largura: 13 })),
