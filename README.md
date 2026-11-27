@@ -103,7 +103,7 @@ Uma tela por mês, abas na ordem do fechamento:
   até 4 dias, depois em grupo pela soma do dia (repasses do iFood). Sobra = lançamento faltando; a diferença líquida é o
   que falta de fato. Nº da conta do extrato → conta do Bling em `configuracoes.dre_extrato_contas`.
 - **Passo a passo** (primeira aba): os passos do mês na ordem, com ✓ automática quando o sistema encontra o que foi
-  feito e ✓ à mão nos de conferência (`dre_mes.extras.passos`); no fim, o cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
+  feito e ✓ à mão nos de conferência (`dre_mes.extras.passos`). Na conferência: extrato do mês importado em cada conta e extrato × caixa do Bling sem diferença; no fim, o cadeado (`dre_mes`, as duas visões, guarda os totais). Fechado, os gatilhos bloqueiam
   receitas, manuais, saldos e lançamentos do mês. Só admin reabre.
 
 ---

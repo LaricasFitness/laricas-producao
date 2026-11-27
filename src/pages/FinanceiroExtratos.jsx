@@ -157,33 +157,40 @@ function ListaLinhas({ titulo, linhas, vazio, campos }) {
   </div>
 }
 
+// Linhas dos extratos com data no mês (e 5 dias antes e depois, para casar lançamentos na virada do mês)
+export async function carregarExtratos(mes) {
+  return lerTudo(() => supabase.from('dre_extrato_banco').select('conta, data, valor, descricao')
+    .gte('data', addDias(`${mes}-01`, -5)).lte('data', addDias(ultimoDia(mes), 5)).order('data').order('chave'))
+}
+
+// Por conta com extrato no mês: linhas do banco × caixa do Bling. Usado aqui e no passo a passo do mês.
+export function conferirExtratos(d, linhas) {
+  const ini = `${d.mes}-01`, fim = ultimoDia(d.mes), doMes = x => x.data >= ini && x.data <= fim
+  const nomes = [...new Set(linhas.filter(doMes).map(l => l.conta))].sort()
+  return nomes.map(conta => {
+    const banco = linhas.filter(l => l.conta === conta).map(l => ({ ...l, valor: +l.valor }))
+    const bling = d.caixa.filter(l => l.banco === conta).map(l => ({ data: l.data, valor: Math.round(sinalCaixa(l) * (+l.valor) * 100) / 100, nome: l.nome, historico: l.historico, categoria: l.categoria }))
+    const c = conciliarExtrato(banco, bling)
+    const bancoMes = banco.filter(doMes), soBanco = c.soBanco.filter(doMes)
+    return { conta, nBanco: bancoMes.length, nBling: bling.length, movBanco: somar(bancoMes), movBling: somar(bling),
+      soBanco, soBling: c.soBling, liquida: Math.round((somar(soBanco) - somar(c.soBling)) * 100) / 100,
+      casados: c.pares.filter(p => doMes(p.banco)).length + c.grupos.reduce((t, g) => t + g.banco.filter(doMes).length, 0), grupos: c.grupos.length }
+  })
+}
+
 export default function ExtratosBanco({ d, contas, onSalvo }) {
   const [linhas, setLinhas] = useState(null)
   const [erro, setErro] = useState('')
   const [aberta, setAberta] = useState(null)
-  const ini = `${d.mes}-01`, fim = ultimoDia(d.mes)
   async function carregar() {
     setErro('')
     try {
-      setLinhas(await lerTudo(() => supabase.from('dre_extrato_banco').select('conta, data, valor, descricao')
-        .gte('data', addDias(ini, -5)).lte('data', addDias(fim, 5)).order('data').order('chave')))
+      setLinhas(await carregarExtratos(d.mes))
     } catch (e) { setErro(erroMsg(e)); setLinhas([]) }
   }
   useEffect(() => { carregar() }, [d.mes])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const porConta = useMemo(() => {
-    if (!linhas) return []
-    const nomes = [...new Set(linhas.filter(l => l.data >= ini && l.data <= fim).map(l => l.conta))].sort()
-    return nomes.map(conta => {
-      const banco = linhas.filter(l => l.conta === conta).map(l => ({ ...l, valor: +l.valor }))
-      const bling = d.caixa.filter(l => l.banco === conta).map(l => ({ data: l.data, valor: Math.round(sinalCaixa(l) * (+l.valor) * 100) / 100, nome: l.nome, historico: l.historico, categoria: l.categoria }))
-      const c = conciliarExtrato(banco, bling)
-      const doMes = x => x.data >= ini && x.data <= fim
-      const bancoMes = banco.filter(doMes)
-      return { conta, nBanco: bancoMes.length, nBling: bling.length, movBanco: somar(bancoMes), movBling: somar(bling),
-        soBanco: c.soBanco.filter(doMes), soBling: c.soBling, casados: c.pares.filter(p => doMes(p.banco)).length + c.grupos.reduce((t, g) => t + g.banco.filter(doMes).length, 0), grupos: c.grupos.length }
-    })
-  }, [linhas, d.caixa, ini, fim])
+  const porConta = useMemo(() => linhas ? conferirExtratos(d, linhas) : [], [linhas, d])
 
   return (
     <div className="card">
@@ -202,7 +209,7 @@ export default function ExtratosBanco({ d, contas, onSalvo }) {
                 <td>{ab ? '▾ ' : '▸ '}{c.conta}</td><td style={{ textAlign: 'right' }}>{c.nBanco}</td><td style={{ textAlign: 'right' }}>{c.nBling}</td><td style={{ textAlign: 'right' }}>{c.casados}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, color: c.soBanco.length ? 'var(--danger)' : 'var(--ok)' }}>{c.soBanco.length ? `${c.soBanco.length} · ${brl(somar(c.soBanco))}` : '✓'}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, color: c.soBling.length ? 'var(--danger)' : 'var(--ok)' }}>{c.soBling.length ? `${c.soBling.length} · ${brl(somar(c.soBling))}` : '✓'}</td>
-                <td style={{ textAlign: 'right', fontWeight: 700 }} title="só no banco − só no Bling: é o que falta (ou sobra) no caixa do Bling">{brl(somar(c.soBanco) - somar(c.soBling))}</td></tr>]
+                <td style={{ textAlign: 'right', fontWeight: 700 }} title="só no banco − só no Bling: é o que falta (ou sobra) no caixa do Bling">{brl(c.liquida)}</td></tr>]
               if (ab) r.push(<tr key={c.conta + ':d'}><td colSpan={7} style={{ background: 'var(--gray-50)' }}>
                 {ok ? <div style={{ fontSize: 12, color: 'var(--ok)' }}>✓ Todas as linhas do banco estão no Bling e vice-versa.</div> : <>
                   <div style={{ fontSize: 12, color: 'var(--gray-600)', marginBottom: 6 }}>

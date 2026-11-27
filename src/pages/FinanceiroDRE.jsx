@@ -8,7 +8,7 @@ import {
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 import FinanceiroAno from './FinanceiroAno'
-import ExtratosBanco from './FinanceiroExtratos'
+import ExtratosBanco, { carregarExtratos, conferirExtratos } from './FinanceiroExtratos'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
 
 // Financeiro › DRE: regras em src/lib/dreLaricas.js. Abas na ordem do fechamento do mês.
@@ -910,6 +910,13 @@ function TelaPassos({ d, onSalvo, irPara }) {
   const manuaisDe = re => d.manuais.filter(m => re.test(m.conta))
   const bancosOk = p.porBanco.length > 0 && p.porBanco.every(b => b.varBanco != null && Math.abs(b.varBanco - b.mov) < 1)
   const mkt = d.comp?.extras?.cmv_marketing
+  // extratos dos bancos importados no mês: quais contas têm extrato e o que falta no Bling em cada uma
+  const [extratos, setExtratos] = useState(null)
+  useEffect(() => { carregarExtratos(d.mes).then(setExtratos, () => setExtratos([])) }, [d.mes])
+  const confExt = useMemo(() => extratos ? conferirExtratos(d, extratos) : [], [extratos, d])
+  const contasBanco = p.porBanco.map(b => b.banco)
+  const semExtrato = contasBanco.filter(b => !confExt.some(x => x.conta === b))
+  const extDif = confExt.filter(x => Math.abs(x.liquida) >= 1)
   const PASSOS = [
     { grupo: '1. Bling' },
     { id: 'bling', t: 'Atualizar do Bling depois do fim do mês', auto: syncOk, det: ultimaSync ? `última gravação: ${new Date(ultimaSync).toLocaleString('pt-BR')}` : 'nunca atualizado',
@@ -946,8 +953,14 @@ function TelaPassos({ d, onSalvo, irPara }) {
       det: mkt ? `${brl(mkt.reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'não buscado',
       como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },
     { grupo: '5. Conferência' },
+    { id: 'extratos', t: 'Importar o extrato do mês de cada conta (corrente e investimentos)', auto: extratos != null && contasBanco.length > 0 && !semExtrato.length, aba: 'auditoria',
+      det: extratos == null ? 'verificando…' : !contasBanco.length ? 'nenhuma conta no caixa do mês' : semExtrato.length ? `sem extrato: ${semExtrato.join(', ')}` : 'todas as contas com extrato',
+      como: 'Auditoria › Importar extrato do banco: C6 › Exportar Excel; Inter › Extrato › CSV; outros bancos e investimentos em Excel, CSV ou OFX (com data, valor e saldo). Pegue do dia 1 ao último dia do mês (pode ser um período maior: reimportar não duplica) e escolha a conta do Bling de cada arquivo. O saldo do último dia vai sozinho para os saldos. Conta sem movimento no mês: marque à mão.' },
+    { id: 'extrato_bling', t: 'Extrato do banco × caixa do Bling: nada faltando', auto: confExt.length > 0 && !semExtrato.length && !extDif.length, aba: 'auditoria',
+      det: !confExt.length ? 'importe os extratos primeiro' : extDif.length ? `diferença: ${extDif.map(x => `${x.conta} ${brl(x.liquida)}`).join(' · ')}` : 'todas as contas batem',
+      como: 'Auditoria › Extratos dos bancos × Bling: abra a conta com diferença e veja as linhas "Só no banco" (lançar no Bling) e "Só no Bling" (conferir ou apagar no Bling). Fatura de cartão e repasses semanais aparecem dos dois lados quando a soma não fecha. Depois de corrigir no Bling, Atualizar do Bling de novo.' },
     { id: 'saldos', t: 'Saldos dos bancos batem com o Bling', auto: bancosOk, aba: 'auditoria', det: bancosOk ? 'todas as contas conferem' : 'lance os saldos do fim do mês e do anterior',
-      como: 'Auditoria › Importar extrato do banco (OFX, CSV ou Excel de cada conta, inclusive investimentos): grava o saldo do último dia e mostra linha a linha o que falta no Bling. Sem arquivo, digite o saldo do extrato.' },
+      como: 'Os saldos do fim do mês vêm do extrato importado no passo acima (Auditoria › saldos por conta). Conta sem arquivo: digite o saldo do extrato do último dia. Se não bater, o passo de cima mostra o lançamento que falta.' },
     ...(d.mes >= PROVA_DESDE ? [{ id: 'prova', t: 'Prova da competência: "não explicado" = 0', aba: 'auditoria', det: 'saldos a receber e das carteiras no fim do mês + cálculo no Bling',
       como: 'Auditoria › Prova da competência: lance o a receber de cada plataforma e o saldo das carteiras no último dia do mês (o do mês anterior já vem), clique em "Calcular a pagar e a receber no Bling" e salve. Se sobrar diferença, ela aponta um erro na competência: procure na ponte. Marque quando zerar.' }] : []),
     { id: 'ponte', t: 'Revisar a ponte competência → caixa e a DRE', aba: 'auditoria', det: `lucro por competência ${brl(c.ll)} · resultado de caixa ${brl(p.resCx)}`,
