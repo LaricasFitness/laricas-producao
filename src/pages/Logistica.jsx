@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabase'
+import { formatCEP, getZone, buildRoutes, salvarHistorico } from '../lib/rotas'
 import { Upload, RefreshCw, Download, FileText, CheckCircle, AlertTriangle, Search, Plus, Trash2 } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -12,44 +13,9 @@ const PICKUP = {
   nome: 'Fabio Gabriel', tel: '11 93415 7853', obs: 'LARICAS FITNESS',
 }
 
-function formatCEP(v) {
-  if (!v) return ''
-  const s = String(Math.round(Number(String(v).replace(/\D/g,'')) || 0)).padStart(8,'0')
-  return `${s.slice(0,5)}-${s.slice(5)}`
-}
 function formatTel(v) { return v ? String(v).replace(/\D/g,'').replace(/^55/,'') : '' }
 
-function getZone(cidade='', cepNum='') {
-  const c = cidade.toLowerCase()
-  if (c.includes('barueri') || c.includes('santana de parnaíba') || c.includes('cajamar')) return 'Alphaville'
-  if (c.includes('guarulhos')) return 'Guarulhos'
-  if (c.includes('santo andré')) return 'ABC — Santo André'
-  if (c.includes('são bernardo') || c.includes('diadema')) return 'ABC — São Bernardo'
-  if (c.includes('osasco')) return 'Osasco'
-  const p = parseInt((cepNum||'').replace(/\D/g,'').slice(0,5)) || 0
-  if (p<=1999) return 'Centro'
-  if (p<=2999) return 'Norte'
-  if (p<=3999) return 'Zona Leste'
-  if (p<=4999) return 'Zona Sul'
-  if (p<=5999) return 'Zona Oeste'
-  if (p<=8999) return 'Zona Leste Ext.'
-  return 'Outro'
-}
 
-function buildRoutes(orders) {
-  const byZone = {}
-  for (const o of orders) {
-    const zone = getZone(o.cidade, o.cepNum)
-    if (!byZone[zone]) byZone[zone] = []
-    byZone[zone].push(o)
-  }
-  for (const z of Object.values(byZone)) z.sort((a,b)=>(a.cepNum||'').localeCompare(b.cepNum||''))
-  const routes = [], MAX = 5
-  for (const [zone, ords] of Object.entries(byZone)) {
-    for (let i = 0; i < ords.length; i += MAX) routes.push({ label: zone, stops: ords.slice(i,i+MAX) })
-  }
-  return routes.map((r,i) => ({ ...r, code: String(i+1).padStart(2,'0') }))
-}
 
 function parseCSVRobusto(texto) {
   const rows = []; let col='', row=[], inQuote=false
@@ -337,20 +303,6 @@ function gerarPDFRoteiro(routes, dateStr) {
 }
 
 // ── Salvar histórico no Supabase ──────────────────────────────────────────────
-async function salvarHistorico(routes, dateStr, datasAtivas) {
-  try {
-    const usuario = JSON.parse(sessionStorage.getItem('usuario')||'{}').nome
-    const totalParadas = routes.reduce((s,r)=>s+r.stops.length, 0)
-    await supabase.from('logistica_historico').insert({
-      datas: datasAtivas?.length ? datasAtivas : [dateStr],
-      total_pedidos: totalParadas,
-      total_rotas: routes.length,
-      total_paradas: totalParadas,
-      rotas: routes,
-      criado_por: usuario,
-    })
-  } catch(e) { console.error('Erro ao salvar histórico:', e) }
-}
 
 function extrairDatasLalamove(texto) {
   const rows = parseCSVRobusto(texto)

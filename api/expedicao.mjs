@@ -19,6 +19,7 @@
 // GET  ?acao=pedidos&lista=atendidos   pedidos "Atendido" dos últimos dias (B2B, venda direta etc. ficam
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
+// POST {acao:'telefones', contatos}   só leitura, até 30: celular dos clientes (parada da Lalamove)
 // POST {acao:'rastreio', objetos}   só leitura, até 30: status da entrega dos objetos logísticos (volumes)
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 // POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
@@ -101,6 +102,11 @@ function resumo(d) {
     cep: soDigitos(d.transporte?.etiqueta?.cep),
     cidade: d.transporte?.etiqueta?.municipio || '',
     uf: d.transporte?.etiqueta?.uf || '',
+    // endereço de entrega (etiqueta) e cliente: montar a rota da Lalamove sem importar o arquivo do planejamento
+    entrega: d.transporte?.etiqueta ? { nome: d.transporte.etiqueta.nome || '', rua: d.transporte.etiqueta.endereco || '', numero: d.transporte.etiqueta.numero || '',
+      complemento: d.transporte.etiqueta.complemento || '', bairro: d.transporte.etiqueta.bairro || '', cidade: d.transporte.etiqueta.municipio || '',
+      uf: d.transporte.etiqueta.uf || '', cep: soDigitos(d.transporte.etiqueta.cep) } : null,
+    contatoId: d.contato?.id || null, cpfCnpj: soDigitos(d.contato?.numeroDocumento),
     // para o picking (só vêm no pedido completo)
     itens: (d.itens || []).map(i => ({ codigo: i.codigo || '', descricao: i.descricao || '', quantidade: Number(i.quantidade) || 0 })),
     obs: d.observacoes || '',
@@ -580,6 +586,17 @@ async function rastreio(tk, objetos) {
   return saida
 }
 
+// Celular (ou telefone) de até 30 contatos do Bling, para a parada da Lalamove
+async function telefones(tk, ids) {
+  const saida = []
+  for (let i = 0; i < ids.length; i += 3) {
+    saida.push(...await Promise.all(ids.slice(i, i + 3).map(id =>
+      bling(tk, `/contatos/${id}`).then(j => ({ id, tel: soDigitos(j?.data?.celular) || soDigitos(j?.data?.telefone) }))
+        .catch(e => { if (e instanceof ErroConexao) throw e; return { id, tel: '', erro: e.message } }))))
+  }
+  return saida
+}
+
 // ───────────── Shopify ─────────────
 
 async function shopify() {
@@ -822,6 +839,11 @@ export default async function handler(req, res) {
       const objetos = [...new Set((req.body?.objetos || []).map(String).filter(x => /^\d+$/.test(x)))]
       if (!objetos.length || objetos.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 objetos.' })
       return res.status(200).json({ objetos: await rastreio(tk, objetos) })
+    }
+    if (acao === 'telefones') {
+      const contatos = [...new Set((req.body?.contatos || []).map(String).filter(x => /^\d+$/.test(x)))]
+      if (!contatos.length || contatos.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 contatos.' })
+      return res.status(200).json({ telefones: await telefones(tk, contatos) })
     }
     if (acao === 'baixar') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })

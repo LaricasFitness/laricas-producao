@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
-import { envioDoPedido } from '../lib/expedicao'
+import { envioDoPedido, chamarExpedicao } from '../lib/expedicao'
+import { buildRoutes, formatCEP, salvarHistorico } from '../lib/rotas'
 import { Bike, RefreshCw, ExternalLink, Check, CalendarClock, AlertTriangle, Pencil } from 'lucide-react'
 
 // Expedição › 4. Baixa › Lalamove. Cada pacote lido que está numa rota Lalamove do planejamento
@@ -91,15 +92,49 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
     chamarLalamove({ acao: 'corridas', pedidos: todosNumeros }).then(j => setCorridas(j.corridas || [])).catch(e => setErro(e.message))
   }, [todosNumeros.join(','), status?.configurada])
 
+  // Monta as rotas direto dos pedidos do Bling (endereço da etiqueta + celular do cliente), sem importar o arquivo do
+  // planejamento: mesma regra da Logística (zona, até 5 paradas, ordem de CEP) e grava em logistica_historico.
+  async function montarRotas(pacotes) {
+    const semEnd = pacotes.filter(p => !p.entrega?.rua)
+    if (semEnd.length) { setErro(`Sem endereço de entrega no Bling (ou ainda carregando): ${semEnd.map(p => p.numero).join(', ')}. Espere carregar ou monte em Logística › Roteiro.`); return }
+    setErro(''); setOcupado('montar')
+    try {
+      const tels = {}
+      const contatos = [...new Set(pacotes.map(p => p.contatoId).filter(Boolean).map(String))]
+      for (let i = 0; i < contatos.length; i += 30) {
+        const j = await chamarExpedicao('telefones', { contatos: contatos.slice(i, i + 30) })
+        for (const t of j.telefones || []) if (t.tel) tels[t.id] = t.tel.replace(/^55(?=d{10,11}$)/, '')
+      }
+      // sem celular no Bling: o do último endereço guardado (enderecos_cache, pelo CPF/CNPJ)
+      const docs = pacotes.filter(p => !tels[String(p.contatoId)] && p.cpfCnpj).map(p => p.cpfCnpj)
+      const cache = {}
+      if (docs.length) { const { data } = await supabase.from('enderecos_cache').select('cpf_cnpj, tel').in('cpf_cnpj', docs); for (const r of data || []) cache[r.cpf_cnpj] = r.tel }
+      const paradas = pacotes.map(p => {
+        const e = p.entrega, cepNum = String(e.cep || '').padStart(8, '0')
+        return { id: String(p.numero), nome: e.nome || p.cliente, tel: tels[String(p.contatoId)] || cache[p.cpfCnpj] || '', rua: e.rua, numero: e.numero,
+          complemento: e.complemento, bairro: e.bairro, cidade: e.cidade, uf: e.uf, cep: formatCEP(e.cep), cepNum, cpfCnpj: p.cpfCnpj || '',
+          dataPrevista: p.dataPrevista ? p.dataPrevista.split('-').reverse().join('/') : '', itens: (p.itens || []).map(i => ({ sku: i.codigo, qtd: i.quantidade })), excluir: false }
+      })
+      const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+      const salvo = await salvarHistorico(buildRoutes(paradas), hoje, [hoje])
+      if (!salvo) throw new Error('não consegui gravar as rotas')
+      setHistoricos(hs => [salvo, ...(hs || [])])
+    } catch (e) { setErro('Não consegui montar as rotas: ' + e.message) }
+    finally { setOcupado('') }
+  }
+
   // pacote Lalamove lido que não está em nenhuma rota salva: sem rota não há como chamar a corrida, então avisa
   const semRota = historicos ? lidos.filter(p => /lalamove/i.test(envioDoPedido(p)) && !rotaDoPedido[String(p.numero)]) : []
   const avisoSemRota = semRota.length > 0 && <div className='alert-banner warning' style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
     <div><AlertTriangle size={14} /> <b>{semRota.length} pacote(s) Lalamove sem rota salva</b>: {semRota.map(p => p.numero).join(', ')}.</div>
-    <div style={{ fontSize: 12 }}>Para chamar a Lalamove, monte as rotas do dia em Logística › Roteiro (as rotas são salvas ao gerar) e clique em "Recarregar rotas".</div>
-    <div><button className='btn btn-ghost btn-sm' onClick={carregarRotas}><RefreshCw size={13} /> Recarregar rotas</button></div>
+    <div style={{ fontSize: 12 }}>O sistema monta as rotas com o endereço e o celular do pedido no Bling (mesma regra da Logística: por zona, até 5 paradas). Leia todos os pacotes Lalamove antes, para entrarem juntos.</div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button className='btn btn-primary btn-sm' onClick={() => montarRotas(semRota)} disabled={!!ocupado}>{ocupado === 'montar' ? <RefreshCw size={13} className='spin' /> : <Bike size={13} />} Montar rotas destes {semRota.length} pacote(s)</button>
+      <button className='btn btn-ghost btn-sm' onClick={carregarRotas} disabled={!!ocupado} title='Se montou as rotas em Logística › Roteiro'><RefreshCw size={13} /> Recarregar rotas</button>
+    </div>
   </div>
   if (!rotas.length) return avisoSemRota ? <div className='card card-pad' style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Bike size={16} /><div style={{ fontWeight: 700, fontSize: 14 }}>Lalamove</div></div>{avisoSemRota}</div> : null
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Bike size={16} /><div style={{ fontWeight: 700, fontSize: 14 }}>Lalamove</div></div>{erro && <div className='alert-banner danger'>{erro}</div>}{avisoSemRota}</div> : null
 
   const corridaDa = r => corridas.find(c => c.pedidos.some(n => r.stops.some(s => String(s.id) === n)) && !/CANCEL|REJECT|EXPIRE/i.test(c.status || ''))
 
