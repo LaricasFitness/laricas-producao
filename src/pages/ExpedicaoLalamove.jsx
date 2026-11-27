@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../supabase'
+import { envioDoPedido } from '../lib/expedicao'
 import { Bike, RefreshCw, ExternalLink, Check, CalendarClock, AlertTriangle, Pencil } from 'lucide-react'
 
 // Expedição › 4. Baixa › Lalamove. Cada pacote lido que está numa rota Lalamove do planejamento
@@ -51,7 +52,7 @@ export function LembretesAdiados() {
 }
 
 export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
-  const [historicos, setHistoricos] = useState([])
+  const [historicos, setHistoricos] = useState(null)
   const [status, setStatus] = useState(null)        // { configurada, ambiente }
   const [corridas, setCorridas] = useState([])
   const [cotacoes, setCotacoes] = useState({})      // chave da rota → cotação
@@ -60,16 +61,17 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
   const [erro, setErro] = useState('')
   const [editando, setEditando] = useState(null)    // correção de endereço aberta: { numero, rua, numero_end, ... }
 
+  const carregarRotas = () => supabase.from('logistica_historico').select('id, datas, rotas, criado_em').order('criado_em', { ascending: false }).limit(8)
+    .then(({ data }) => setHistoricos(data || []))
   useEffect(() => {
-    supabase.from('logistica_historico').select('id, datas, rotas, criado_em').order('criado_em', { ascending: false }).limit(8)
-      .then(({ data }) => setHistoricos(data || []))
+    carregarRotas()
     chamarLalamove({ acao: 'status' }).then(setStatus).catch(() => setStatus({ configurada: false }))
   }, [])
 
   // Rota de cada pedido: a do roteiro mais recente em que ele aparece
   const rotaDoPedido = useMemo(() => {
     const mapa = {}
-    for (const h of historicos) for (const r of h.rotas || []) for (const s of r.stops || []) {
+    for (const h of historicos || []) for (const r of h.rotas || []) for (const s of r.stops || []) {
       const n = String(s.id)
       if (!mapa[n] && !s.excluir) mapa[n] = { chave: `${h.id}:${r.code}`, historicoId: h.id, code: r.code, label: r.label, stops: r.stops.filter(x => !x.excluir) }
     }
@@ -89,7 +91,15 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
     chamarLalamove({ acao: 'corridas', pedidos: todosNumeros }).then(j => setCorridas(j.corridas || [])).catch(e => setErro(e.message))
   }, [todosNumeros.join(','), status?.configurada])
 
-  if (!rotas.length) return null
+  // pacote Lalamove lido que não está em nenhuma rota salva: sem rota não há como chamar a corrida, então avisa
+  const semRota = historicos ? lidos.filter(p => /lalamove/i.test(envioDoPedido(p)) && !rotaDoPedido[String(p.numero)]) : []
+  const avisoSemRota = semRota.length > 0 && <div className='alert-banner warning' style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div><AlertTriangle size={14} /> <b>{semRota.length} pacote(s) Lalamove sem rota salva</b>: {semRota.map(p => p.numero).join(', ')}.</div>
+    <div style={{ fontSize: 12 }}>Para chamar a Lalamove, monte as rotas do dia em Logística › Roteiro (as rotas são salvas ao gerar) e clique em "Recarregar rotas".</div>
+    <div><button className='btn btn-ghost btn-sm' onClick={carregarRotas}><RefreshCw size={13} /> Recarregar rotas</button></div>
+  </div>
+  if (!rotas.length) return avisoSemRota ? <div className='card card-pad' style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Bike size={16} /><div style={{ fontWeight: 700, fontSize: 14 }}>Lalamove</div></div>{avisoSemRota}</div> : null
 
   const corridaDa = r => corridas.find(c => c.pedidos.some(n => r.stops.some(s => String(s.id) === n)) && !/CANCEL|REJECT|EXPIRE/i.test(c.status || ''))
 
@@ -180,6 +190,7 @@ export default function LalamoveRotas({ lidos, tirarDaLeitura }) {
       </div>
       {status && !status.configurada && <div className="alert-banner warning">A Lalamove não está configurada no Vercel (LALAMOVE_API_KEY e LALAMOVE_API_SECRET).</div>}
       {erro && <div className="alert-banner danger">{erro}</div>}
+      {avisoSemRota}
       {rotas.map(r => {
         const lidosRota = r.stops.filter(s => numerosLidos.has(String(s.id)))
         const corrida = corridaDa(r)
