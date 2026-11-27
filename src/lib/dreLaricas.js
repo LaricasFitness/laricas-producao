@@ -134,24 +134,54 @@ export const parteVoucher = p => p.totalProdutos > 0
 
 // pedidos: [{ id, numero, tipo, loja, itens: [{ codigo, descricao, quantidade }], totalProdutos, total, frete }]
 // → grupos para dre_mes.extras.cmv_marketing
+// Mercadoria para revenda nos pedidos do Bling: código do produto → item de estoque e quantas unidades cada um tem
+// (configuracoes.revenda_skus, editável na Conferência › Revenda). Sem configuração, vale o padrão abaixo.
+export const CHAVE_REVENDA_SKUS = 'revenda_skus'
+export const REVENDA_SKUS_PADRAO = { 'WAFER_CHOCOLATE_AO_LEITE_27g': 12, 'WAFER_CHOCOLATE_AO_LEITE_27g_UN': 1, 'WAFER 27G CHOCOLATE ZERO ACUCAR - LARICAS': 1 }
+export async function carregarRevenda() {
+  const [{ data: itens }, { data: cfg }] = await Promise.all([
+    supabase.from('materias_primas').select('id, nome, custo_unitario').eq('categoria', CATEGORIA_REVENDA).eq('ativo', true).order('nome'),
+    supabase.from('configuracoes').select('valor').eq('chave', CHAVE_REVENDA_SKUS).maybeSingle(),
+  ])
+  let skus = null
+  try { skus = cfg?.valor ? JSON.parse(cfg.valor) : null } catch { skus = null }
+  // padrão: todos os códigos para o primeiro produto de revenda (hoje só a Wafer)
+  if (!skus && itens?.length) skus = Object.fromEntries(Object.entries(REVENDA_SKUS_PADRAO).map(([k, un]) => [k, { item: itens[0].id, un }]))
+  return { itens: itens || [], skus: skus || {}, padrao: !cfg?.valor }
+}
+// código do Bling → { item, un, custoUnit } (custo de uma unidade vendida: un × custo da unidade de estoque)
+export function revendaDoCodigo(rev, codigo) {
+  const k = Object.keys(rev.skus).find(x => x.trim().toLowerCase() === String(codigo || '').trim().toLowerCase())
+  if (!k) return null
+  const { item, un } = rev.skus[k], it = rev.itens.find(x => x.id === item)
+  return it ? { item: it, un: +un || 1, custoUnit: (+un || 1) * (+it.custo_unitario || 0) } : null
+}
+
 export async function custoMarketing(pedidos) {
-  const custo = await custoPorSku()
+  const custo = await custoPorSku(), rev = await carregarRevenda()
   const grupos = {}
   for (const p of pedidos) {
     const [nome, conta] = TIPOS_MKT[p.tipo] || [p.tipo, 'vm.outros']
-    const g = grupos[p.tipo] ||= { tipo: p.tipo, nome, conta, pedidos: 0, mp: 0, emb: 0, itens: {}, semFicha: {} }
+    const g = grupos[p.tipo] ||= { tipo: p.tipo, nome, conta, pedidos: 0, mp: 0, emb: 0, rev: 0, itens: {}, semFicha: {} }
     const f = p.tipo === 'voucher' ? parteVoucher(p) : 1
     g.pedidos++
     for (const it of p.itens || []) {
       const c = custo(it.codigo), q = it.quantidade * f
       const chave = it.codigo || it.descricao
+      // mercadoria para revenda (Wafer): custo de compra, sai do CMV de revenda
+      const r = !c && (revendaDoCodigo(rev, it.codigo) || revendaDoCodigo(rev, it.descricao))
+      if (r && r.custoUnit > 0) {
+        const x = g.itens[chave] ||= { codigo: chave, descricao: it.descricao, qtd: 0, mpUnit: 0, embUnit: 0, revUnit: r.custoUnit, un: r.un }
+        x.qtd += q; g.rev += r.custoUnit * q
+        continue
+      }
       if (!c) { g.semFicha[chave] = (g.semFicha[chave] || 0) + q; continue }
       const x = g.itens[it.codigo] ||= { codigo: it.codigo, descricao: it.descricao, qtd: 0, mpUnit: c.mpUnit, embUnit: c.embUnit }
       x.qtd += q
       g.mp += c.mpUnit * q; g.emb += c.embUnit * q
     }
   }
-  return Object.values(grupos).map(g => ({ ...g, mp: Math.round(g.mp * 100) / 100, emb: Math.round(g.emb * 100) / 100,
+  return Object.values(grupos).map(g => ({ ...g, mp: Math.round(g.mp * 100) / 100, emb: Math.round(g.emb * 100) / 100, rev: Math.round(g.rev * 100) / 100,
     itens: Object.values(g.itens).sort((a, b) => b.qtd - a.qtd), semFicha: Object.entries(g.semFicha).map(([codigo, qtd]) => ({ codigo, qtd })) }))
 }
 
@@ -159,6 +189,8 @@ export async function custoMarketing(pedidos) {
 // Só os deliverys vêm da aba Receitas: site, clube, Mercado Livre, revenda e balcão já estão nos pedidos do Bling
 export const totalPedidos = d => d.receitas.filter(r => r.conta === 'rec.delivery').reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
 export const pedidosAtivacao = d => d.receitas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0)
+// Custo de um grupo de produtos que saíram sem venda: matéria-prima + embalagem + mercadoria para revenda
+export const custoMkt = g => (g.mp || 0) + (g.emb || 0) + (g.rev || 0)
 // Item de estoque comprado pronto para revender (categoria da matéria-prima)
 export const CATEGORIA_REVENDA = 'Mercadoria para revenda'
 export const ehRevenda = c => c?.categoria === CATEGORIA_REVENDA
@@ -188,7 +220,8 @@ export function montar(d, visao) {
       const conta = planoDe[g.conta] ? g.conta : 'vm.outros'
       if (g.mp) add('cmv.mp', -g.mp, { tipo: 'cmvmkt', g })
       if (g.emb) add('cmv.emb', -g.emb, { tipo: 'cmvmkt', g })
-      if (g.mp + g.emb) add(conta, g.mp + g.emb, { tipo: 'cmvmkt', g })
+      if (g.rev) add(planoDe['cmv.revenda'] ? 'cmv.revenda' : 'cmv.mp', -g.rev, { tipo: 'cmvmkt', g })
+      if (custoMkt(g)) add(conta, custoMkt(g), { tipo: 'cmvmkt', g })
     }
     const rateados = new Set((d.rateios || []).filter(r => r.id_bling).map(r => String(r.id_bling)))
     for (const l of d.pagar) {
@@ -322,7 +355,7 @@ export function conciliacaoCMV(d) {
   const contasCmv = d.plano.filter(p => p.grupo === 'cmv').map(p => p.id)
   const itensCx = contasCmv.flatMap(k => vx[k]?.itens || [])
   const pago = k => (vx[k]?.valor || 0)
-  const mkt = (d.comp?.extras?.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0)
+  const mkt = (d.comp?.extras?.cmv_marketing || []).reduce((t, g) => t + custoMkt(g), 0)
   return {
     mp: porTipo('mp'), emb: porTipo('emb'), revenda: porTipo('mp', true), pagoRevenda: pago('cmv.revenda'),
     envio: vc['cmv.envio']?.itens.filter(x => x.tipo === 'envio' || x.tipo === 'sacola').reduce((t, x) => t + x.valor, 0) || 0,

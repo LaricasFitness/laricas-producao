@@ -2889,7 +2889,7 @@ export function ConferenciaMP() {
       .eq('ativo', true).order('categoria').order('nome')
     if (error) ({ data } = await supabase.from('materias_primas').select(sel)   // antes do estoque_embalagem.sql
       .eq('ativo', true).order('categoria').order('nome'))
-    // mercadoria para revenda (Wafer) tem contagem própria: Estoque › Produtos prontos (revenda)
+    // mercadoria para revenda (Wafer) tem contagem própria: Estoque › Conferência › Revenda
     data = (data||[]).filter(m => m.categoria !== 'Mercadoria para revenda')
     setMps(data)
     setModo(m => m || modoContagemInicial((data||[]).some(x => x.contagem_semanal)))

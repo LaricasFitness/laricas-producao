@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { RefreshCw, Save, Lock, LockOpen, Plus, Trash2, Download } from 'lucide-react'
 import {
   GRUPOS, NOME_GRUPO, CANAIS, carregarMes, montar, calcular, ponte, classificar, regraDe, totalPedidos, mesAnterior,
-  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia, sinalCaixa,
+  parcelaDoMes, fimRateio, custoMarketing, TIPOS_MKT, conciliacaoCMV, ultimoDia, sinalCaixa, custoMkt,
   PROVA_DESDE, ITENS_PROVA, prova, abertoEm, correiosAPagarEm,
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
@@ -739,7 +739,8 @@ function ProdutosMarketing({ d, fechado, onSalvo }) {
     } catch (e) { setErro(erroMsg(e)) }
     setOcupado('')
   }
-  const total = grupos.reduce((t, g) => t + g.mp + g.emb, 0)
+  const total = grupos.reduce((t, g) => t + custoMkt(g), 0)
+  const temRev = grupos.some(g => g.rev)
   return (
     <div className="card">
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -751,21 +752,21 @@ function ProdutosMarketing({ d, fechado, onSalvo }) {
       {ocupado && <div style={{ padding: 10, fontSize: 12 }}>{ocupado}</div>}
       {erro && <div className="alert-banner danger" style={{ margin: 10 }}>{erro}</div>}
       {grupos.length > 0 && <div className="tbl-wrap"><table>
-        <thead><tr><th>Origem</th><th>Vai para</th><th style={{ textAlign: 'right' }}>Pedidos</th><th style={{ textAlign: 'right' }}>Matéria-prima</th><th style={{ textAlign: 'right' }}>Embalagem</th><th style={{ textAlign: 'right' }}>Sai do CMV</th></tr></thead>
+        <thead><tr><th>Origem</th><th>Vai para</th><th style={{ textAlign: 'right' }}>Pedidos</th><th style={{ textAlign: 'right' }}>Matéria-prima</th><th style={{ textAlign: 'right' }}>Embalagem</th>{temRev && <th style={{ textAlign: 'right' }}>Revenda (Wafer)</th>}<th style={{ textAlign: 'right' }}>Sai do CMV</th></tr></thead>
         <tbody>
           {grupos.flatMap(g => [
             <tr key={g.tipo} onClick={() => setAberto(a => a === g.tipo ? null : g.tipo)} style={{ cursor: 'pointer' }}>
               <td>{aberto === g.tipo ? '▾ ' : '▸ '}{g.nome}{g.semFicha?.length > 0 && <span className="pill warning" style={{ marginLeft: 4 }}>{g.semFicha.length} item(ns) sem ficha</span>}</td>
               <td style={{ fontSize: 12 }}>{d.plano.find(p => p.id === g.conta)?.nome || g.conta}</td>
-              <td style={{ textAlign: 'right' }}>{g.pedidos}</td><td style={{ textAlign: 'right' }}>{brl(g.mp)}</td><td style={{ textAlign: 'right' }}>{brl(g.emb)}</td>
-              <td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(g.mp + g.emb)}</td>
+              <td style={{ textAlign: 'right' }}>{g.pedidos}</td><td style={{ textAlign: 'right' }}>{brl(g.mp)}</td><td style={{ textAlign: 'right' }}>{brl(g.emb)}</td>{temRev && <td style={{ textAlign: 'right' }}>{brl(g.rev || 0)}</td>}
+              <td style={{ textAlign: 'right', fontWeight: 700 }}>{brl(custoMkt(g))}</td>
             </tr>,
-            aberto === g.tipo && <tr key={g.tipo + ':d'}><td colSpan={6} style={{ background: 'var(--gray-50)', fontSize: 12 }}>
-              {g.itens.map(it => <div key={it.codigo}>{fmt(it.qtd, Number.isInteger(it.qtd) ? 0 : 1)} × {it.descricao || it.codigo} <span style={{ color: 'var(--gray-500)' }}>({it.codigo}: {brl(it.mpUnit + it.embUnit)} cada)</span></div>)}
+            aberto === g.tipo && <tr key={g.tipo + ':d'}><td colSpan={temRev ? 7 : 6} style={{ background: 'var(--gray-50)', fontSize: 12 }}>
+              {g.itens.map(it => <div key={it.codigo}>{fmt(it.qtd, Number.isInteger(it.qtd) ? 0 : 1)} × {it.descricao || it.codigo} <span style={{ color: 'var(--gray-500)' }}>({it.codigo}: {brl(it.revUnit || it.mpUnit + it.embUnit)} cada{it.revUnit ? ` · revenda, ${it.un} un` : ''})</span></div>)}
               {g.semFicha?.length > 0 && <div style={{ color: 'var(--danger)', marginTop: 4 }}>Sem ficha no sistema (não entraram; se precisar, lance em Manuais): {g.semFicha.map(x => `${x.qtd} × ${x.codigo}`).join(', ')}</div>}
             </td></tr>,
           ])}
-          <tr style={{ fontWeight: 700, background: 'var(--gray-50)' }}><td colSpan={5}>Total que sai do CMV e entra no marketing</td><td style={{ textAlign: 'right' }}>{brl(total)}</td></tr>
+          <tr style={{ fontWeight: 700, background: 'var(--gray-50)' }}><td colSpan={temRev ? 6 : 5}>Total que sai do CMV e entra no marketing</td><td style={{ textAlign: 'right' }}>{brl(total)}</td></tr>
         </tbody>
       </table></div>}
       {d.comp?.extras?.cmv_marketing_em && <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--gray-500)' }}>Lido do Bling em {new Date(d.comp.extras.cmv_marketing_em).toLocaleString('pt-BR')}</div>}
@@ -949,9 +950,9 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Manuais › Fidelimax (4.190 ÷ 12) e acertos como o da Dark Store. Marque quando conferir.' },
     { grupo: '4. CMV' },
     { id: 'cmv', t: 'CMV fechado pelo estoque', auto: !d.cmvProvisorio && d.cmv.length > 0, aba: 'auditoria', det: d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`,
-      como: 'Depende da contagem do último dia do mês: matéria-prima e embalagem em Estoque › Conferência, e a mercadoria para revenda (Wafer) em Estoque › Produtos prontos (revenda), em displays + unidades. Compra da Wafer: registre lá mesmo (display com 12 un). Confira em Auditoria › CMV do caixa ao consumo.' },
+      como: 'Depende da contagem do último dia do mês: matéria-prima e embalagem em Estoque › Conferência, e a mercadoria para revenda (Wafer) em Estoque › Conferência › Revenda, em displays + unidades. Compra da Wafer: registre lá mesmo (display com 12 un). Confira em Auditoria › CMV do caixa ao consumo.' },
     { id: 'mkt', t: 'Produtos que saíram sem venda (degustação, premiação, bonificação, marketing, vouchers)', auto: !!d.comp?.extras?.cmv_marketing_em, aba: 'manuais',
-      det: mkt ? `${brl(mkt.reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'não buscado',
+      det: mkt ? `${brl(mkt.reduce((t, g) => t + custoMkt(g), 0))} saem do CMV e vão para marketing` : 'não buscado',
       como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },
     { grupo: '5. Conferência' },
     { id: 'extratos', t: 'Importar o extrato do mês de cada conta (corrente e investimentos)', auto: extratos != null && contasBanco.length > 0 && !semExtrato.length, aba: 'auditoria',

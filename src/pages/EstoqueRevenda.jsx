@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, Save, ShoppingCart } from 'lucide-react'
 import { ModalCompra } from './MatPrimas'
-import { CATEGORIA_REVENDA } from '../lib/dreLaricas'
+import { CATEGORIA_REVENDA, CHAVE_REVENDA_SKUS, carregarRevenda } from '../lib/dreLaricas'
 
-// Estoque › Produtos prontos (revenda): mercadoria comprada pronta para revender (ex.: Wafer).
+// Estoque › Conferência › Revenda: mercadoria comprada pronta para revender (ex.: Wafer).
 // Cada produto é um item de materias_primas com a categoria "Mercadoria para revenda", contado em unidades:
 // compras pelo mesmo lançamento da matéria-prima (display com N unidades), contagem aqui em displays + unidades
 // avulsas (caixa aberta), gravada em conferencia_mp. O fechamento do CMV (fechamento_cmv) faz estoque inicial +
@@ -25,8 +25,12 @@ export default function EstoqueRevenda() {
   const [compra, setCompra] = useState(null)
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
+  const [skus, setSkus] = useState({})            // código no Bling → { item, un } (produtos que saem sem venda)
+  const [skuPadrao, setSkuPadrao] = useState(false)
+  const [novoSku, setNovoSku] = useState({})
 
   async function carregar() {
+    carregarRevenda().then(r => { setSkus(r.skus); setSkuPadrao(r.padrao) }).catch(() => {})
     const { data: mps, error } = await supabase.from('materias_primas').select('*').eq('categoria', CATEGORIA_REVENDA).eq('ativo', true).order('nome')
     if (error) { setMsg({ tipo: 'danger', txt: error.message }); setItens([]); return }
     const ids = (mps || []).map(m => m.id)
@@ -67,6 +71,13 @@ export default function EstoqueRevenda() {
     setSalvando(false)
   }
 
+  async function salvarSkus(novos) {
+    setSkus(novos)
+    const { error } = await supabase.from('configuracoes').upsert({ chave: CHAVE_REVENDA_SKUS, valor: JSON.stringify(novos),
+      descricao: 'Mercadoria para revenda: código do produto no Bling → item de estoque e unidades (produtos que saem sem venda)', atualizado_em: new Date().toISOString() }, { onConflict: 'chave' })
+    if (error) setMsg({ tipo: 'danger', txt: 'Erro ao gravar os códigos: ' + error.message }); else setSkuPadrao(false)
+  }
+
   async function excluir(it, c) {
     if (!confirm(`Excluir a contagem de ${dataBR(c.data_conferencia)} de ${it.nome}?\nO estoque volta para ${fmt(c.estoque_sistema)} un.`)) return
     await supabase.from('materias_primas').update({ estoque_atual: c.estoque_sistema, atualizado_em: new Date().toISOString() }).eq('id', it.id)
@@ -105,6 +116,21 @@ export default function EstoqueRevenda() {
               value={contagem[it.id]?.unidades ?? ''} onChange={e => setContagem(c => ({ ...c, [it.id]: { ...c[it.id], unidades: e.target.value } }))} /></label>
             {lancados.includes(it) && <div style={{ fontSize: 13, paddingBottom: 8 }}>= <b>{fmt(total(it))} un</b>
               <span style={{ color: 'var(--gray-500)' }}> (sistema {fmt(+it.estoque_atual)} un · diferença {fmt(total(it) - (+it.estoque_atual || 0))})</span></div>}
+          </div>
+          <div style={{ padding: '0 14px 12px', fontSize: 12 }}>
+            <b>Códigos no Bling</b> <span style={{ color: 'var(--gray-500)' }}>(quando sai em bonificação, degustação, premiação, marketing ou voucher, o custo sai do CMV de revenda e vai para o marketing)</span>
+            {skuPadrao && <div style={{ color: 'var(--warning, #b45309)' }}>Padrão do sistema: confira as unidades e clique em Gravar códigos.</div>}
+            {Object.entries(skus).filter(([, v]) => v.item === it.id).map(([k, v]) => <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+              <code style={{ flex: '1 1 220px' }}>{k}</code>
+              <input className='form-input' type='number' min={1} step={1} style={{ width: 80 }} value={v.un} onChange={e => setSkus(s => ({ ...s, [k]: { ...v, un: e.target.value } }))} /> un
+              <span style={{ color: 'var(--gray-500)' }}>= {brl((+v.un || 0) * (+it.custo_unitario || 0))}</span>
+              <button className='btn btn-ghost btn-sm' onClick={() => { const n = { ...skus }; delete n[k]; salvarSkus(n) }} title='Tirar este código'>✕</button></div>)}
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+              <input className='form-input' placeholder='Novo código (SKU do Bling)' style={{ flex: '1 1 220px' }} value={novoSku[it.id]?.k || ''} onChange={e => setNovoSku(n => ({ ...n, [it.id]: { ...n[it.id], k: e.target.value } }))} />
+              <input className='form-input' type='number' min={1} placeholder='un' style={{ width: 80 }} value={novoSku[it.id]?.un || ''} onChange={e => setNovoSku(n => ({ ...n, [it.id]: { ...n[it.id], un: e.target.value } }))} />
+              <button className='btn btn-ghost btn-sm' disabled={!novoSku[it.id]?.k?.trim()} onClick={() => { const x = novoSku[it.id]; salvarSkus({ ...skus, [x.k.trim()]: { item: it.id, un: +x.un || 1 } }); setNovoSku(n => ({ ...n, [it.id]: {} })) }}>+ Código</button>
+              <button className='btn btn-primary btn-sm' onClick={() => salvarSkus(Object.fromEntries(Object.entries(skus).map(([k, v]) => [k, { ...v, un: +v.un || 1 }])))}><Save size={13} /> Gravar códigos</button>
+            </div>
           </div>
           {(it.compras.length > 0 || it.contagens.length > 0) && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,320px),1fr))', gap: 10, padding: '0 14px 12px', fontSize: 12 }}>
             <div><b>Últimas compras</b>{it.compras.length ? it.compras.map((c, i) => <div key={i}>{dataBR(c.data_compra)} · {c.qtd_compra && c.unidade_compra ? `${fmt(+c.qtd_compra)} ${c.unidade_compra} = ` : ''}{fmt(+c.quantidade)} un · {brl(+c.custo_total)}{c.numero_nf ? ` · NF ${c.numero_nf}` : ''}</div>) : <div style={{ color: 'var(--gray-500)' }}>nenhuma</div>}</div>

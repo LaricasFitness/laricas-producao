@@ -39,7 +39,6 @@ export const MENU = [
       { id: 'situacao',    label: 'Situação' },
       { id: 'valor',       label: 'Valor do estoque' },
       { id: 'conferencia', label: 'Conferência' },
-      { id: 'revenda',     label: 'Produtos prontos (revenda)' },
       { id: 'compras',     label: 'Compras' },
       { id: 'precos',      label: 'Preços' },
       { id: 'consumo',     label: 'Consumo' },

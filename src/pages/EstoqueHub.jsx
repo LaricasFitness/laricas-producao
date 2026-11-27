@@ -14,8 +14,7 @@ import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsu
 const ABAS = [
   { id:'valor',      label:'💰 Valor do estoque', sub:'Quanto há em R$ no estoque de matéria-prima, mês a mês, e a conferência', opcoes:[] },
   { id:'situacao',   label:'📊 Situação',    sub:'Estoque atual, mínimos e alertas',              opcoes:['mp','rotulo','emb'] },
-  { id:'conferencia',label:'🔍 Conferência',  sub:'Contagem física e impacto no estoque',          opcoes:['mp','pack'] },
-  { id:'revenda',    label:'🍫 Produtos prontos (revenda)', sub:'Mercadoria comprada pronta (Wafer): compras e contagem em displays + unidades', opcoes:[] },
+  { id:'conferencia',label:'🔍 Conferência',  sub:'Contagem física e impacto no estoque',          opcoes:['mp','pack','revenda'] },
   { id:'compras',    label:'🛒 Compras',      sub:'Lançamento de compras, notas e recebimentos',   opcoes:['mp','pack'] },
   { id:'precos',     label:'📈 Preços',       sub:'Histórico e evolução do custo dos insumos',     opcoes:[] },
   { id:'consumo',    label:'📉 Consumo',      sub:'Baixas de matéria-prima por produto e por dia', opcoes:[] },
@@ -27,6 +26,7 @@ const ROTULOS = {
   rotulo: '🏷️ Rótulos',
   emb:    '📦 Embalagens',
   pack:   '📦 Rótulos e embalagens',
+  revenda: '🍫 Revenda (Wafer)',
 }
 
 // sub/onSub vêm do menu lateral (App.jsx); sem eles, a tela controla a própria aba
@@ -69,13 +69,12 @@ export default function EstoqueHub({ sub, onSub }) {
       {aba === 'situacao'    && (tipoAtivo === 'mp'
         ? <DashMP />
         : <Dashboard key={tipoAtivo} tipo={tipoAtivo === 'rotulo' ? 'rotulo' : 'embalagem'} />)}
-      {aba === 'conferencia' && (tipoAtivo === 'mp' ? <ConferenciaMP />    : <ConferenciaEstoque />)}
+      {aba === 'conferencia' && (tipoAtivo === 'mp' ? <ConferenciaMP /> : tipoAtivo === 'revenda' ? <EstoqueRevenda /> : <ConferenciaEstoque />)}
       {aba === 'compras'     && (tipoAtivo === 'mp' ? <HistoricoCompras /> : <Compras />)}
       {aba === 'precos'      && <EvolucaoPrecos />}
       {aba === 'consumo'     && <HistoricoConsumo />}
       {aba === 'pedidos'     && <Pedidos />}
       {aba === 'valor'       && <ValorEstoque />}
-      {aba === 'revenda'     && <EstoqueRevenda />}
     </div>
   )
 }
