@@ -1,0 +1,126 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '../supabase'
+import { RefreshCw, Save, ShoppingCart } from 'lucide-react'
+import { ModalCompra } from './MatPrimas'
+import { CATEGORIA_REVENDA } from '../lib/dreLaricas'
+
+// Estoque › Produtos prontos (revenda): mercadoria comprada pronta para revender (ex.: Wafer).
+// Cada produto é um item de materias_primas com a categoria "Mercadoria para revenda", contado em unidades:
+// compras pelo mesmo lançamento da matéria-prima (display com N unidades), contagem aqui em displays + unidades
+// avulsas (caixa aberta), gravada em conferencia_mp. O fechamento do CMV (fechamento_cmv) faz estoque inicial +
+// compras − contagem do último dia do mês, e a DRE põe o resultado em "CMV - Mercadoria para revenda".
+
+const POR_DISPLAY = 12   // padrão; vale o conteúdo da última compra lançada em display
+const fmt = (n, d = 0) => Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d })
+const brl = v => 'R$ ' + fmt(v, 2)
+const dataBR = s => s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '—'
+const hojeSP = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+const usuario = () => { try { return JSON.parse(sessionStorage.getItem('usuario'))?.nome || '' } catch { return '' } }
+const emDisplays = (q, n) => { const d = Math.floor((q || 0) / n), u = Math.round(((q || 0) - d * n) * 100) / 100; return `${fmt(d)} display${d === 1 ? '' : 's'}${u ? ` + ${fmt(u, u % 1 ? 1 : 0)} un` : ''}` }
+
+export default function EstoqueRevenda() {
+  const [itens, setItens] = useState(null)
+  const [contagem, setContagem] = useState({})     // id → { displays, unidades }
+  const [data, setData] = useState(hojeSP())
+  const [compra, setCompra] = useState(null)
+  const [msg, setMsg] = useState(null)
+  const [salvando, setSalvando] = useState(false)
+
+  async function carregar() {
+    const { data: mps, error } = await supabase.from('materias_primas').select('*').eq('categoria', CATEGORIA_REVENDA).eq('ativo', true).order('nome')
+    if (error) { setMsg({ tipo: 'danger', txt: error.message }); setItens([]); return }
+    const ids = (mps || []).map(m => m.id)
+    const [{ data: compras }, { data: confs }] = ids.length ? await Promise.all([
+      supabase.from('mp_compras').select('materia_prima_id, quantidade, custo_total, data_compra, numero_nf, fornecedor, qtd_compra, unidade_compra, conteudo_embalagem').in('materia_prima_id', ids).order('data_compra', { ascending: false }).limit(200),
+      supabase.from('conferencia_mp').select('id, materia_prima_id, data_conferencia, estoque_contado, estoque_sistema, responsavel, criado_em').in('materia_prima_id', ids).order('criado_em', { ascending: false }).limit(200),
+    ]) : [{ data: [] }, { data: [] }]
+    setItens((mps || []).map(m => {
+      const cs = (compras || []).filter(c => c.materia_prima_id === m.id)
+      const emDisplay = cs.find(c => /display|caixa|cx/i.test(c.unidade_compra || '') && +c.conteudo_embalagem > 0)
+      return { ...m, porDisplay: emDisplay ? +emDisplay.conteudo_embalagem : POR_DISPLAY, compras: cs.slice(0, 6),
+        contagens: (confs || []).filter(c => c.materia_prima_id === m.id).slice(0, 6) }
+    }))
+  }
+  useEffect(() => { carregar() }, [])
+
+  const total = it => { const c = contagem[it.id] || {}; return (parseFloat(c.displays) || 0) * it.porDisplay + (parseFloat(c.unidades) || 0) }
+  const lancados = (itens || []).filter(it => { const c = contagem[it.id]; return c && (c.displays !== '' && c.displays != null || c.unidades !== '' && c.unidades != null) })
+
+  async function gravar() {
+    if (!lancados.length) return
+    setSalvando(true); setMsg(null)
+    try {
+      for (const it of lancados) {
+        const contado = total(it), sistema = +it.estoque_atual || 0
+        const { error } = await supabase.from('conferencia_mp').insert({
+          materia_prima_id: it.id, data_conferencia: data, estoque_sistema: sistema, estoque_contado: contado,
+          custo_unitario: +it.custo_unitario || 0, responsavel: usuario() || null,
+          observacao: `Contagem de revenda: ${emDisplays(contado, it.porDisplay)} (${it.porDisplay} un por display) — sistema: ${sistema}`,
+        })
+        if (error) throw error
+        const { error: e2 } = await supabase.from('materias_primas').update({ estoque_atual: contado, atualizado_em: new Date().toISOString() }).eq('id', it.id)
+        if (e2) throw e2
+      }
+      setMsg({ tipo: 'ok', txt: `Contagem de ${dataBR(data)} gravada (${lancados.length} produto${lancados.length > 1 ? 's' : ''}).` })
+      setContagem({}); await carregar()
+    } catch (e) { setMsg({ tipo: 'danger', txt: 'Erro ao gravar: ' + (e.message || e) }) }
+    setSalvando(false)
+  }
+
+  async function excluir(it, c) {
+    if (!confirm(`Excluir a contagem de ${dataBR(c.data_conferencia)} de ${it.nome}?\nO estoque volta para ${fmt(c.estoque_sistema)} un.`)) return
+    await supabase.from('materias_primas').update({ estoque_atual: c.estoque_sistema, atualizado_em: new Date().toISOString() }).eq('id', it.id)
+    await supabase.from('conferencia_mp').delete().eq('id', c.id)
+    carregar()
+  }
+
+  if (itens == null) return <div className="card card-pad"><RefreshCw size={13} className="spin" /> Carregando…</div>
+  const fimDoMes = (() => { const [a, m] = data.split('-').map(Number); return new Date(a, m, 0).getDate() === +data.slice(8, 10) })()
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="card card-pad" style={{ fontSize: 13, color: 'var(--gray-600)', lineHeight: 1.5 }}>
+        Mercadoria comprada pronta para revender. O CMV dela fecha como o da matéria-prima: <b>estoque inicial + compras − contagem do último dia do mês</b>,
+        e vai para a conta "CMV - Mercadoria para revenda" da DRE. Conte no último dia de cada mês, em displays fechados + unidades da caixa aberta.
+      </div>
+      {msg && <div className={`alert-banner ${msg.tipo}`}>{msg.txt}</div>}
+      {!itens.length && <div className="alert-banner warning">Nenhum produto com a categoria "{CATEGORIA_REVENDA}". Aplique o revenda.sql no Supabase (cadastra a Wafer).</div>}
+
+      {itens.map(it => (
+        <div key={it.id} className="card">
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1 }}><b>{it.nome}</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>· {it.porDisplay} un por display{it.fornecedor ? ` · ${it.fornecedor}` : ''}</span></div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setCompra(it)}><ShoppingCart size={13} /> Registrar compra</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,180px),1fr))', gap: 10, padding: 14 }}>
+            <div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Estoque no sistema</div><div style={{ fontWeight: 800 }}>{emDisplays(+it.estoque_atual, it.porDisplay)}</div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>{fmt(+it.estoque_atual)} un</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Custo por unidade</div><div style={{ fontWeight: 800 }}>{brl(+it.custo_unitario)}</div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>{brl(+it.custo_unitario * it.porDisplay)} o display</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Valor em estoque</div><div style={{ fontWeight: 800 }}>{brl((+it.estoque_atual || 0) * (+it.custo_unitario || 0))}</div></div>
+            <div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Última contagem</div><div style={{ fontWeight: 800 }}>{it.contagens[0] ? dataBR(it.contagens[0].data_conferencia) : 'nunca'}</div></div>
+          </div>
+          <div style={{ padding: '0 14px 12px', display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12 }}>Displays fechados<br /><input className="form-input" type="number" min={0} step={1} style={{ width: 120 }}
+              value={contagem[it.id]?.displays ?? ''} onChange={e => setContagem(c => ({ ...c, [it.id]: { ...c[it.id], displays: e.target.value } }))} /></label>
+            <label style={{ fontSize: 12 }}>+ Unidades (caixa aberta)<br /><input className="form-input" type="number" min={0} step={1} style={{ width: 150 }}
+              value={contagem[it.id]?.unidades ?? ''} onChange={e => setContagem(c => ({ ...c, [it.id]: { ...c[it.id], unidades: e.target.value } }))} /></label>
+            {lancados.includes(it) && <div style={{ fontSize: 13, paddingBottom: 8 }}>= <b>{fmt(total(it))} un</b>
+              <span style={{ color: 'var(--gray-500)' }}> (sistema {fmt(+it.estoque_atual)} un · diferença {fmt(total(it) - (+it.estoque_atual || 0))})</span></div>}
+          </div>
+          {(it.compras.length > 0 || it.contagens.length > 0) && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,320px),1fr))', gap: 10, padding: '0 14px 12px', fontSize: 12 }}>
+            <div><b>Últimas compras</b>{it.compras.length ? it.compras.map((c, i) => <div key={i}>{dataBR(c.data_compra)} · {c.qtd_compra && c.unidade_compra ? `${fmt(+c.qtd_compra)} ${c.unidade_compra} = ` : ''}{fmt(+c.quantidade)} un · {brl(+c.custo_total)}{c.numero_nf ? ` · NF ${c.numero_nf}` : ''}</div>) : <div style={{ color: 'var(--gray-500)' }}>nenhuma</div>}</div>
+            <div><b>Últimas contagens</b>{it.contagens.length ? it.contagens.map(c => <div key={c.id}>{dataBR(c.data_conferencia)} · {emDisplays(+c.estoque_contado, it.porDisplay)} ({fmt(+c.estoque_contado)} un){c.responsavel ? ` · ${c.responsavel}` : ''}
+              <button className="btn btn-ghost btn-sm" style={{ padding: '0 6px', marginLeft: 4 }} onClick={() => excluir(it, c)} title="Excluir esta contagem">✕</button></div>) : <div style={{ color: 'var(--gray-500)' }}>nenhuma</div>}</div>
+          </div>}
+        </div>
+      ))}
+
+      {itens.length > 0 && <div className="card card-pad" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 12 }}>Data da contagem <input className="form-input" type="date" value={data} max={hojeSP()} onChange={e => e.target.value && setData(e.target.value)} style={{ width: 160 }} /></label>
+        {!fimDoMes && <span style={{ fontSize: 12, color: 'var(--warning, #b45309)' }}>Para o CMV, a contagem que vale é a do último dia do mês.</span>}
+        <button className="btn btn-primary btn-sm" onClick={gravar} disabled={salvando || !lancados.length}>{salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Gravar contagem</button>
+      </div>}
+
+      {compra && <ModalCompra mp={compra} onClose={() => setCompra(null)} onSaved={() => { setCompra(null); carregar() }} />}
+    </div>
+  )
+}

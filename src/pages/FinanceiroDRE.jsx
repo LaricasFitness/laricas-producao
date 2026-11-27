@@ -191,6 +191,7 @@ function ConciliacaoCMV({ d }) {
       <div className="tbl-wrap"><table><tbody>
         {bloco('Matéria-prima', c.mp, c.pagoMP)}
         {bloco('Embalagem do produto', c.emb, c.pagoEmb)}
+        {(c.revenda.ei || c.revenda.compras || c.revenda.ef || c.pagoRevenda) ? bloco('Mercadoria para revenda (Wafer)', c.revenda, c.pagoRevenda) : null}
         <tr><td colSpan={2} style={{ fontWeight: 700, background: 'var(--gray-50)' }}>Ajustes da DRE</td></tr>
         {L('+ Embalagem de envio (pedidos × R$ por pedido)', c.envio, `pago no caixa: ${brl(c.pagoEnvio)}`)}
         {L('+ Insumos auxiliares (contas a pagar por competência)', c.insumos, `pago no caixa: ${brl(c.pagoInsumos)}`)}
@@ -948,7 +949,7 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Manuais › Fidelimax (4.190 ÷ 12) e acertos como o da Dark Store. Marque quando conferir.' },
     { grupo: '4. CMV' },
     { id: 'cmv', t: 'CMV fechado pelo estoque', auto: !d.cmvProvisorio && d.cmv.length > 0, aba: 'auditoria', det: d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`,
-      como: 'Depende da contagem do fim do mês (Estoque › Conferência). Confira em Auditoria › CMV do caixa ao consumo.' },
+      como: 'Depende da contagem do último dia do mês: matéria-prima e embalagem em Estoque › Conferência, e a mercadoria para revenda (Wafer) em Estoque › Produtos prontos (revenda), em displays + unidades. Compra da Wafer: registre lá mesmo (display com 12 un). Confira em Auditoria › CMV do caixa ao consumo.' },
     { id: 'mkt', t: 'Produtos que saíram sem venda (degustação, premiação, bonificação, marketing, vouchers)', auto: !!d.comp?.extras?.cmv_marketing_em, aba: 'manuais',
       det: mkt ? `${brl(mkt.reduce((t, g) => t + g.mp + g.emb, 0))} saem do CMV e vão para marketing` : 'não buscado',
       como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },

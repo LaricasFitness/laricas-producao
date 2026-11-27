@@ -139,7 +139,7 @@ async function ajustarEstoqueCompra(mpId, delta) {
 // ═══════════════════════════════════════════════════════════════
 const DIMENSAO = { g: 'massa', kg: 'massa', ml: 'volume', l: 'volume', un: 'contagem' }
 const FATOR = { g: 1, kg: 1000, ml: 1, l: 1000, un: 1 }
-const EMBALAGENS = ['caixa', 'pacote', 'fardo', 'saco', 'bandeja', 'frasco', 'lata', 'galão', 'unidade']
+const EMBALAGENS = ['caixa', 'display', 'pacote', 'fardo', 'saco', 'bandeja', 'frasco', 'lata', 'galão', 'unidade']
 const ROTULO_UN = { g: 'gramas (g)', kg: 'quilos (kg)', ml: 'mililitros (ml)', l: 'litros (L)', un: 'unidades (un)' }
 
 function unidadesDiretas(base) {
@@ -890,7 +890,7 @@ function ModalMP({ mp, onClose, onSaved }) {
 }
 
 // ── Modal compra ──────────────────────────────────────────────────────────────
-function ModalCompra({ mp, onClose, onSaved }) {
+export function ModalCompra({ mp, onClose, onSaved }) {
   const [form, setForm] = useState({ custo_total:'', data_compra: new Date().toISOString().slice(0,10), fornecedor: mp?.fornecedor||'', numero_nf:'', observacao:'' })
   const [entrada, setEntrada] = useState(entradaVazia(mp.unidade))
   const [saving, setSaving] = useState(false)
@@ -2889,7 +2889,9 @@ export function ConferenciaMP() {
       .eq('ativo', true).order('categoria').order('nome')
     if (error) ({ data } = await supabase.from('materias_primas').select(sel)   // antes do estoque_embalagem.sql
       .eq('ativo', true).order('categoria').order('nome'))
-    setMps(data||[])
+    // mercadoria para revenda (Wafer) tem contagem própria: Estoque › Produtos prontos (revenda)
+    data = (data||[]).filter(m => m.categoria !== 'Mercadoria para revenda')
+    setMps(data)
     setModo(m => m || modoContagemInicial((data||[]).some(x => x.contagem_semanal)))
     setLoading(false)
   }

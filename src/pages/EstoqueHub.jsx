@@ -3,6 +3,7 @@ import Dashboard from './Dashboard'
 import Pedidos from './Pedidos'
 import Compras from './Compras'
 import ValorEstoque from './ValorEstoque'
+import EstoqueRevenda from './EstoqueRevenda'
 import { ConferenciaEstoque } from './Embalagens'
 import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsumo } from './MatPrimas'
 
@@ -14,6 +15,7 @@ const ABAS = [
   { id:'valor',      label:'💰 Valor do estoque', sub:'Quanto há em R$ no estoque de matéria-prima, mês a mês, e a conferência', opcoes:[] },
   { id:'situacao',   label:'📊 Situação',    sub:'Estoque atual, mínimos e alertas',              opcoes:['mp','rotulo','emb'] },
   { id:'conferencia',label:'🔍 Conferência',  sub:'Contagem física e impacto no estoque',          opcoes:['mp','pack'] },
+  { id:'revenda',    label:'🍫 Produtos prontos (revenda)', sub:'Mercadoria comprada pronta (Wafer): compras e contagem em displays + unidades', opcoes:[] },
   { id:'compras',    label:'🛒 Compras',      sub:'Lançamento de compras, notas e recebimentos',   opcoes:['mp','pack'] },
   { id:'precos',     label:'📈 Preços',       sub:'Histórico e evolução do custo dos insumos',     opcoes:[] },
   { id:'consumo',    label:'📉 Consumo',      sub:'Baixas de matéria-prima por produto e por dia', opcoes:[] },
@@ -73,6 +75,7 @@ export default function EstoqueHub({ sub, onSub }) {
       {aba === 'consumo'     && <HistoricoConsumo />}
       {aba === 'pedidos'     && <Pedidos />}
       {aba === 'valor'       && <ValorEstoque />}
+      {aba === 'revenda'     && <EstoqueRevenda />}
     </div>
   )
 }

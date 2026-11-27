@@ -159,6 +159,9 @@ export async function custoMarketing(pedidos) {
 // Só os deliverys vêm da aba Receitas: site, clube, Mercado Livre, revenda e balcão já estão nos pedidos do Bling
 export const totalPedidos = d => d.receitas.filter(r => r.conta === 'rec.delivery').reduce((t, r) => t + (r.pedidos || 0), 0) + (d.comp?.extras?.pedidos_bling || 0)
 export const pedidosAtivacao = d => d.receitas.filter(r => r.conta === 'rec.ativ').reduce((t, r) => t + (r.pedidos || 0), 0)
+// Item de estoque comprado pronto para revender (categoria da matéria-prima)
+export const CATEGORIA_REVENDA = 'Mercadoria para revenda'
+export const ehRevenda = c => c?.categoria === CATEGORIA_REVENDA
 export function montar(d, visao) {
   const planoDe = Object.fromEntries(d.plano.map(p => [p.id, p]))
   const v = {}, add = (k, valor, item) => { (v[k] ||= { valor: 0, itens: [] }); v[k].valor += valor; v[k].itens.push({ ...item, valor }) }
@@ -168,7 +171,9 @@ export function montar(d, visao) {
       if (+r.descontos) add('ded.desc', +r.descontos, { tipo: 'receita', r, parte: 'descontos' })
       if (+r.comissao) add('vc.taxas', +r.comissao, { tipo: 'receita', r, parte: 'comissão' })
     }
-    for (const c of d.cmv) if (+c.cmv_valor) add(c.tipo === 'mp' ? 'cmv.mp' : 'cmv.emb', +c.cmv_valor, { tipo: 'cmv', c })
+    // mercadoria para revenda (comprada pronta, ex.: Wafer): fecha pelo estoque como a matéria-prima, em conta própria
+    const contaCmv = c => c.tipo !== 'mp' ? 'cmv.emb' : ehRevenda(c) && planoDe['cmv.revenda'] ? 'cmv.revenda' : 'cmv.mp'
+    for (const c of d.cmv) if (+c.cmv_valor) add(contaCmv(c), +c.cmv_valor, { tipo: 'cmv', c })
     const ped = totalPedidos(d)
     if (ped) add('cmv.envio', ped * d.envioPorPedido, { tipo: 'envio', pedidos: ped })
     const ativ = pedidosAtivacao(d)
@@ -307,9 +312,10 @@ export function ponte(d) {
 export function conciliacaoCMV(d) {
   const vc = montar(d, 'competencia'), vx = montar(d, 'caixa')
   const soma = (xs, k) => xs.reduce((t, x) => t + (+x[k] || 0), 0)
-  const porTipo = tipo => {
-    const est = d.cmv.filter(c => c.tipo === tipo && c.ei_valor != null && c.ef_valor != null)
-    const prod = d.cmv.filter(c => c.tipo === tipo && (c.ei_valor == null || c.ef_valor == null))
+  const porTipo = (tipo, revenda = false) => {
+    const doTipo = d.cmv.filter(c => c.tipo === tipo && (tipo !== 'mp' || ehRevenda(c) === revenda))
+    const est = doTipo.filter(c => c.ei_valor != null && c.ef_valor != null)
+    const prod = doTipo.filter(c => c.ei_valor == null || c.ef_valor == null)
     return { ei: soma(est, 'ei_valor'), compras: soma(est, 'compras_valor') + soma(est, 'atrasadas_valor'), ef: soma(est, 'ef_valor'),
       cmvEstoque: soma(est, 'cmv_valor'), pelaProducao: soma(prod, 'cmv_valor') }
   }
@@ -318,7 +324,7 @@ export function conciliacaoCMV(d) {
   const pago = k => (vx[k]?.valor || 0)
   const mkt = (d.comp?.extras?.cmv_marketing || []).reduce((t, g) => t + g.mp + g.emb, 0)
   return {
-    mp: porTipo('mp'), emb: porTipo('emb'),
+    mp: porTipo('mp'), emb: porTipo('emb'), revenda: porTipo('mp', true), pagoRevenda: pago('cmv.revenda'),
     envio: vc['cmv.envio']?.itens.filter(x => x.tipo === 'envio' || x.tipo === 'sacola').reduce((t, x) => t + x.valor, 0) || 0,
     insumos: vc['cmv.insumos']?.valor || 0, marketing: mkt,
     manuais: contasCmv.flatMap(k => vc[k]?.itens || []).filter(x => x.tipo === 'manual').reduce((t, x) => t + x.valor, 0),
