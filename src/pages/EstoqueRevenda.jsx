@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import { RefreshCw, Save, ShoppingCart } from 'lucide-react'
-import { ModalCompra } from './MatPrimas'
+import { recalcularCustoMP } from './MatPrimas'
+import { mesFechado, avisoMesFechado } from '../lib/cmv'
+import { carregarComponentes, gravarComponentes } from '../lib/revenda'
+import { MaterialNaMM, ModalLote } from './RevendaMM'
 import { CATEGORIA_REVENDA, CHAVE_REVENDA_SKUS, carregarRevenda } from '../lib/dreLaricas'
 
 // Estoque › Conferência › Revenda: mercadoria comprada pronta para revender (ex.: Wafer).
 // Cada produto é um item de materias_primas com a categoria "Mercadoria para revenda", contado em unidades:
-// compras pelo mesmo lançamento da matéria-prima (display com N unidades), contagem aqui em displays + unidades
+// compras por lote (NF da MM + frete + display e filme guardados na MM: src/lib/revenda.js), contagem aqui em displays + unidades
 // avulsas (caixa aberta), gravada em conferencia_mp. O fechamento do CMV (fechamento_cmv) faz estoque inicial +
 // compras − contagem do último dia do mês, e a DRE põe o resultado em "CMV - Mercadoria para revenda".
 
@@ -22,7 +25,9 @@ export default function EstoqueRevenda() {
   const [itens, setItens] = useState(null)
   const [contagem, setContagem] = useState({})     // id → { displays, unidades }
   const [data, setData] = useState(hojeSP())
-  const [compra, setCompra] = useState(null)
+  const [lote, setLote] = useState(null)          // item do lote sendo lançado
+  const [comp, setComp] = useState(null)          // display e filme na MM, e os lotes
+  const [compraIds, setCompraIds] = useState(new Set())
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [skus, setSkus] = useState({})            // código no Bling → { item, un } (produtos que saem sem venda)
@@ -31,13 +36,15 @@ export default function EstoqueRevenda() {
 
   async function carregar() {
     carregarRevenda().then(r => { setSkus(r.skus); setSkuPadrao(r.padrao) }).catch(() => {})
+    carregarComponentes().then(setComp).catch(e => setMsg({ tipo: 'danger', txt: e.message }))
     const { data: mps, error } = await supabase.from('materias_primas').select('*').eq('categoria', CATEGORIA_REVENDA).eq('ativo', true).order('nome')
     if (error) { setMsg({ tipo: 'danger', txt: error.message }); setItens([]); return }
     const ids = (mps || []).map(m => m.id)
     const [{ data: compras }, { data: confs }] = ids.length ? await Promise.all([
-      supabase.from('mp_compras').select('materia_prima_id, quantidade, custo_total, data_compra, numero_nf, fornecedor, qtd_compra, unidade_compra, conteudo_embalagem').in('materia_prima_id', ids).order('data_compra', { ascending: false }).limit(200),
+      supabase.from('mp_compras').select('id, materia_prima_id, quantidade, custo_total, data_compra, numero_nf, fornecedor, qtd_compra, unidade_compra, conteudo_embalagem').in('materia_prima_id', ids).order('data_compra', { ascending: false }).limit(200),
       supabase.from('conferencia_mp').select('id, materia_prima_id, data_conferencia, estoque_contado, estoque_sistema, responsavel, criado_em').in('materia_prima_id', ids).order('criado_em', { ascending: false }).limit(200),
     ]) : [{ data: [] }, { data: [] }]
+    setCompraIds(new Set((compras || []).map(c => c.id)))
     setItens((mps || []).map(m => {
       const cs = (compras || []).filter(c => c.materia_prima_id === m.id)
       const emDisplay = cs.find(c => /display|caixa|cx/i.test(c.unidade_compra || '') && +c.conteudo_embalagem > 0)
@@ -78,6 +85,26 @@ export default function EstoqueRevenda() {
     if (error) setMsg({ tipo: 'danger', txt: 'Erro ao gravar os códigos: ' + error.message }); else setSkuPadrao(false)
   }
 
+  async function mudarComponentes(novo) {
+    try { await gravarComponentes(novo); setComp({ ...novo, padrao: false }) }
+    catch (e) { setMsg({ tipo: 'danger', txt: 'Erro ao gravar: ' + e.message }) }
+  }
+
+  // Frete que chegou depois do lote: soma no custo da compra do lote
+  async function lancarFrete(l, valor) {
+    const v = +String(valor).replace(',', '.')
+    if (!(v > 0)) return
+    if (await mesFechado(l.data)) { alert(avisoMesFechado(l.data)); return }
+    const { data: c, error } = await supabase.from('mp_compras').select('custo_total, observacao, materia_prima_id').eq('id', l.compraId).single()
+    if (error) { setMsg({ tipo: 'danger', txt: error.message }); return }
+    const { error: e2 } = await supabase.from('mp_compras').update({ custo_total: Math.round((+c.custo_total + v) * 100) / 100,
+      observacao: `${c.observacao || ''} + frete ${brl(v)}` }).eq('id', l.compraId)
+    if (e2) { setMsg({ tipo: 'danger', txt: e2.message }); return }
+    await recalcularCustoMP(c.materia_prima_id)
+    await mudarComponentes({ ...comp, lotes: comp.lotes.map(x => x.id === l.id ? { ...x, frete: v } : x) })
+    carregar()
+  }
+
   async function excluir(it, c) {
     if (!confirm(`Excluir a contagem de ${dataBR(c.data_conferencia)} de ${it.nome}?\nO estoque volta para ${fmt(c.estoque_sistema)} un.`)) return
     await supabase.from('materias_primas').update({ estoque_atual: c.estoque_sistema, atualizado_em: new Date().toISOString() }).eq('id', it.id)
@@ -101,7 +128,7 @@ export default function EstoqueRevenda() {
         <div key={it.id} className="card">
           <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ flex: 1 }}><b>{it.nome}</b> <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>· {it.porDisplay} un por display{it.fornecedor ? ` · ${it.fornecedor}` : ''}</span></div>
-            <button className="btn btn-ghost btn-sm" onClick={() => setCompra(it)}><ShoppingCart size={13} /> Registrar compra</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setLote(it)} disabled={!comp}><ShoppingCart size={13} /> Registrar lote recebido</button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,180px),1fr))', gap: 10, padding: 14 }}>
             <div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>Estoque no sistema</div><div style={{ fontWeight: 800 }}>{emDisplays(+it.estoque_atual, it.porDisplay)}</div><div style={{ fontSize: 11, color: 'var(--gray-500)' }}>{fmt(+it.estoque_atual)} un</div></div>
@@ -146,7 +173,9 @@ export default function EstoqueRevenda() {
         <button className="btn btn-primary btn-sm" onClick={gravar} disabled={salvando || !lancados.length}>{salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Gravar contagem</button>
       </div>}
 
-      {compra && <ModalCompra mp={compra} onClose={() => setCompra(null)} onSaved={() => { setCompra(null); carregar() }} />}
+      {comp && itens.length > 0 && <MaterialNaMM cfg={comp} compraIds={compraIds} onMudou={mudarComponentes} onFrete={lancarFrete} />}
+      {lote && comp && <ModalLote item={lote} cfg={comp} compraIds={compraIds} onClose={() => setLote(null)}
+        onSalvo={async novo => { setLote(null); setComp({ ...novo, padrao: false }); await carregar() }} />}
     </div>
   )
 }

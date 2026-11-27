@@ -98,7 +98,8 @@ Uma tela por mês, abas na ordem do fechamento:
   canais); a soma das diferenças fecha exatamente. Saldos de cada banco (`dre_saldos`) conferidos com o movimento do
   Bling; ajustes de saldo do Bling destacados.
 - **Mercadoria para revenda** (`revenda.sql`): produto comprado pronto (Wafer) é item de estoque com a categoria
-  "Mercadoria para revenda"; compra pelo lançamento da matéria-prima (display com 12 un), contagem em Estoque ›
+  "Mercadoria para revenda"; cada lote recebido custa NF da MM + frete + display e filme guardados na MM (`src/lib/revenda.js`,
+  `configuracoes.revenda_componentes`), contagem em Estoque ›
   Conferência › Revenda em displays + unidades; o fechamento do CMV vai para a conta `cmv.revenda` da DRE.
 - **Extratos dos bancos** (Auditoria, `dre_extratos.sql`): importa o extrato de cada conta (OFX, CSV ou .xlsx: C6,
   Inter...; `src/lib/extratoBanco.js`). As linhas ficam em `dre_extrato_banco` e o saldo de cada fim de mês coberto vai

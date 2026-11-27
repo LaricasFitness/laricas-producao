@@ -950,7 +950,7 @@ function TelaPassos({ d, onSalvo, irPara }) {
       como: 'Manuais › Fidelimax (4.190 ÷ 12) e acertos como o da Dark Store. Marque quando conferir.' },
     { grupo: '4. CMV' },
     { id: 'cmv', t: 'CMV fechado pelo estoque', auto: !d.cmvProvisorio && d.cmv.length > 0, aba: 'auditoria', det: d.cmvProvisorio ? 'provisório: o CMV fecha sozinho a partir do dia 5' : `${brl(c.cmv)} no CMV`,
-      como: 'Depende da contagem do último dia do mês: matéria-prima e embalagem em Estoque › Conferência, e a mercadoria para revenda (Wafer) em Estoque › Conferência › Revenda, em displays + unidades. Compra da Wafer: registre lá mesmo (display com 12 un). Confira em Auditoria › CMV do caixa ao consumo.' },
+      como: 'Depende da contagem do último dia do mês: matéria-prima e embalagem em Estoque › Conferência, e a mercadoria para revenda (Wafer) em Estoque › Conferência › Revenda, em displays + unidades. Lote de Wafer recebido: registre lá mesmo (NF da MM + frete; o display e o filme guardados na MM entram sozinhos no custo). Confira em Auditoria › CMV do caixa ao consumo.' },
     { id: 'mkt', t: 'Produtos que saíram sem venda (degustação, premiação, bonificação, marketing, vouchers)', auto: !!d.comp?.extras?.cmv_marketing_em, aba: 'manuais',
       det: mkt ? `${brl(mkt.reduce((t, g) => t + custoMkt(g), 0))} saem do CMV e vão para marketing` : 'não buscado',
       como: 'Manuais › Produtos que saíram sem venda › Buscar no Bling. Itens sem ficha aparecem em vermelho.' },

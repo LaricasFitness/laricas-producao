@@ -25,7 +25,7 @@ function fmtR(n) { return `R$ ${fmt(n,2)}` }
 
 // Preço médio da MP: média ponderada dos últimos 30 dias; sem compra
 // na janela, média de todo o histórico. Nunca grava zero.
-async function recalcularCustoMP(mpId) {
+export async function recalcularCustoMP(mpId) {
   if (!mpId) return null
   const soma = rows => rows.reduce((a, r) => ({
     q: a.q + (parseFloat(r.quantidade) || 0),
@@ -129,7 +129,7 @@ async function confirmarValoresNormais(itens, ignorarId = null) {
 }
 
 // Soma (ou subtrai) quantidade no estoque da MP.
-async function ajustarEstoqueCompra(mpId, delta) {
+export async function ajustarEstoqueCompra(mpId, delta) {
   await somarEstoqueMP(mpId, delta)
 }
 
