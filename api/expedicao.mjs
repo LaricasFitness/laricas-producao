@@ -19,6 +19,7 @@
 // GET  ?acao=pedidos&lista=atendidos   pedidos "Atendido" dos últimos dias (B2B, venda direta etc. ficam
 //                        Atendido ao emitir a nota: a tela só avisa que não precisam de baixa)
 // POST {acao:'detalhes', ids}   rastreio, CEP, transportadora e NF de até 30 pedidos
+// POST {acao:'rastreio', objetos}   só leitura, até 30: status da entrega dos objetos logísticos (volumes)
 // POST {acao:'baixar', ids, notificar, operador}   baixa de até 8 pedidos
 // POST {acao:'rascunhoNF', numero}   gera a NF de UM pedido como pendente (NÃO transmite) e confere a natureza
 //                        (natureza de escolha manual, ex. consignação: não gera, fica para o Bling)
@@ -96,6 +97,7 @@ function resumo(d) {
     transportadora: d.transporte?.contato?.nome || '',
     servico: vols.map(v => v.servico).find(Boolean) || '',
     rastreios: [...new Set(vols.map(v => String(v.codigoRastreamento || '').replace(/\s/g, '').toUpperCase()).filter(Boolean))],
+    objetos: vols.map(v => v.id).filter(Boolean),   // objetos logísticos (status da entrega: acao 'rastreio')
     cep: soDigitos(d.transporte?.etiqueta?.cep),
     cidade: d.transporte?.etiqueta?.municipio || '',
     uf: d.transporte?.etiqueta?.uf || '',
@@ -562,6 +564,22 @@ async function detalhes(tk, ids) {
   return saida
 }
 
+// Status da entrega (só leitura): rastreamento dos objetos logísticos (volumes do pedido) no Bling.
+const SITUACAO_OBJETO = { 0: 'Postado', 1: 'Em andamento', 2: 'Não entregue', 3: 'Entregue', 4: 'Aguardando retirada',
+  5: 'Etiqueta comprada', 6: 'Vinculado', 7: 'Atrasado', 8: 'Não postado', 9: 'Entrega suspensa' }
+async function rastreio(tk, objetos) {
+  const saida = []
+  for (let i = 0; i < objetos.length; i += 3) {
+    saida.push(...await Promise.all(objetos.slice(i, i + 3).map(id =>
+      bling(tk, `/logisticas/objetos/${id}`).then(j => {
+        const r = j?.data?.rastreamento || {}
+        const sit = r.situacao ?? null
+        return { id, situacao: sit, nome: SITUACAO_OBJETO[sit] || '', descricao: r.descricao || '', em: r.ultimaAlteracao || '', url: r.url || '' }
+      }).catch(e => { if (e instanceof ErroConexao) throw e; return { id, erro: e.message, limite: e instanceof ErroLimite } }))))
+  }
+  return saida
+}
+
 // ───────────── Shopify ─────────────
 
 async function shopify() {
@@ -799,6 +817,11 @@ export default async function handler(req, res) {
     if (acao === 'detalhes') {
       if (!ids.length || ids.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 pedidos.' })
       return res.status(200).json({ pedidos: await detalhes(tk, ids) })
+    }
+    if (acao === 'rastreio') {
+      const objetos = [...new Set((req.body?.objetos || []).map(String).filter(x => /^\d+$/.test(x)))]
+      if (!objetos.length || objetos.length > 30) return res.status(400).json({ erro: 'Envie de 1 a 30 objetos.' })
+      return res.status(200).json({ objetos: await rastreio(tk, objetos) })
     }
     if (acao === 'baixar') {
       if (req.method !== 'POST') return res.status(405).json({ erro: 'Método não permitido' })

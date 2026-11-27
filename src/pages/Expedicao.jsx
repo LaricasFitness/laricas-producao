@@ -24,6 +24,20 @@ const CHAVE_ETAPA = 'larc_expedicao_etapa'
 const CHAVE_LIDOS = 'expedicao_lidos'
 const POR_VEZ = 8          // pedidos por chamada de baixa
 const DETALHES_POR_VEZ = 30
+const STATUS_POR_VEZ = 30
+
+// Status da entrega do pedido (rastreamento do objeto no Bling Envios): verde entregue, vermelho problema
+const COR_STATUS = { 3: 'var(--success, #15803d)', 2: 'var(--danger)', 7: 'var(--danger)', 9: 'var(--danger)', 4: 'var(--warning, #b45309)' }
+function StatusEntrega({ pedido, status }) {
+  const sts = (pedido.objetos || []).map(id => status[String(id)]).filter(Boolean)
+  if (!sts.length) return null
+  return sts.map((s, i) => (
+    <span key={i} style={{ fontWeight: 700, color: COR_STATUS[s.situacao] || 'var(--gray-600)' }}
+      title={[s.descricao, s.em && `atualizado em ${s.em.slice(8, 10)}/${s.em.slice(5, 7)} ${s.em.slice(11, 16)}`].filter(Boolean).join(' · ')}>
+      {' · '}{s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{s.nome || s.descricao}</a> : (s.nome || s.descricao)}
+    </span>
+  ))
+}
 
 const carregarLidos = () => { try { return JSON.parse(localStorage.getItem(CHAVE_LIDOS)) || [] } catch { return [] } }
 const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
@@ -126,6 +140,7 @@ export default function Expedicao() {
   const [falhas, setFalhas] = useState([])
   const [busca, setBusca] = useState('')
   const [hoje, setHoje] = useState([])                // baixas de hoje (expedicao_envios)
+  const [statusEntrega, setStatusEntrega] = useState({})   // objeto logístico → rastreamento no Bling
   const campo = useRef(null)
   const admin = ehAdmin()
   const [etapa, setEtapa] = useState(() => {
@@ -166,12 +181,15 @@ export default function Expedicao() {
       // rastreio, CEP e transportadora vêm do pedido completo: carrega aos poucos
       const ids = lista.map(p => p.id)
       setDetalhando(ids.length)
+      const objetos = []
       for (let i = 0; i < ids.length; i += DETALHES_POR_VEZ) {
         const { pedidos: det } = await chamarExpedicao('detalhes', { ids: ids.slice(i, i + DETALHES_POR_VEZ) })
         const porId = Object.fromEntries(det.filter(d => !d.erro).map(d => [d.id, d]))
         setPedidos(ps => ps.map(p => porId[p.id] ? { ...p, ...porId[p.id] } : p))
         setDetalhando(n => Math.max(0, n - DETALHES_POR_VEZ))
+        for (const d of det) if (!d.erro && d.rastreios?.length) objetos.push(...(d.objetos || []))
       }
+      carregarStatus(objetos)   // em segundo plano: não segura a leitura
     } catch (e) {
       setErro(e.message)
       if (e.reconectar) setStatus(s => ({ ...s, bling: false }))
@@ -180,6 +198,24 @@ export default function Expedicao() {
       setCarregando(false); setDetalhando(0)
     }
     carregarAtendidos()
+  }
+
+  // Status da entrega (rastreamento do objeto no Bling), por objeto logístico. Só leitura.
+  async function carregarStatus(objetos) {
+    let fila = [...new Set(objetos.map(String))]
+    for (let tentativa = 0; fila.length && tentativa < 3; tentativa++) {
+      if (tentativa) await new Promise(r => setTimeout(r, 2500 * tentativa))
+      const deNovo = []
+      for (let i = 0; i < fila.length; i += STATUS_POR_VEZ) {
+        try {
+          const { objetos: r } = await chamarExpedicao('rastreio', { objetos: fila.slice(i, i + STATUS_POR_VEZ) })
+          const ok = Object.fromEntries(r.filter(o => !o.erro && (o.nome || o.descricao)).map(o => [String(o.id), o]))
+          setStatusEntrega(s => ({ ...s, ...ok }))
+          deNovo.push(...r.filter(o => o.limite).map(o => String(o.id)))
+        } catch { return }   // é só informação: sem o status, a baixa segue igual
+      }
+      fila = deNovo
+    }
   }
 
   // Pedidos que a nota já deixou Atendido (B2B, venda direta...): carregados em segundo plano,
@@ -348,6 +384,8 @@ export default function Expedicao() {
               <div><b>{p.numero}</b> · {p.cliente}<Prevista data={p.dataPrevista} /></div>
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
+                {p.cidade ? ` · ${p.cidade}` : ''}
+                <StatusEntrega pedido={p} status={statusEntrega} />
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--danger)', fontWeight: 700 }}> · sem NF</span>}
                 {p.faltaShopify && <span style={{ color: 'var(--warning, #b45309)', fontWeight: 700 }}> · Atendido no Bling, falta o envio na Shopify</span>}
               </div>
@@ -395,6 +433,7 @@ export default function Expedicao() {
               <div style={{ fontSize: 11, color: 'var(--gray-500)' }}>
                 {envioDoPedido(p) || (p.detalhado ? 'sem transportadora' : '…')}
                 {p.cidade ? ` · ${p.cidade}` : ''}
+                <StatusEntrega pedido={p} status={statusEntrega} />
                 {p.detalhado && !p.nf && <span style={{ color: 'var(--warning, #b45309)' }}> · sem NF</span>}
                 {p.faltaShopify && <span style={{ color: 'var(--warning, #b45309)', fontWeight: 700 }}> · Atendido no Bling, falta o envio na Shopify</span>}
               </div>
