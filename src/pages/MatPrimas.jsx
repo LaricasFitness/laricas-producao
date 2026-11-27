@@ -1046,7 +1046,12 @@ function ModalInventario({ mp, onClose, onSaved }) {
 }
 
 // ── Dashboard de situação ─────────────────────────────────────────────────────
-export function DashMP() {
+// Mercadoria para revenda (Wafer): aparece só na opção Revenda das telas de estoque; a matéria-prima, sem ela
+const CAT_REVENDA = 'Mercadoria para revenda'
+const ehRevendaMP = x => (x?.materias_primas?.categoria ?? x?.categoria) === CAT_REVENDA
+const daVisao = revenda => x => ehRevendaMP(x) === !!revenda
+
+export function DashMP({ revenda = false } = {}) {
   const [lista, setLista] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState(null) // {tipo:'compra'|'inventario'|'editar'|'xml', mp}
@@ -1058,10 +1063,10 @@ export function DashMP() {
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('materias_primas').select('*').eq('ativo',true).order('categoria').order('nome')
-    setLista(data||[])
+    setLista((data||[]).filter(daVisao(revenda)))
     setLoading(false)
   }
-  useEffect(()=>{ load() },[])
+  useEffect(()=>{ load() },[revenda])
 
   function afterSave() { setModal(null); load() }
 
@@ -1675,7 +1680,7 @@ function ModalEditarCompra({ compra, onClose, onSaved }) {
 }
 
 // ── Histórico de compras ──────────────────────────────────────────────────────
-export function HistoricoCompras() {
+export function HistoricoCompras({ revenda = false } = {}) {
   const [compras, setCompras] = useState([])
   const [mps, setMps] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1697,7 +1702,7 @@ export function HistoricoCompras() {
       .not('numero_nf', 'is', null)
       .order('data_compra',{ascending:false})
       .order('criado_em',{ascending:false})
-      .then(({ data }) => setTodasComNF(data || []))
+      .then(({ data }) => setTodasComNF((data || []).filter(daVisao(revenda))))
   }, [!!busca, todasComNF])
 
   async function load() {
@@ -1713,11 +1718,11 @@ export function HistoricoCompras() {
         .order('criado_em',{ascending:false}),
       supabase.from('materias_primas').select('id,nome,unidade,categoria,fornecedor').eq('ativo',true).order('categoria').order('nome'),
     ])
-    setCompras(comprasData||[])
-    setMps(mpsData||[])
+    setCompras((comprasData||[]).filter(daVisao(revenda)))
+    setMps((mpsData||[]).filter(daVisao(revenda)))
     setLoading(false)
   }
-  useEffect(()=>{ load() },[mes])
+  useEffect(()=>{ load() },[mes, revenda])
 
   async function excluirCompra(c) {
     if (conferido(c)) { alert(descreverConferencia(c) + '. Abra o cadeado antes de excluir.'); return }

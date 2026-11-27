@@ -12,10 +12,10 @@ import { ConferenciaMP, HistoricoCompras, DashMP, EvolucaoPrecos, HistoricoConsu
 // 'opcoes' = o que a aba alterna. Conferência e Compras de embalagem já
 // listam rótulo e filme juntos na própria tela, então não precisam separar.
 const ABAS = [
-  { id:'valor',      label:'💰 Valor do estoque', sub:'Quanto há em R$ no estoque de matéria-prima, mês a mês, e a conferência', opcoes:[] },
-  { id:'situacao',   label:'📊 Situação',    sub:'Estoque atual, mínimos e alertas',              opcoes:['mp','rotulo','emb'] },
+  { id:'valor',      label:'💰 Valor do estoque', sub:'Quanto há em R$ no estoque, mês a mês, e a conferência', opcoes:['mp','revenda'] },
+  { id:'situacao',   label:'📊 Situação',    sub:'Estoque atual, mínimos e alertas',              opcoes:['mp','rotulo','emb','revenda'] },
   { id:'conferencia',label:'🔍 Conferência',  sub:'Contagem física e impacto no estoque',          opcoes:['mp','pack','revenda'] },
-  { id:'compras',    label:'🛒 Compras',      sub:'Lançamento de compras, notas e recebimentos',   opcoes:['mp','pack'] },
+  { id:'compras',    label:'🛒 Compras',      sub:'Lançamento de compras, notas e recebimentos',   opcoes:['mp','pack','revenda'] },
   { id:'precos',     label:'📈 Preços',       sub:'Histórico e evolução do custo dos insumos',     opcoes:[] },
   { id:'consumo',    label:'📉 Consumo',      sub:'Baixas de matéria-prima por produto e por dia', opcoes:[] },
   { id:'pedidos',    label:'🏭 Pedidos à gráfica', sub:'Pedidos de rótulos e embalagens (filtro na própria tela)', opcoes:[] },
@@ -66,15 +66,15 @@ export default function EstoqueHub({ sub, onSub }) {
         )}
       </div>
 
-      {aba === 'situacao'    && (tipoAtivo === 'mp'
-        ? <DashMP />
+      {aba === 'situacao'    && (tipoAtivo === 'mp' || tipoAtivo === 'revenda'
+        ? <DashMP key={tipoAtivo} revenda={tipoAtivo === 'revenda'} />
         : <Dashboard key={tipoAtivo} tipo={tipoAtivo === 'rotulo' ? 'rotulo' : 'embalagem'} />)}
       {aba === 'conferencia' && (tipoAtivo === 'mp' ? <ConferenciaMP /> : tipoAtivo === 'revenda' ? <EstoqueRevenda /> : <ConferenciaEstoque />)}
-      {aba === 'compras'     && (tipoAtivo === 'mp' ? <HistoricoCompras /> : <Compras />)}
+      {aba === 'compras'     && (tipoAtivo === 'mp' || tipoAtivo === 'revenda' ? <HistoricoCompras key={tipoAtivo} revenda={tipoAtivo === 'revenda'} /> : <Compras />)}
       {aba === 'precos'      && <EvolucaoPrecos />}
       {aba === 'consumo'     && <HistoricoConsumo />}
       {aba === 'pedidos'     && <Pedidos />}
-      {aba === 'valor'       && <ValorEstoque />}
+      {aba === 'valor'       && <ValorEstoque key={tipoAtivo} revenda={tipoAtivo === 'revenda'} />}
     </div>
   )
 }

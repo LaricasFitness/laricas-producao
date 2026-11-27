@@ -26,7 +26,9 @@ function fmtR(n, d = 2) { return `R$ ${Number(n || 0).toLocaleString('pt-BR', { 
 const rotMes = m => `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][+m.slice(5, 7) - 1]}/${m.slice(2, 4)}`
 const soma = (linhas, k) => linhas.reduce((s, l) => s + (parseFloat(l[k]) || 0), 0)
 
-export default function ValorEstoque() {
+// revenda: só a mercadoria comprada pronta (Wafer). Ela não passa pela produção: o que saiu é inicial + comprado − final
+// (vendas e produtos que saíram sem venda), então não há conferência contra a ficha.
+export default function ValorEstoque({ revenda = false } = {}) {
   const [meses, setMeses] = useState([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState('')
@@ -42,11 +44,11 @@ export default function ValorEstoque() {
       const lista = []
       for (let m = inicio; m <= atual; m = mesSeguinte(m)) {
         const r = await calcularCMVMes(m, { base, fechamentos })
-        const mp = r.linhas.filter(l => l.tipo === 'mp')
+        const mp = r.linhas.filter(l => l.tipo === 'mp' && (l.categoria === 'Mercadoria para revenda') === revenda)
         const inicial = soma(mp, 'ei_valor')
         const comprado = soma(mp, 'compras_valor') + soma(mp, 'atrasadas_valor')
-        const utilizado = soma(mp, 'teorico_valor')
         const final = soma(mp, 'ef_valor')
+        const utilizado = revenda ? inicial + comprado - final : soma(mp, 'teorico_valor')
         const esperado = inicial + comprado - utilizado
         lista.push({ mes: m, rotulo: rotMes(m), fechado: r.status === 'fechado', inicial, comprado, utilizado, final,
           diferenca: final - esperado, calculados: mp.filter(l => l.ef_origem === 'calculado').length })
@@ -56,7 +58,7 @@ export default function ValorEstoque() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [revenda])
 
   const atual = meses[meses.length - 1]
   const anterior = meses[meses.length - 2]
@@ -77,7 +79,7 @@ export default function ValorEstoque() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 12, color: 'var(--gray-500)' }}>
-        Matéria-prima · mês de referência <b>{atual.rotulo}</b>{' '}
+        {revenda ? 'Mercadoria para revenda (Wafer)' : 'Matéria-prima'} · mês de referência <b>{atual.rotulo}</b>{' '}
         <span className={`pill ${atual.fechado ? 'ok' : 'warning'}`}>{atual.fechado ? 'Fechado' : 'Em aberto'}</span>
         {!atual.fechado && ' — mês em andamento, os números mudam até o fechamento'}
       </div>
@@ -88,7 +90,7 @@ export default function ValorEstoque() {
         <Kpi rotulo="Variação" valor={variacao === null ? '—' : `${variacao >= 0 ? '+' : '−'}${fmtR(Math.abs(variacao))}`}
           sub={variacao !== null && anterior.final > 0 ? `${(variacao / anterior.final * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% vs. mês anterior` : ''} />
         <Kpi rotulo="Comprado no mês" valor={fmtR(atual.comprado)} sub="compras lançadas" />
-        <Kpi rotulo="Utilizado no mês" valor={fmtR(atual.utilizado)} sub="produção × ficha técnica" />
+        <Kpi rotulo={revenda ? 'Saiu no mês' : 'Utilizado no mês'} valor={fmtR(atual.utilizado)} sub={revenda ? 'vendas e saídas sem venda (inicial + comprado − final)' : 'produção × ficha técnica'} />
       </div>
 
       <div className="card card-pad">
@@ -103,14 +105,14 @@ export default function ValorEstoque() {
               <Tooltip formatter={(v, nome) => [fmtR(v), nome]}
                 contentStyle={{ borderRadius: 8, border: '1px solid var(--gray-200)', fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              {SERIES.map(([k, nome]) => (
+              {SERIES.map(([k, nome]) => [k, revenda && k === 'utilizado' ? 'Saiu (vendas e marketing)' : nome]).map(([k, nome]) => (
                 <Line key={k} type="monotone" dataKey={k} name={nome} stroke={COR[k]} strokeWidth={2}
                   dot={{ r: 4, strokeWidth: 2, stroke: '#fff', fill: COR[k] }} activeDot={{ r: 5 }} />
               ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
-        {(() => {
+        {!revenda && (() => {
           const d = atual.diferenca
           return (
             <div style={{ fontSize: 12, marginTop: 8, color: Math.abs(d) < 1 ? 'var(--ok)' : 'var(--danger)' }}>
@@ -129,9 +131,9 @@ export default function ValorEstoque() {
               <th>Mês</th>
               <th style={{ textAlign: 'right' }}>Inicial</th>
               <th style={{ textAlign: 'right' }}>Comprado</th>
-              <th style={{ textAlign: 'right' }}>Utilizado</th>
+              <th style={{ textAlign: 'right' }}>{revenda ? 'Saiu' : 'Utilizado'}</th>
               <th style={{ textAlign: 'right' }}>Final</th>
-              <th style={{ textAlign: 'right' }} title="Final − (inicial + comprado − utilizado)">Conferência</th>
+              {!revenda && <th style={{ textAlign: 'right' }} title="Final − (inicial + comprado − utilizado)">Conferência</th>}
             </tr></thead>
             <tbody>
               {[...meses].reverse().map(m => (
@@ -145,23 +147,23 @@ export default function ValorEstoque() {
                   <td style={{ textAlign: 'right' }}>{fmtR(m.comprado)}</td>
                   <td style={{ textAlign: 'right' }}>{fmtR(m.utilizado)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtR(m.final)}</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: Math.abs(m.diferenca) < 1 ? 'var(--ok)' : m.diferenca < 0 ? 'var(--danger)' : 'var(--warning)' }}>
+                  {!revenda && <td style={{ textAlign: 'right', fontWeight: 700, color: Math.abs(m.diferenca) < 1 ? 'var(--ok)' : m.diferenca < 0 ? 'var(--danger)' : 'var(--warning)' }}>
                     {m.diferenca >= 0 ? '+' : '−'}{fmtR(Math.abs(m.diferenca))}
                     {m.utilizado > 0 && <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--gray-400)' }}>
                       {(Math.abs(m.diferenca) / m.utilizado * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do utilizado
                     </div>}
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--gray-500)', borderTop: '1px solid var(--gray-100)', lineHeight: 1.6 }}>
+        {!revenda && <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--gray-500)', borderTop: '1px solid var(--gray-100)', lineHeight: 1.6 }}>
           <b>Conferência</b> = estoque final − (inicial + comprado − utilizado pela produção).{' '}
           <span style={{ color: 'var(--danger)', fontWeight: 700 }}>Negativo</span>: saiu mais do que a produção explica — perda, ficha subestimada ou produção não registrada.{' '}
           <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Positivo</span>: sobrou — compra não lançada, ficha superestimada ou erro de contagem.{' '}
           Estoques valorizados por PEPS. Detalhe por insumo em Custos › CMV do mês.
-        </div>
+        </div>}
       </div>
     </div>
   )
