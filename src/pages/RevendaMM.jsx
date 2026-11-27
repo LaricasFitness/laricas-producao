@@ -15,7 +15,7 @@ const hojeSP = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America
 const casas = c => c.unidade === 'kg' ? 3 : 0
 const totalLote = l => (+l.wafer || 0) + (+l.frete || 0) + Object.values(l.uso || {}).reduce((t, u) => t + (+u.valor || 0), 0)
 
-export function MaterialNaMM({ cfg, compraIds, onMudou, onFrete }) {
+export function MaterialNaMM({ cfg, compraIds, onMudou, onFrete, semLote = [], onIncluir }) {
   const ss = saldos(cfg, compraIds)
   const [nova, setNova] = useState(null)   // compra nova de display ou filme
   const lotes = lotesValidos(cfg, compraIds).slice().sort((a, b) => b.data.localeCompare(a.data))
@@ -32,6 +32,14 @@ export function MaterialNaMM({ cfg, compraIds, onMudou, onFrete }) {
     <div className="card">
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--gray-100)' }}><b>Display e filme guardados na MM</b>
         <span style={{ fontSize: 12, color: 'var(--gray-500)' }}> (comprados por nós; cada lote de wafer usa 1 display a cada 12 wafers e 1 filme por wafer, e esse custo entra no lote: {brl(porWafer)} por wafer hoje)</span></div>
+      {semLote.map(c => {
+        const x = custoLote(cfg, { unidades: c.quantidade, wafer: c.custo_total })
+        return <div key={c.id} className="alert-banner warning" style={{ margin: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>Compra de {dataBR(c.data_compra)}{c.numero_nf ? ` (NF ${c.numero_nf})` : ''}: {fmt(+c.quantidade)} wafers por {brl(+c.custo_total)}, <b>sem o display e o filme</b>.
+            Incluindo: + {brl(x.componentes)} = {brl(x.total)} ({brl(x.porWafer)} por wafer).</span>
+          <button className="btn btn-primary btn-sm" onClick={() => onIncluir(c, x)}>Incluir display e filme</button>
+        </div>
+      })}
       {cfg.padrao && <div className="alert-banner warning" style={{ margin: 10 }}>Valores iniciais do sistema (NF 10.795 do display, NF 10.508 do filme, 1º lote de 3.504 wafers). Ficam gravados ao lançar o próximo lote ou uma compra de display ou filme.</div>}
       <div className="tbl-wrap"><table style={{ fontSize: 13 }}>
         <thead><tr><th>Material</th><th style={{ textAlign: 'right' }}>Comprado</th><th style={{ textAlign: 'right' }}>Usado nos lotes</th><th style={{ textAlign: 'right' }}>Saldo na MM</th>
@@ -62,10 +70,10 @@ export function MaterialNaMM({ cfg, compraIds, onMudou, onFrete }) {
         {lotes.map(l => <div key={l.id} style={{ marginTop: 4 }}>
           {dataBR(l.data)} · NF {l.nf} · {fmt(l.unidades)} wafers
           {l.historico ? <span style={{ color: 'var(--gray-500)' }}> · {l.obs}</span> : <>
-            {' '}· wafer {brl(l.wafer)} + frete {l.frete ? brl(l.frete) : <b style={{ color: 'var(--warning, #b45309)' }}>falta</b>}
+            {' '}· {l.freteIncluido ? `wafer e frete ${brl(l.wafer)}` : <>wafer {brl(l.wafer)} + frete {l.frete ? brl(l.frete) : <b style={{ color: 'var(--warning, #b45309)' }}>falta</b>}</>}
             {Object.entries(l.uso || {}).map(([k, u]) => ` + ${(cfg.componentes.find(c => c.id === k)?.nome || k).toLowerCase()} ${brl(u.valor)}`).join('')}
             {' '}= <b>{brl(totalLote(l))}</b> ({brl(totalLote(l) / (+l.unidades || 1))} por wafer)
-            {!l.frete && <button className="btn btn-ghost btn-sm" style={{ marginLeft: 6 }} onClick={() => { const v = prompt('Valor do frete deste lote (R$):'); if (v) onFrete(l, v) }}>Lançar frete</button>}</>}
+            {!l.frete && !l.freteIncluido && <button className="btn btn-ghost btn-sm" style={{ marginLeft: 6 }} onClick={() => { const v = prompt('Valor do frete deste lote (R$):'); if (v) onFrete(l, v) }}>Lançar frete</button>}</>}
         </div>)}
       </div>
     </div>

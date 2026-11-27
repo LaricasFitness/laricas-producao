@@ -28,6 +28,7 @@ export default function EstoqueRevenda() {
   const [lote, setLote] = useState(null)          // item do lote sendo lançado
   const [comp, setComp] = useState(null)          // display e filme na MM, e os lotes
   const [compraIds, setCompraIds] = useState(new Set())
+  const [comprasTodas, setComprasTodas] = useState([])
   const [msg, setMsg] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [skus, setSkus] = useState({})            // código no Bling → { item, un } (produtos que saem sem venda)
@@ -41,10 +42,11 @@ export default function EstoqueRevenda() {
     if (error) { setMsg({ tipo: 'danger', txt: error.message }); setItens([]); return }
     const ids = (mps || []).map(m => m.id)
     const [{ data: compras }, { data: confs }] = ids.length ? await Promise.all([
-      supabase.from('mp_compras').select('id, materia_prima_id, quantidade, custo_total, data_compra, numero_nf, fornecedor, qtd_compra, unidade_compra, conteudo_embalagem').in('materia_prima_id', ids).order('data_compra', { ascending: false }).limit(200),
+      supabase.from('mp_compras').select('id, materia_prima_id, quantidade, custo_total, data_compra, numero_nf, fornecedor, observacao, qtd_compra, unidade_compra, conteudo_embalagem').in('materia_prima_id', ids).order('data_compra', { ascending: false }).limit(200),
       supabase.from('conferencia_mp').select('id, materia_prima_id, data_conferencia, estoque_contado, estoque_sistema, responsavel, criado_em').in('materia_prima_id', ids).order('criado_em', { ascending: false }).limit(200),
     ]) : [{ data: [] }, { data: [] }]
     setCompraIds(new Set((compras || []).map(c => c.id)))
+    setComprasTodas(compras || [])
     setItens((mps || []).map(m => {
       const cs = (compras || []).filter(c => c.materia_prima_id === m.id)
       const emDisplay = cs.find(c => /display|caixa|cx/i.test(c.unidade_compra || '') && +c.conteudo_embalagem > 0)
@@ -102,6 +104,19 @@ export default function EstoqueRevenda() {
     if (e2) { setMsg({ tipo: 'danger', txt: e2.message }); return }
     await recalcularCustoMP(c.materia_prima_id)
     await mudarComponentes({ ...comp, lotes: comp.lotes.map(x => x.id === l.id ? { ...x, frete: v } : x) })
+    carregar()
+  }
+
+  // Compra lançada sem passar pelo lote (ex.: Estoque › Compras): soma o display e o filme usados no custo dela
+  async function incluirMaterial(c, x) {
+    if (await mesFechado(c.data_compra)) { alert(avisoMesFechado(c.data_compra)); return }
+    const { error } = await supabase.from('mp_compras').update({ custo_total: x.total,
+      observacao: `${c.observacao ? c.observacao + ' · ' : ''}Lote: NF + frete ${brl(+c.custo_total)} + display e filme guardados na MM ${brl(x.componentes)}` }).eq('id', c.id)
+    if (error) { setMsg({ tipo: 'danger', txt: error.message }); return }
+    await recalcularCustoMP(c.materia_prima_id)
+    await mudarComponentes({ ...comp, lotes: [...comp.lotes, { id: 'lote-' + c.id, data: c.data_compra, nf: c.numero_nf || '', unidades: +c.quantidade,
+      wafer: +c.custo_total, frete: 0, freteIncluido: true, compraId: c.id, uso: x.uso }] })
+    setMsg({ tipo: 'ok', txt: `Display e filme incluídos: a compra passou a custar ${brl(x.total)} (${brl(x.porWafer)} por wafer).` })
     carregar()
   }
 
@@ -173,7 +188,8 @@ export default function EstoqueRevenda() {
         <button className="btn btn-primary btn-sm" onClick={gravar} disabled={salvando || !lancados.length}>{salvando ? <RefreshCw size={13} className="spin" /> : <Save size={13} />} Gravar contagem</button>
       </div>}
 
-      {comp && itens.length > 0 && <MaterialNaMM cfg={comp} compraIds={compraIds} onMudou={mudarComponentes} onFrete={lancarFrete} />}
+      {comp && itens.length > 0 && <MaterialNaMM cfg={comp} compraIds={compraIds} onMudou={mudarComponentes} onFrete={lancarFrete}
+        semLote={comprasTodas.filter(c => !comp.lotes.some(l => l.compraId === c.id))} onIncluir={incluirMaterial} />}
       {lote && comp && <ModalLote item={lote} cfg={comp} compraIds={compraIds} onClose={() => setLote(null)}
         onSalvo={async novo => { setLote(null); setComp({ ...novo, padrao: false }); await carregar() }} />}
     </div>
