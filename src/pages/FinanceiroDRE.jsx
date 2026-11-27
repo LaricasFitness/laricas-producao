@@ -8,6 +8,7 @@ import {
 } from '../lib/dreLaricas'
 import { baixarXlsx } from '../lib/xlsx'
 import FinanceiroAno from './FinanceiroAno'
+import { carregarComponentes, valorNaMMEm } from '../lib/revenda'
 import ExtratosBanco, { carregarExtratos, conferirExtratos } from './FinanceiroExtratos'
 import { lerArquivoFrete, ORIGENS_FRETE, situacaoFretes } from '../lib/fretes'
 
@@ -208,6 +209,7 @@ function ProvaCompetencia({ d, fechado }) {
   const [bal, setBal] = useState(null)
   const [balAnt, setBalAnt] = useState([])
   const [correios, setCorreios] = useState(null)
+  const [mm, setMm] = useState(null)
   const [form, setForm] = useState({})
   const [ocupado, setOcupado] = useState('')
   const [msg, setMsg] = useState(null)
@@ -219,6 +221,7 @@ function ProvaCompetencia({ d, fechado }) {
         correiosAPagarEm(fimAnt), correiosAPagarEm(fim)])
       if (error) throw error
       setBal(b || []); setBalAnt(a || []); setCorreios({ ini: ci, fim: cf })
+      carregarComponentes().then(cfg => setMm({ ini: valorNaMMEm(cfg, fimAnt), fim: valorNaMMEm(cfg, fim) })).catch(() => setMm(null))
       const f = {}
       for (const it of ITENS_PROVA.filter(x => !x.auto)) {
         const r = (b || []).find(x => x.item === it.id), ra = (a || []).find(x => x.item === it.id)
@@ -230,7 +233,7 @@ function ProvaCompetencia({ d, fechado }) {
   useEffect(() => { if (d.mes >= PROVA_DESDE) carregar() }, [d.mes])   // eslint-disable-line react-hooks/exhaustive-deps
   if (d.mes < PROVA_DESDE) return <div className="card card-pad" style={{ fontSize: 13, color: 'var(--gray-600)' }}><b>Prova da competência:</b> começa em {rotuloMes(PROVA_DESDE)} (precisa dos saldos a receber e das carteiras no fim do mês anterior).</div>
   if (!bal) return <div className="card card-pad"><RefreshCw size={13} className="spin" /> Prova da competência…</div>
-  const p = prova(d, bal, balAnt, correios)
+  const p = prova(d, bal, balAnt, correios, mm)
   async function salvarManuais() {
     setOcupado('Salvando…'); setMsg(null)
     try {

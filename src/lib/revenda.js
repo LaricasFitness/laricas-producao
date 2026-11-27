@@ -63,6 +63,16 @@ export function saldos(cfg, compraIds) {
   })
 }
 
+// Valor do display e do filme na MM numa data (fim do dia): comprado até a data − usado nos lotes até a data,
+// pelo custo médio. Entra na prova da competência: material pago que ainda não virou custo.
+export function valorNaMMEm(cfg, data) {
+  return cfg.componentes.reduce((t, c) => {
+    const comprado = c.compras.filter(x => x.data <= data).reduce((s, x) => s + (+x.qtd || 0), 0)
+    const usado = cfg.lotes.filter(l => l.data <= data).reduce((s, l) => s + (l.uso?.[c.id]?.qtd ?? (+l.unidades || 0) / c.rende), 0)
+    return t + (comprado - usado) * custoComponente(c)
+  }, 0)
+}
+
 // Custo de um lote novo: { uso, componentes, total, porWafer }
 export function custoLote(cfg, { unidades, wafer, frete }) {
   const n = +unidades || 0, uso = {}

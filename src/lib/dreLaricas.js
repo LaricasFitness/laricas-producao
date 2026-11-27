@@ -387,7 +387,8 @@ export const ITENS_PROVA = [
   { id: 'carteira:lalamove', nome: 'Lalamove: saldo da carteira', lado: 1, onde: 'Lalamove Business › Carteira (saldo)' },
   { id: 'carteira:melhorenvio', nome: 'Melhor Envio: saldo da carteira', lado: 1, onde: 'Melhor Envio › Carteira (saldo)' },
   { id: 'carteira:midia', nome: 'Meta e Google: crédito − fatura em aberto', lado: 1, onde: 'Gerenciador de anúncios › Faturamento (negativo se há valor a pagar)' },
-  { id: 'estoque', nome: 'Estoque contado (matéria-prima e embalagem)', lado: 1, auto: true },
+  { id: 'estoque', nome: 'Estoque contado (matéria-prima, embalagem e revenda)', lado: 1, auto: true },
+  { id: 'estoque:mm', nome: 'Display e filme da Wafer guardados na MM (pagos, viram custo a cada lote)', lado: 1, auto: true },
   { id: 'antecipadas', nome: 'Despesas antecipadas (rateios a apropriar)', lado: 1, auto: true },
   { id: 'pagar:bling', nome: 'Contas a pagar em aberto (Bling)', lado: -1, auto: true },
   { id: 'pagar:correios', nome: 'Correios a pagar (envios de faturas não vencidas)', lado: -1, auto: true },
@@ -428,7 +429,8 @@ export async function correiosAPagarEm(data) {
 }
 
 // bal: linhas de dre_balanco do mês; balAnt: do mês anterior (saldo inicial quando o do mês não tem saldo_ini)
-export function prova(d, bal, balAnt, correios) {
+// mm: { ini, fim } valor do display e do filme na MM (src/lib/revenda.js)
+export function prova(d, bal, balAnt, correios, mm) {
   const vc = montar(d, 'competencia'), vx = montar(d, 'caixa'), c = calcular(vc, d.plano)
   const resCx = d.caixa.reduce((t, l) => t + sinalCaixa(l) * (+l.valor), 0)
   const foraCx = d.plano.filter(p => p.grupo === 'fora' && p.id !== 'fora.ajuste').reduce((t, p) => t + (vx[p.id]?.itens || []).reduce((s, x) => s + x.sinal * (+x.l.valor), 0), 0)
@@ -439,6 +441,7 @@ export function prova(d, bal, balAnt, correios) {
     let ini = null, fim = null
     if (it.id === 'estoque') { ini = est.reduce((t, x) => t + +x.ei_valor, 0); fim = est.reduce((t, x) => t + +x.ef_valor, 0) }
     else if (it.id === 'antecipadas') { ini = antecipadasEm(d.rateios, mesAnterior(d.mes)); fim = antecipadasEm(d.rateios, d.mes) }
+    else if (it.id === 'estoque:mm') { ini = mm?.ini ?? null; fim = mm?.fim ?? null }
     else if (it.id === 'pagar:correios') { ini = correios?.ini ?? null; fim = correios?.fim ?? null }
     else { const b = linhaDe(it.id); fim = b ? +b.saldo : null; ini = b?.saldo_ini != null ? +b.saldo_ini : antDe(it.id) ? +antDe(it.id).saldo : null }
     const delta = ini != null && fim != null ? fim - ini : null
